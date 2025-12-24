@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Inter', sans-serif;
+    @apply antialiased text-slate-100;
+    background-color: #000000;
+  }
+
+  /* Remove focus outline/ring from inputs and textareas */
+  input:focus,
+  textarea:focus {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: #1e222d;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-600 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-500;
+}
+
+/* Markdown Styles */
+.prose pre {
+  @apply bg-slate-900/95 border border-slate-700/50 rounded-xl shadow-sm;
+}
+
+.prose code {
+  @apply text-purple-400 bg-slate-700 px-1 py-0.5 rounded font-medium text-[0.9em];
+}
+
+.prose pre code {
+  @apply bg-transparent text-slate-200 p-0;
+}
+
+.prose strong {
+  @apply text-slate-100 font-semibold;
+}
+
+.prose a {
+  @apply text-purple-400 hover:text-purple-300 no-underline hover:underline transition-colors;
+}

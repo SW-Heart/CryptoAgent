@@ -1,0 +1,276 @@
+{
+    "common": {
+        "newChat": "新对话",
+        "settings": "设置",
+        "signOut": "退出登录",
+        "cancel": "取消",
+        "save": "保存",
+        "delete": "删除",
+        "confirm": "确认",
+        "loading": "加载中...",
+        "error": "错误",
+        "success": "成功",
+        "collapseSidebar": "收起侧边栏",
+        "expandSidebar": "展开侧边栏",
+        "history": "历史记录",
+        "copyCode": "复制代码",
+        "exportImage": "导出图片",
+        "untitledChat": "未命名对话",
+        "tradingViewChart": "TradingView 图表",
+        "signInSignUp": "登录 / 注册"
+    },
+    "sidebar": {
+        "strategyNexus": "策略中心",
+        "dailyReport": "每日报告",
+        "recentChats": "最近对话",
+        "noChats": "暂无对话记录",
+        "deleteChat": "删除对话",
+        "deleteChatConfirm": "确定要删除此对话吗？此操作无法撤销。",
+        "renameChat": "重命名对话",
+        "rename": "重命名",
+        "enterNewName": "输入新名称"
+    },
+    "home": {
+        "title": "您的专属加密货币分析师",
+        "placeholder": "询问价格、发现机会、分析项目...",
+        "quickPrompts": {
+            "title": "快捷提问",
+            "marketAnalysis": "今日市场分析",
+            "investmentStrategies": "当前市场适合什么投资策略？",
+            "marketForecast": "市场预测：未来趋势分析",
+            "investmentOpportunities": "当前投资机会搜索",
+            "topGainers": "今日涨跌幅榜",
+            "defiYields": "DeFi 收益：最佳机会"
+        },
+        "latestNews": "最新资讯",
+        "popularTokens": {
+            "title": "热门代币",
+            "name": "名称",
+            "price": "价格",
+            "change24h": "24小时(%)"
+        },
+        "keyIndicators": {
+            "title": "关键指标",
+            "fearGreed": "恐惧贪婪指数",
+            "totalMarketCap": "总市值",
+            "bitcoinMarketCap": "比特币市值",
+            "bitcoinDominance": "比特币占比",
+            "ethBtcRatio": "ETH/BTC 比率",
+            "ethereumGas": "以太坊 Gas",
+            "defiTvl": "DeFi 总锁仓",
+            "classifications": {
+                "Extreme Fear": "极度恐惧",
+                "Fear": "恐惧",
+                "Neutral": "中性",
+                "Greed": "贪婪",
+                "Extreme Greed": "极度贪婪"
+            }
+        }
+    },
+    "chat": {
+        "placeholder": "问我任何关于加密货币的问题...",
+        "send": "发送",
+        "thinking": "思考中...",
+        "welcomeTitle": "欢迎使用 Crypto Alpha",
+        "welcomeSubtitle": "您的 AI 加密货币分析师",
+        "suggestions": {
+            "marketOverview": "当前市场概况如何？",
+            "btcAnalysis": "分析 BTC 趋势",
+            "topGainers": "今日涨幅榜",
+            "fearGreed": "恐惧贪婪指数是多少？"
+        }
+    },
+    "settings": {
+        "title": "设置",
+        "tabs": {
+            "general": "通用",
+            "account": "账户",
+            "usage": "使用记录"
+        },
+        "general": {
+            "title": "通用设置",
+            "language": "语言",
+            "languageDesc": "选择您的首选语言",
+            "english": "English",
+            "chinese": "中文"
+        },
+        "account": {
+            "title": "账户",
+            "credits": "积分",
+            "freeCredits": "免费积分",
+            "signOut": "退出登录"
+        },
+        "usage": {
+            "title": "使用历史",
+            "credits": "积分",
+            "date": "日期",
+            "action": "操作",
+            "creditsChange": "积分变化",
+            "noHistory": "暂无使用记录"
+        }
+    },
+    "auth": {
+        "signIn": "登录",
+        "signUp": "注册",
+        "signOut": "退出登录",
+        "settings": "设置",
+        "launchTitle": "启动您的加密货币分析师",
+        "signInToAccount": "登录您的账户",
+        "createAccount": "创建您的账户",
+        "verifyEmail": "验证邮箱",
+        "continueWithGoogle": "使用 Google 继续",
+        "connectWallet": "连接钱包",
+        "or": "或",
+        "email": "邮箱",
+        "emailPlaceholder": "your@email.com",
+        "password": "密码",
+        "passwordPlaceholder": "至少6个字符",
+        "confirmPassword": "确认密码",
+        "confirmPasswordPlaceholder": "确认您的密码",
+        "continue": "继续",
+        "verify": "验证",
+        "noAccount": "还没有账户？",
+        "hasAccount": "已有账户？",
+        "didntReceive": "没有收到？",
+        "resend": "重新发送",
+        "verificationSent": "验证码已发送",
+        "verificationSuccess": "验证成功！",
+        "passwordsNotMatch": "两次密码不一致",
+        "operationFailed": "操作失败，请重试",
+        "invalidCode": "验证码无效",
+        "googleLoginFailed": "Google 登录失败",
+        "walletConnectionFailed": "钱包连接失败",
+        "delete": "删除",
+        "noHistoryYet": "暂无对话记录"
+    },
+    "dashboard": {
+        "popularTokens": "热门代币",
+        "price": "价格",
+        "change24h": "24小时涨跌"
+    },
+    "strategy": {
+        "title": "策略中心",
+        "live": "实时",
+        "autoRefresh": "每10秒自动刷新",
+        "equity": "总权益",
+        "available": "可用余额",
+        "unrealizedPnL": "未实现盈亏",
+        "winRate": "胜率",
+        "trades": "笔交易",
+        "tabs": {
+            "positions": "持仓",
+            "history": "历史",
+            "orders": "订单"
+        },
+        "positions": {
+            "symbol": "币种",
+            "side": "方向",
+            "size": "仓位",
+            "margin": "保证金",
+            "entry": "开仓价",
+            "mark": "标记价",
+            "pnl": "盈亏 (ROE%)",
+            "long": "做多",
+            "short": "做空",
+            "noPositions": "暂无持仓"
+        },
+        "history": {
+            "closedAt": "平仓时间",
+            "direction": "方向",
+            "entryPrice": "开仓价",
+            "closePrice": "平仓价",
+            "pnl": "盈亏",
+            "status": "状态",
+            "noHistory": "暂无交易记录"
+        },
+        "orders": {
+            "time": "时间",
+            "action": "操作",
+            "symbol": "币种",
+            "price": "价格",
+            "margin": "保证金",
+            "fee": "手续费",
+            "noOrders": "暂无订单"
+        },
+        "logs": {
+            "title": "策略日志",
+            "symbols": "币种",
+            "noLogs": "暂无策略日志",
+            "action": "已执行"
+        }
+    },
+    "dailyReport": {
+        "title": "加密货币日报",
+        "updatedAt": "每日 UTC 0:00 更新",
+        "subscribe": "订阅",
+        "subscribed": "已订阅",
+        "noReport": "暂无报告",
+        "modal": {
+            "title": "订阅每日报告",
+            "settingsTitle": "订阅设置",
+            "description": "每天 UTC 0:05 将最新的加密货币市场洞察发送到您的邮箱。",
+            "email": "邮箱地址",
+            "emailPlaceholder": "your@email.com",
+            "language": "报告语言",
+            "subscribeNow": "立即订阅",
+            "unsubscribe": "取消订阅",
+            "subscribedMessage": "您将于每天 UTC 0:05 收到每日报告。",
+            "error": "订阅失败，请重试。"
+        }
+    },
+    "credits": {
+        "insufficientTitle": "积分不足",
+        "insufficientMessage": "开始对话至少需要 5 积分。",
+        "current": "当前积分",
+        "checkIn": "每日签到 +10 积分",
+        "checkedIn": "今日已签到"
+    },
+    "tool": {
+        "calling": "正在调用",
+        "completed": "已完成",
+        "analyzing": "分析中",
+        "viewChart": "查看图表",
+        "openInNewTab": "新标签页打开",
+        "closeChart": "关闭图表",
+        "tools": {
+            "getTokenAnalysis": "分析代币基本面",
+            "getMarketSentiment": "检测市场情绪",
+            "getProCryptoNews": "获取专业资讯",
+            "getMarketHotspots": "扫描市场热点",
+            "getNarrativeDominance": "分析叙事趋势",
+            "getBtcDominance": "查看 BTC 占比",
+            "getFundingRate": "查询资金费率",
+            "getTopGainers": "获取涨幅榜",
+            "getGlobalMarketOverview": "获取市场概览",
+            "getEthBtcRatio": "查看 ETH/BTC 比率",
+            "getEthGasPrice": "查看 ETH Gas 费",
+            "getWalletBalance": "查询钱包余额",
+            "getDefiTvlRanking": "获取 DeFi TVL 排行",
+            "getProtocolTvl": "查看协议 TVL",
+            "getChainTvl": "获取链 TVL 排行",
+            "getTopYields": "发现高收益池",
+            "searchNews": "搜索资讯",
+            "webSearch": "网页搜索",
+            "deepResearch": "深度研究",
+            "aiSearch": "AI 搜索",
+            "browsingWeb": "浏览网页",
+            "getPositionsSummary": "查看交易持仓",
+            "openPosition": "开仓",
+            "closePosition": "平仓",
+            "partialClosePosition": "部分止盈",
+            "logStrategyAnalysis": "记录策略分析",
+            "updateSlTp": "更新止损/止盈",
+            "getMultiTimeframeAnalysis": "多周期分析",
+            "getEmaStructure": "分析 EMA 结构",
+            "getVegasChannel": "分析 Vegas 通道",
+            "getMacdSignal": "检查 MACD 信号",
+            "getVolumeAnalysis": "分析成交量",
+            "getVolumeProfile": "构建成交量分布",
+            "getTrendlines": "检测趋势线",
+            "detectChartPatterns": "识别图表形态",
+            "analyzeWaveStructure": "分析波浪结构",
+            "getIndicatorReliability": "检查指标可靠性",
+            "searching": "搜索中..."
+        }
+    }
+}
