@@ -36,7 +36,7 @@ numpy>=1.24.0
 # Technical Analysis
 # ===========================================
 ta>=0.10.0
-pandas-ta
+git+https://github.com/twopirllc/pandas-ta.git
 
 # ===========================================
 # Crypto & Trading
