@@ -12,8 +12,9 @@ python-multipart>=0.0.6
 # ===========================================
 agno>=2.0.0
 openai>=1.0.0
-exa_py
+exa-py
 duckduckgo-search
+beautifulsoup4
 
 # ===========================================
 # Database
@@ -54,6 +55,7 @@ schedule>=1.2.0
 pydantic[email]>=2.0.0
 python-jose>=3.3.0
 email-validator>=2.0.0
+markdown>=3.4.0
 
 # ===========================================
 # Alibaba Cloud (for OSS & Email)
