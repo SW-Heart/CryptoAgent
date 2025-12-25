@@ -99,26 +99,34 @@ async def get_dashboard_tokens():
         tokens_data = []
         symbols = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE"]
         
-        # 串行获取每个币种的价格（更稳定，避免并发超时问题）
-        for symbol in symbols:
-            try:
-                url = f"{BINANCE_API_BASE}/api/v3/ticker/24hr?symbol={symbol}USDT"
-                resp = requests.get(url, timeout=10)  # 每个请求最多 10 秒
-                if resp.status_code == 200:
-                    data = resp.json()
+        try:
+            url = f"{BINANCE_API_BASE}/api/v3/ticker/24hr"
+            resp = requests.get(url, timeout=10).json()
+            
+            symbol_map = {s + "USDT": s for s in symbols}
+            
+            for ticker in resp:
+                symbol = ticker.get("symbol", "")
+                if symbol in symbol_map:
+                    price = float(ticker.get("lastPrice", 0))
+                    change = float(ticker.get("priceChangePercent", 0))
                     tokens_data.append({
-                        "name": symbol,
-                        "price": float(data.get("lastPrice", 0)),
-                        "change_24h": round(float(data.get("priceChangePercent", 0)), 2)
+                        "name": symbol_map[symbol],
+                        "price": price,
+                        "change_24h": round(change, 2)
                     })
-            except Exception as e:
-                print(f"[Dashboard] Token {symbol} fetch error: {e}")
-                continue
+            
+            order = {s: i for i, s in enumerate(symbols)}
+            tokens_data.sort(key=lambda x: order.get(x["name"], 999))
+            
+        except Exception as e:
+            print(f"[Dashboard] Token fetch error: {e}")
         
         set_cache("tokens", tokens_data)
         return {"tokens": tokens_data}
     except Exception as e:
         return {"tokens": [], "error": str(e)}
+
 
 
 
