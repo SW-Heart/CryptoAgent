@@ -4,11 +4,15 @@ Handles virtual trading, positions, and strategy logs.
 """
 from fastapi import APIRouter, HTTPException
 import sqlite3
+import os
 from datetime import datetime
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
 DB_PATH = "tmp/test.db"
+
+# Binance API base URL (configurable via environment variable)
+BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
 
 def get_db_connection():
     """Get database connection"""
@@ -126,7 +130,8 @@ async def get_wallet():
             total_margin_in_use += pos["margin"]
             try:
                 resp = requests.get(
-                    f"https://api.binance.com/api/v3/ticker/price?symbol={pos['symbol']}USDT",
+                    f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol={pos['symbol']}USDT",
+
                     timeout=3
                 )
                 if resp.status_code == 200:
@@ -204,7 +209,8 @@ async def get_positions(status: str = "OPEN"):
             if row["status"] == "OPEN":
                 try:
                     resp = requests.get(
-                        f"https://api.binance.com/api/v3/ticker/price?symbol={row['symbol']}USDT",
+                        f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol={row['symbol']}USDT",
+
                         timeout=3
                     )
                     if resp.status_code == 200:

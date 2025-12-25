@@ -90,7 +90,9 @@ def update_positions_prices():
             
             # Get current price
             try:
-                resp = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
+                import os
+                binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+                resp = requests.get(f"{binance_base}/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
                 current_price = float(resp.json().get("price", 0))
             except:
                 continue

@@ -19,7 +19,9 @@ from typing import Dict, List, Optional, Any
 # 🔧 基础设施：Binance K线数据获取
 # ==========================================
 
-BINANCE_BASE_URL = "https://api.binance.com"
+import os
+BINANCE_BASE_URL = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+
 
 # 周期映射：用户友好名称 -> Binance API interval
 TIMEFRAME_MAP = {

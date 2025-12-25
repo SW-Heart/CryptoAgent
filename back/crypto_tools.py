@@ -20,7 +20,8 @@ def _get_binance_data(symbol: str):
     """
     # 构造交易对，通常是 币种+USDT
     pair = f"{symbol.upper()}USDT"
-    base_url = "https://api.binance.com"
+    base_url = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+
     
     try:
         # 1. 查实时价格
@@ -213,7 +214,8 @@ def get_top_gainers_cex(limit: int = 10) -> str:
         limit: Number of results (default 10)
     """
     try:
-        url = "https://api.binance.com/api/v3/ticker/24hr"
+        binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+        url = f"{binance_base}/api/v3/ticker/24hr"
         resp = requests.get(url, timeout=5).json()
         
         # Filter USDT pairs and sort by price change
@@ -426,7 +428,8 @@ def get_eth_btc_ratio() -> str:
     """
     try:
         # Get ETHBTC price from Binance
-        url = "https://api.binance.com/api/v3/ticker/24hr?symbol=ETHBTC"
+        binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+        url = f"{binance_base}/api/v3/ticker/24hr?symbol=ETHBTC"
         resp = requests.get(url, timeout=5).json()
         
         ratio = float(resp['lastPrice'])

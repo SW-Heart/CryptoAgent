@@ -41,15 +41,18 @@ def get_db():
 
 def get_current_price(symbol: str) -> float:
     """Get current price from Binance"""
+    import os
+    binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
     try:
         resp = requests.get(
-            f"https://api.binance.com/api/v3/ticker/price?symbol={symbol.upper()}USDT",
+            f"{binance_base}/api/v3/ticker/price?symbol={symbol.upper()}USDT",
             timeout=5
         )
         return float(resp.json().get("price", 0))
     except Exception as e:
         print(f"[TradingTools] Price fetch error for {symbol}: {e}")
         return 0
+
 
 # ==========================================
 # Agent Tools

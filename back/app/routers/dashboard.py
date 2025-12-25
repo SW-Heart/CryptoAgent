@@ -5,9 +5,14 @@ Provides news, tokens, fear-greed index, and indicators data.
 from fastapi import APIRouter
 import requests
 import time
+import os
 from ..services.cache_service import is_cache_valid, set_cache, get_cache
 
+# Binance API base URL (configurable via environment variable)
+BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
 
 def fetch_with_retry(url, params=None, headers=None, timeout=10, retries=3):
     """Fetch URL with retry logic"""
@@ -95,7 +100,7 @@ async def get_dashboard_tokens():
         symbols = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE"]
         
         try:
-            url = "https://api.binance.com/api/v3/ticker/24hr"
+            url = f"{BINANCE_API_BASE}/api/v3/ticker/24hr"
             resp = requests.get(url, timeout=5).json()
             
             symbol_map = {s + "USDT": s for s in symbols}
@@ -183,7 +188,7 @@ async def get_dashboard_indicators():
         
         # ETH/BTC Ratio from Binance
         ethbtc_data = fetch_with_retry(
-            "https://api.binance.com/api/v3/ticker/price?symbol=ETHBTC",
+            f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol=ETHBTC",
             timeout=5,
             retries=3
         )
