@@ -10,11 +10,12 @@ python-multipart>=0.0.6
 # ===========================================
 # AI Agent Framework
 # ===========================================
-agno>=2.0.0
+agno[openai]>=2.0.0
 openai>=1.0.0
 exa-py
 duckduckgo-search
 beautifulsoup4
+lxml
 
 # ===========================================
 # Database
