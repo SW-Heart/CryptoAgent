@@ -17,7 +17,24 @@ export const AuthProvider = ({ children }) => {
     const [session, setSession] = useState(null)
 
     useEffect(() => {
-        // 获取初始会话
+        // 快速恢复：尝试从 Supabase 本地存储中获取缓存的 session
+        // Supabase 会自动在 localStorage 缓存 session
+        const cachedSession = localStorage.getItem('sb-' + import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] + '-auth-token')
+        if (cachedSession) {
+            try {
+                const parsed = JSON.parse(cachedSession)
+                if (parsed?.user) {
+                    // 立即使用缓存的用户信息，让 UI 快速响应
+                    setUser(parsed.user)
+                    setSession(parsed)
+                    setLoading(false)
+                }
+            } catch (e) {
+                // 解析失败，继续走正常流程
+            }
+        }
+
+        // 异步获取最新 session（验证 token 是否有效）
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session)
             setUser(session?.user ?? null)
@@ -146,10 +163,18 @@ export const AuthProvider = ({ children }) => {
         }
     }
 
-    // 退出登录
+    // 退出登录 - 优化响应速度
     const signOut = async () => {
-        const { error } = await supabase.auth.signOut()
-        return { error }
+        // 立即清除本地状态，让 UI 快速响应
+        setUser(null)
+        setSession(null)
+
+        // 异步调用 Supabase，不阻塞 UI
+        supabase.auth.signOut().catch(err => {
+            console.error('SignOut error:', err)
+        })
+
+        return { error: null }
     }
 
     const value = {

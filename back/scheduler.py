@@ -9,10 +9,11 @@ import sqlite3
 import json
 from datetime import datetime
 import requests
+import os
 
-# Configuration
-AGENT_API_URL = "http://localhost:8000"  # FastAPI server
-DB_PATH = "tmp/test.db"
+# Configuration - use environment variable for API URL
+AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
+DB_PATH = os.getenv("DB_PATH", "tmp/test.db")
 
 # Use admin user ID for all scheduler operations
 from trading_tools import STRATEGY_ADMIN_USER_ID, set_current_user
@@ -197,13 +198,20 @@ def trigger_strategy():
 def generate_daily_report():
     """Generate daily crypto report by calling the agent"""
     from datetime import date
+    import traceback
+    
     report_date = str(date.today())
     
-    print(f"\n[DailyReport] Generating report for {report_date}...")
+    print(f"\n[DailyReport] ========== Starting Report Generation ==========")
+    print(f"[DailyReport] Date: {report_date}")
+    print(f"[DailyReport] Agent API URL: {AGENT_API_URL}")
+    print(f"[DailyReport] DB Path: {DB_PATH}")
     
     # Generate reports in both languages
     for language in ["en", "zh"]:
         try:
+            print(f"\n[DailyReport] Generating {language} report...")
+            
             if language == "en":
                 prompt = """Generate a comprehensive Crypto Daily Report for today. Include:
 1. **Market Overview**: BTC, ETH prices and 24h changes, Fear & Greed Index
@@ -224,31 +232,44 @@ Format the output in clean Markdown with clear sections."""
 请使用清晰的 Markdown 格式，分段输出。"""
             
             # Call agent API
+            print(f"[DailyReport] Calling {AGENT_API_URL}/v1/runs ...")
             response = requests.post(
                 f"{AGENT_API_URL}/v1/runs",
                 json={
                     "user_id": SCHEDULER_USER_ID,
                     "input": prompt
                 },
-                timeout=120
+                timeout=180  # Increased timeout to 3 minutes
             )
+            
+            print(f"[DailyReport] Response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 content = data.get("content", "")
                 
                 if content:
+                    print(f"[DailyReport] Got content, length: {len(content)} chars")
                     # Save to database
                     from app.routers.daily_report import save_daily_report
                     save_daily_report(report_date, content, language)
-                    print(f"[DailyReport] Generated {language} report successfully")
+                    print(f"[DailyReport] ✓ {language} report saved successfully")
+                else:
+                    print(f"[DailyReport] ✗ Agent returned empty content")
+                    print(f"[DailyReport] Full response: {data}")
             else:
-                print(f"[DailyReport] Agent API error: {response.status_code}")
+                print(f"[DailyReport] ✗ Agent API error: {response.status_code}")
+                print(f"[DailyReport] Response text: {response.text[:500]}")
                 
+        except requests.exceptions.Timeout:
+            print(f"[DailyReport] ✗ Request timeout for {language} report")
+        except requests.exceptions.ConnectionError as e:
+            print(f"[DailyReport] ✗ Connection error for {language}: {e}")
         except Exception as e:
-            print(f"[DailyReport] Error generating {language} report: {e}")
+            print(f"[DailyReport] ✗ Error generating {language} report: {e}")
+            traceback.print_exc()
     
-    print(f"[DailyReport] Report generation completed for {report_date}")
+    print(f"[DailyReport] ========== Report Generation Complete ==========")
 
 
 def send_daily_report_emails():

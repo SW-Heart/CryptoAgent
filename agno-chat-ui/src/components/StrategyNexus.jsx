@@ -6,6 +6,7 @@ import {
     ArrowUpCircle, ArrowDownCircle, Clock, Percent,
     Award
 } from 'lucide-react';
+import TerminalLoader from './TerminalLoader';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -20,6 +21,7 @@ export default function StrategyNexus({ onBack }) {
     const [expandedLog, setExpandedLog] = useState(null);
     const [activeTab, setActiveTab] = useState('positions');
     const [loading, setLoading] = useState(true);
+    const [showLoader, setShowLoader] = useState(true); // 控制加载动画显示
 
     useEffect(() => {
         fetchData();
@@ -55,11 +57,14 @@ export default function StrategyNexus({ onBack }) {
     const totalUnrealizedPnL = wallet?.unrealized_pnl || 0;
     const equity = wallet?.equity || 0;
 
-    if (loading) {
+    // 显示加载器直到数据加载完成并完成动画
+    if (showLoader) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-[#0d1117]">
-                <div className="text-slate-400">{t('common.loading')}</div>
-            </div>
+            <TerminalLoader
+                fullScreen={false}
+                isReady={!loading}
+                onComplete={() => setShowLoader(false)}
+            />
         );
     }
 
@@ -154,19 +159,22 @@ export default function StrategyNexus({ onBack }) {
                         </h3>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                        {logs.length > 0 ? logs.map((log, idx) => (
-                            <LogEntry
-                                key={idx}
-                                log={log}
-                                isExpanded={expandedLog === idx}
-                                onToggle={() => setExpandedLog(expandedLog === idx ? null : idx)}
-                                t={t}
-                            />
-                        )) : (
-                            <div className="text-center text-slate-500 py-8 text-sm">
-                                {t('strategy.logs.noLogs')}
-                            </div>
-                        )}
+                        {logs.filter(log => log.market_analysis || log.position_check || log.strategy_decision).length > 0
+                            ? logs
+                                .filter(log => log.market_analysis || log.position_check || log.strategy_decision)
+                                .map((log, idx) => (
+                                    <LogEntry
+                                        key={idx}
+                                        log={log}
+                                        isExpanded={expandedLog === idx}
+                                        onToggle={() => setExpandedLog(expandedLog === idx ? null : idx)}
+                                        t={t}
+                                    />
+                                )) : (
+                                <div className="text-center text-slate-500 py-8 text-sm">
+                                    {t('strategy.logs.noLogs')}
+                                </div>
+                            )}
                     </div>
                 </div>
             </div>

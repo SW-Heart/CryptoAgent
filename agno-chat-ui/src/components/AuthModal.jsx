@@ -399,27 +399,6 @@ const AuthModal = ({ isOpen, onClose }) => {
                                     )}
                                 </p>
 
-                                {/* Privacy Policy & Terms of Service */}
-                                <p className="text-center text-xs text-slate-500 mt-4">
-                                    {t('auth.agreeToTerms')}{' '}
-                                    <a
-                                        href="/terms"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-slate-400 hover:text-white underline"
-                                    >
-                                        {t('auth.termsOfService')}
-                                    </a>
-                                    {' '}{t('auth.and')}{' '}
-                                    <a
-                                        href="/privacy"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-slate-400 hover:text-white underline"
-                                    >
-                                        {t('auth.privacyPolicy')}
-                                    </a>
-                                </p>
                             </>
                         )}
                     </div>

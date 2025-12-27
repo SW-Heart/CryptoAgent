@@ -276,5 +276,30 @@
             "getIndicatorReliability": "Checking Indicator Reliability",
             "searching": "Searching..."
         }
+    },
+    "landing": {
+        "nav": {
+            "connect": "CONNECT",
+            "login": "Log in"
+        },
+        "hero": {
+            "title": "DECODE THE SIGNAL.",
+            "subtitle": "// Autonomous Intelligence for Decentralized Markets."
+        },
+        "cta": "INITIALIZE AGENT",
+        "status": {
+            "online": "ONLINE",
+            "latency": "LATENCY"
+        },
+        "footer": {
+            "privacy": "Privacy Policy",
+            "terms": "Terms of Service",
+            "sysVer": "SYS.VER: 2.0.4b // ENCRYPTED"
+        },
+        "terminal": {
+            "result1": "BULLISH DIVERGENCE DETECTED",
+            "result2": "ACCUMULATION PHASE ACTIVE",
+            "result3": "BREAKOUT IMMINENT - 87% CONF"
+        }
     }
 }

@@ -276,5 +276,30 @@
             "getIndicatorReliability": "检查指标可靠性",
             "searching": "搜索中..."
         }
+    },
+    "landing": {
+        "nav": {
+            "connect": "连接",
+            "login": "登录"
+        },
+        "hero": {
+            "title": "解码信号",
+            "subtitle": "// 去中心化市场的自主智能"
+        },
+        "cta": "启动智能体",
+        "status": {
+            "online": "在线",
+            "latency": "延迟"
+        },
+        "footer": {
+            "privacy": "隐私政策",
+            "terms": "服务条款",
+            "sysVer": "系统版本: 2.0.4b // 已加密"
+        },
+        "terminal": {
+            "result1": "检测到看涨背离",
+            "result2": "吸筹阶段进行中",
+            "result3": "突破在即 - 87% 置信度"
+        }
     }
 }

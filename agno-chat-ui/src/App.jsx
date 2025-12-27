@@ -21,6 +21,8 @@ import StrategyNexus from './components/StrategyNexus';
 import DailyReport from './components/DailyReport';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import TermsOfService from './components/TermsOfService';
+import LandingPage from './components/LandingPage';
+import TerminalLoader from './components/TerminalLoader';
 
 // Import from new modular structure
 import { AGENT_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
@@ -118,23 +120,34 @@ function AppContent() {
 
   // Fetch dashboard data on mount and with intervals
   useEffect(() => {
-    const fetchDashboardData = async () => {
+    // Helper: fetch with timeout
+    const fetchWithTimeout = async (url, timeout = 5000, fallback = {}) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
       try {
-        // Fetch all dashboard data
-        const [newsRes, tokensRes, fearGreedRes, indicatorsRes] = await Promise.all([
-          fetch(`${BASE_URL}/api/dashboard/news`).then(r => r.json()).catch(() => ({ news: [] })),
-          fetch(`${BASE_URL}/api/dashboard/tokens`).then(r => r.json()).catch(() => ({ tokens: [] })),
-          fetch(`${BASE_URL}/api/dashboard/fear-greed`).then(r => r.json()).catch(() => ({ value: 50, classification: 'Neutral' })),
-          fetch(`${BASE_URL}/api/dashboard/indicators`).then(r => r.json()).catch(() => ({ indicators: [] }))
-        ]);
-
-        setDashboardNews(newsRes.news || []);
-        setDashboardTokens(tokensRes.tokens || []);
-        setDashboardFearGreed(fearGreedRes);
-        setDashboardIndicators(indicatorsRes.indicators || []);
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        return await res.json();
       } catch (e) {
-        console.error('Dashboard data fetch error:', e);
+        clearTimeout(timeoutId);
+        console.warn(`[Dashboard] Timeout or error for ${url}:`, e.message);
+        return fallback;
       }
+    };
+
+    const fetchDashboardData = async () => {
+      // Use Promise.allSettled to not block on slow APIs
+      const [newsRes, tokensRes, fearGreedRes, indicatorsRes] = await Promise.all([
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/news`, 5000, { news: [] }),
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/tokens`, 5000, { tokens: [] }),
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/fear-greed`, 5000, { value: 50, classification: 'Neutral' }),
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/indicators`, 5000, { indicators: [] })
+      ]);
+
+      setDashboardNews(newsRes.news || []);
+      setDashboardTokens(tokensRes.tokens || []);
+      setDashboardFearGreed(fearGreedRes);
+      setDashboardIndicators(indicatorsRes.indicators || []);
     };
 
     fetchDashboardData();
@@ -1776,9 +1789,106 @@ function App() {
 
   return (
     <AuthProvider>
-      <AppContent />
+      <AuthWrapper />
     </AuthProvider>
   );
+}
+
+// Wrapper component that decides between LandingPage and AppContent
+function AuthWrapper() {
+  const { user, loading: authLoading } = useAuth();
+  const { i18n } = useTranslation();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('login');
+  const [showLoader, setShowLoader] = useState(false);
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+
+  const handleLanguageChange = () => {
+    i18n.changeLanguage(i18n.language === 'en' ? 'zh' : 'en');
+  };
+
+  const handleLogin = (mode) => {
+    setAuthMode(mode);
+    setShowAuthModal(true);
+  };
+
+  // 当用户登录成功时，显示加载动画并开始加载数据
+  useEffect(() => {
+    if (user && !authLoading) {
+      setShowLoader(true);
+      setInitialDataLoaded(false);
+
+      // 加载首页所需的数据
+      const loadInitialData = async () => {
+        const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+        try {
+          // 并行加载用户数据和 dashboard 数据
+          await Promise.all([
+            // 用户积分
+            fetch(`${BASE_URL}/api/credits/${user.id}`).then(r => r.json()).catch(() => ({})),
+            // 签到状态
+            fetch(`${BASE_URL}/api/credits/${user.id}/checkin-status`).then(r => r.json()).catch(() => ({})),
+            // Dashboard 数据
+            fetch(`${BASE_URL}/api/dashboard/tokens`).then(r => r.json()).catch(() => ({})),
+            fetch(`${BASE_URL}/api/dashboard/fear-greed`).then(r => r.json()).catch(() => ({})),
+          ]);
+        } catch (e) {
+          console.error('Initial data load error:', e);
+        }
+
+        setInitialDataLoaded(true);
+      };
+
+      loadInitialData();
+    }
+  }, [user, authLoading]);
+
+  // 加载动画完成后隐藏
+  const handleLoaderComplete = () => {
+    setShowLoader(false);
+  };
+
+  // Auth 状态检查中 - 显示简单的 loading
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  // Show LandingPage for unauthenticated users
+  if (!user) {
+    return (
+      <>
+        <LandingPage
+          onLogin={handleLogin}
+          onLanguageChange={handleLanguageChange}
+          currentLanguage={i18n.language}
+        />
+        <AuthModal
+          isOpen={showAuthModal}
+          onClose={() => setShowAuthModal(false)}
+          initialMode={authMode}
+        />
+      </>
+    );
+  }
+
+  // 已登录用户 - 显示全屏加载动画直到数据加载完成
+  if (showLoader) {
+    return (
+      <TerminalLoader
+        fullScreen={true}
+        isReady={initialDataLoaded}
+        onComplete={handleLoaderComplete}
+      />
+    );
+  }
+
+  // Show main app for authenticated users
+  return <AppContent />;
 }
 
 export default App;

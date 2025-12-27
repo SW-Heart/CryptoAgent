@@ -14,8 +14,8 @@ BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
-def fetch_with_retry(url, params=None, headers=None, timeout=10, retries=3):
-    """Fetch URL with retry logic"""
+def fetch_with_retry(url, params=None, headers=None, timeout=5, retries=1):
+    """Fetch URL with minimal retry (fast fail)"""
     last_error = None
     for attempt in range(retries):
         try:
@@ -25,9 +25,10 @@ def fetch_with_retry(url, params=None, headers=None, timeout=10, retries=3):
         except Exception as e:
             last_error = e
             if attempt < retries - 1:
-                time.sleep(0.5 * (attempt + 1))  # Progressive delay
-    print(f"[Dashboard] Failed after {retries} retries: {url} - {last_error}")
+                time.sleep(0.2)  # Short delay
+    print(f"[Dashboard] Failed: {url} - {last_error}")
     return None
+
 
 @router.get("/news")
 async def get_dashboard_news():
@@ -59,7 +60,7 @@ async def get_dashboard_news():
                     "https://google.serper.dev/news",
                     json=payload,
                     headers=headers,
-                    timeout=10
+                    timeout=5
                 )
                 
                 if resp.status_code == 200:
@@ -101,7 +102,7 @@ async def get_dashboard_tokens():
         
         try:
             url = f"{BINANCE_API_BASE}/api/v3/ticker/24hr"
-            resp = requests.get(url, timeout=10).json()
+            resp = requests.get(url, timeout=5).json()
             
             symbol_map = {s + "USDT": s for s in symbols}
             
