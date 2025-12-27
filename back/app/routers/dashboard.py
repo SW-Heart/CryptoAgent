@@ -32,7 +32,7 @@ def fetch_with_retry(url, params=None, headers=None, timeout=5, retries=1):
 
 @router.get("/news")
 async def get_dashboard_news():
-    """Get latest crypto news headlines (10min cache)"""
+    """Get latest crypto news headlines with AI summary (10min cache)"""
     try:
         if is_cache_valid("news", 600):
             cached = get_cache("news")
@@ -40,6 +40,7 @@ async def get_dashboard_news():
                 return {"news": cached}
         
         news_data = []
+        raw_news = []
         
         # Use Serper API (Google News) - free tier available
         try:
@@ -65,23 +66,31 @@ async def get_dashboard_news():
                 
                 if resp.status_code == 200:
                     results = resp.json().get("news", [])[:6]
-                    news_data = [
-                        {"title": r.get("title", ""), "source": r.get("source", "Google News")}
+                    raw_news = [
+                        {
+                            "title": r.get("title", ""), 
+                            "source": r.get("source", "Google News"),
+                            "snippet": r.get("snippet", "")
+                        }
                         for r in results if r.get("title")
                     ]
-                    print(f"[Dashboard News] Serper returned {len(news_data)} items")
+                    print(f"[Dashboard News] Serper returned {len(raw_news)} items")
         except Exception as e:
             print(f"[Dashboard News] Serper error: {e}")
+        
+        # Use AI to summarize news in both languages
+        if raw_news and len(raw_news) >= 3:
+            news_data = summarize_news_with_ai(raw_news)
         
         if not news_data or len(news_data) < 3:
             print("[Dashboard News] Using static fallback")
             news_data = [
-                {"title": "Bitcoin holds steady above $90K as market awaits Fed decision", "source": "CoinDesk"},
-                {"title": "Ethereum Layer 2 solutions see record TVL growth", "source": "The Block"},
-                {"title": "Institutional crypto adoption accelerates in Asia", "source": "Bloomberg"},
-                {"title": "DeFi protocols show renewed growth momentum in Q4", "source": "DeFiLlama"},
-                {"title": "NFT market sees signs of recovery with blue-chip sales", "source": "OpenSea"},
-                {"title": "Regulatory clarity improves for crypto industry globally", "source": "CoinTelegraph"}
+                {"title_en": "Bitcoin holds steady above $90K as market awaits Fed decision", "title_zh": "比特币在9万美元上方保持稳定，市场等待美联储决议", "source": "CoinDesk"},
+                {"title_en": "Ethereum Layer 2 solutions see record TVL growth", "title_zh": "以太坊二层解决方案TVL创历史新高", "source": "The Block"},
+                {"title_en": "Institutional crypto adoption accelerates in Asia", "title_zh": "亚洲机构加密货币采用加速", "source": "Bloomberg"},
+                {"title_en": "DeFi protocols show renewed growth momentum in Q4", "title_zh": "DeFi协议第四季度增长势头强劲", "source": "DeFiLlama"},
+                {"title_en": "NFT market sees signs of recovery with blue-chip sales", "title_zh": "NFT市场蓝筹销售回暖，复苏迹象显现", "source": "OpenSea"},
+                {"title_en": "Regulatory clarity improves for crypto industry globally", "title_zh": "全球加密货币行业监管逐渐明朗", "source": "CoinTelegraph"}
             ]
         
         set_cache("news", news_data)
@@ -89,6 +98,63 @@ async def get_dashboard_news():
     except Exception as e:
         print(f"[Dashboard News] Error: {e}")
         return {"news": [], "error": str(e)}
+
+
+def summarize_news_with_ai(raw_news):
+    """Use AI to summarize news headlines in both English and Chinese"""
+    import os
+    from openai import OpenAI
+    
+    try:
+        # Use DeepSeek API (compatible with OpenAI SDK)
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url="https://api.deepseek.com"
+        )
+        
+        # Prepare news text for summarization
+        news_text = "\n".join([
+            f"{i+1}. [{n['source']}] {n['title']}" + (f" - {n['snippet']}" if n.get('snippet') else "")
+            for i, n in enumerate(raw_news[:6])
+        ])
+        
+        prompt = f"""Summarize each of the following crypto news headlines. For each news item, provide:
+1. A concise English summary (max 20 words)
+2. A concise Chinese summary (max 20 characters)
+
+Format your response as JSON array with objects containing: title_en, title_zh, source
+
+News:
+{news_text}
+
+Respond ONLY with valid JSON array, no markdown, no explanation."""
+        
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=500
+        )
+        
+        import json
+        result_text = response.choices[0].message.content.strip()
+        # Clean potential markdown formatting
+        if result_text.startswith("```"):
+            result_text = result_text.split("\n", 1)[1]
+            result_text = result_text.rsplit("```", 1)[0]
+        
+        summarized = json.loads(result_text)
+        print(f"[Dashboard News] AI summarized {len(summarized)} news items")
+        return summarized
+        
+    except Exception as e:
+        print(f"[Dashboard News] AI summarization failed: {e}")
+        # Fallback: return original titles with simple format
+        return [
+            {"title_en": n["title"], "title_zh": n["title"], "source": n["source"]}
+            for n in raw_news
+        ]
+
 
 @router.get("/tokens")
 async def get_dashboard_tokens():

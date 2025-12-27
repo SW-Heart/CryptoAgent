@@ -34,7 +34,7 @@ import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
 
 function AppContent() {
   // --- i18n ---
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   // --- Auth ---
   const { user, loading: authLoading, signOut } = useAuth();
@@ -1396,16 +1396,22 @@ function AppContent() {
                             {t('home.latestNews')}
                           </h3>
                           <div className="flex flex-col justify-between h-[calc(100%-32px)]">
-                            {dashboardNews.length > 0 ? dashboardNews.slice(0, 5).map((news, i) => (
-                              <button
-                                key={i}
-                                onClick={() => setInput(`Analysis news: '${news.title}'`)}
-                                className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
-                              >
-                                <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
-                                <span className="flex-1 text-sm text-slate-300 line-clamp-2">{news.title}</span>
-                              </button>
-                            )) : (
+                            {dashboardNews.length > 0 ? dashboardNews.slice(0, 5).map((news, i) => {
+                              // Support both old format (title) and new format (title_en/title_zh)
+                              const isZh = i18n.language?.startsWith('zh');
+                              const displayTitle = isZh ? (news.title_zh || news.title || news.title_en) : (news.title_en || news.title);
+                              const queryTitle = news.title_en || news.title || displayTitle;
+                              return (
+                                <button
+                                  key={i}
+                                  onClick={() => setInput(`Analysis news: '${queryTitle}'`)}
+                                  className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
+                                >
+                                  <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
+                                  <span className="flex-1 text-sm text-slate-300 line-clamp-2">{displayTitle}</span>
+                                </button>
+                              )
+                            }) : (
                               <>
                                 <button onClick={() => setInput("Analysis news: 'Bitcoin holds steady as market awaits Fed decision'")} className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left">
                                   <span className="text-xs text-slate-500">1.</span>

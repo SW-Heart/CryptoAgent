@@ -195,6 +195,34 @@ def trigger_strategy():
 
 # ============= Daily Report Generation =============
 
+def save_report_to_db(report_date: str, content: str, language: str):
+    """Save daily report directly to database"""
+    from datetime import datetime
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Ensure table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date TEXT NOT NULL,
+            language TEXT DEFAULT 'en',
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(report_date, language)
+        )
+    """)
+    
+    # Insert or replace report
+    cursor.execute("""
+        INSERT OR REPLACE INTO daily_reports (report_date, language, content, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (report_date, language, content, datetime.now().isoformat()))
+    
+    conn.commit()
+    conn.close()
+
 def generate_daily_report():
     """Generate daily crypto report by calling the agent"""
     from datetime import date
@@ -213,31 +241,78 @@ def generate_daily_report():
             print(f"\n[DailyReport] Generating {language} report...")
             
             if language == "en":
-                prompt = """Generate a comprehensive Crypto Daily Report for today. Include:
-1. **Market Overview**: BTC, ETH prices and 24h changes, Fear & Greed Index
-2. **Top News**: Summarize the most important crypto news today
-3. **Market Analysis**: Key trends and patterns observed
-4. **Investment Insights**: Potential opportunities and risks to watch
-5. **Notable Events**: Any significant events (ETF flows, whale movements, etc.)
+                prompt = """Generate a Crypto Daily Report for today.
 
-Format the output in clean Markdown with clear sections."""
+IMPORTANT RULES:
+1. Start DIRECTLY with "# 📊 Crypto Daily Report - [Date]" - no preamble
+2. After each "## Section Title", add a newline before content
+3. Do NOT repeat section titles in the content (e.g., no "## 1. Market Overview" followed by "**Market Overview:**")
+4. Use bullet points (-) for lists
+
+Structure:
+# 📊 Crypto Daily Report - [Today's Date]
+
+## 1. Market Overview
+- BTC: $xxx (-x.xx% 24h)
+- ETH: $xxx (-x.xx% 24h)
+- Fear & Greed Index: xx
+- Total Market Cap: $x.xxT
+
+## 2. Top News
+- News item 1
+- News item 2
+- News item 3
+
+## 3. Market Analysis
+- Trend analysis
+- Technical patterns
+
+## 4. Investment Insights
+- Opportunities
+- Risks
+
+## 5. Notable Events
+- Key events of the day
+
+Be concise but informative."""
             else:
-                prompt = """生成今日加密货币日报。包括：
-1. **市场概况**：BTC、ETH 价格和24小时涨跌幅，恐惧贪婪指数
-2. **今日要闻**：总结今日最重要的加密货币新闻
-3. **市场分析**：观察到的关键趋势和模式
-4. **投资建议**：值得关注的潜在机会和风险
-5. **重要事件**：任何重要事件（ETF资金流向、巨鲸动向等）
+                prompt = """生成今日加密货币日报。
 
-请使用清晰的 Markdown 格式，分段输出。"""
+重要：直接输出报告内容，不要输出任何思考过程、"让我..."或"我来..."等前言。直接从 markdown 标题开始。
+
+包含以下章节：
+# 📊 加密货币日报 - [今日日期]
+
+## 1. 市场概况
+- BTC、ETH 价格和24小时涨跌幅
+- 恐惧贪婪指数
+- 总市值
+
+## 2. 今日要闻
+- 3-5条最重要的加密货币新闻
+
+## 3. 市场分析
+- 关键趋势和技术形态
+
+## 4. 投资建议
+- 值得关注的机会和风险
+
+## 5. 重要事件
+- 重要事件（ETF资金流向、巨鲸动向等）
+
+使用清晰的 Markdown 格式，简洁但信息丰富。"""
             
-            # Call agent API
-            print(f"[DailyReport] Calling {AGENT_API_URL}/v1/runs ...")
+            # Call agent API - correct path is /agents/{agent_id}/runs
+            # Uses multipart/form-data format
+            agent_id = "crypto-analyst-agent"
+            api_url = f"{AGENT_API_URL}/agents/{agent_id}/runs"
+            print(f"[DailyReport] Calling {api_url} ...")
             response = requests.post(
-                f"{AGENT_API_URL}/v1/runs",
-                json={
+                api_url,
+                data={
+                    "message": prompt,
                     "user_id": SCHEDULER_USER_ID,
-                    "input": prompt
+                    "stream": "false"
                 },
                 timeout=180  # Increased timeout to 3 minutes
             )
@@ -250,9 +325,8 @@ Format the output in clean Markdown with clear sections."""
                 
                 if content:
                     print(f"[DailyReport] Got content, length: {len(content)} chars")
-                    # Save to database
-                    from app.routers.daily_report import save_daily_report
-                    save_daily_report(report_date, content, language)
+                    # Save directly to database (avoid FastAPI import issues)
+                    save_report_to_db(report_date, content, language)
                     print(f"[DailyReport] ✓ {language} report saved successfully")
                 else:
                     print(f"[DailyReport] ✗ Agent returned empty content")
