@@ -23,6 +23,7 @@ import PrivacyPolicy from './components/PrivacyPolicy';
 import TermsOfService from './components/TermsOfService';
 import LandingPage from './components/LandingPage';
 import TerminalLoader from './components/TerminalLoader';
+import HomePage from './components/HomePage';
 
 // Import from new modular structure
 import { AGENT_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
@@ -1780,6 +1781,9 @@ function App() {
   };
 
   // Route based on URL path
+  if (currentPath === '/home') {
+    return <HomePage />;
+  }
   if (currentPath === '/privacy') {
     return <PrivacyPolicy onBack={navigateHome} />;
   }
@@ -1803,6 +1807,9 @@ function AuthWrapper() {
   const [showLoader, setShowLoader] = useState(false);
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
 
+  // 追踪是否已经显示过加载动画（刷新页面会重置，切换标签页不会）
+  const hasShownLoaderRef = React.useRef(false);
+
   const handleLanguageChange = () => {
     i18n.changeLanguage(i18n.language === 'en' ? 'zh' : 'en');
   };
@@ -1812,9 +1819,12 @@ function AuthWrapper() {
     setShowAuthModal(true);
   };
 
-  // 当用户登录成功时，显示加载动画并开始加载数据
+  // 只在首次加载时显示加载动画，切换标签页回来不再显示
   useEffect(() => {
-    if (user && !authLoading) {
+    if (user && !authLoading && !hasShownLoaderRef.current) {
+      // 标记已显示过加载动画
+      hasShownLoaderRef.current = true;
+
       setShowLoader(true);
       setInitialDataLoaded(false);
 
