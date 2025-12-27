@@ -398,6 +398,28 @@ const AuthModal = ({ isOpen, onClose }) => {
                                         </>
                                     )}
                                 </p>
+
+                                {/* Privacy Policy & Terms of Service */}
+                                <p className="text-center text-xs text-slate-500 mt-4">
+                                    By continuing, you agree to our{' '}
+                                    <a
+                                        href="/terms"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-slate-400 hover:text-white underline"
+                                    >
+                                        Terms of Service
+                                    </a>
+                                    {' '}and{' '}
+                                    <a
+                                        href="/privacy"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-slate-400 hover:text-white underline"
+                                    >
+                                        Privacy Policy
+                                    </a>
+                                </p>
                             </>
                         )}
                     </div>

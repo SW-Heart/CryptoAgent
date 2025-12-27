@@ -19,12 +19,15 @@ import AuthModal from './components/AuthModal';
 import SettingsModal from './components/SettingsModal';
 import StrategyNexus from './components/StrategyNexus';
 import DailyReport from './components/DailyReport';
+import PrivacyPolicy from './components/PrivacyPolicy';
+import TermsOfService from './components/TermsOfService';
 
 // Import from new modular structure
 import { AGENT_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
 import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
+
 
 function AppContent() {
   // --- i18n ---
@@ -1750,6 +1753,27 @@ function AppContent() {
 
 // Wrap AppContent with AuthProvider
 function App() {
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+
+  useEffect(() => {
+    const handlePopState = () => setCurrentPath(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateHome = () => {
+    window.history.pushState({}, '', '/');
+    setCurrentPath('/');
+  };
+
+  // Route based on URL path
+  if (currentPath === '/privacy') {
+    return <PrivacyPolicy onBack={navigateHome} />;
+  }
+  if (currentPath === '/terms') {
+    return <TermsOfService onBack={navigateHome} />;
+  }
+
   return (
     <AuthProvider>
       <AppContent />
