@@ -141,7 +141,11 @@
         "googleLoginFailed": "Google login failed",
         "walletConnectionFailed": "Wallet connection failed",
         "delete": "Delete",
-        "noHistoryYet": "No history yet"
+        "noHistoryYet": "No history yet",
+        "agreeToTerms": "By continuing, you agree to our",
+        "termsOfService": "Terms of Service",
+        "privacyPolicy": "Privacy Policy",
+        "and": "and"
     },
     "dashboard": {
         "popularTokens": "Popular Tokens",

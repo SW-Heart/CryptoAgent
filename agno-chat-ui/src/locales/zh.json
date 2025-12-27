@@ -141,7 +141,11 @@
         "googleLoginFailed": "Google 登录失败",
         "walletConnectionFailed": "钱包连接失败",
         "delete": "删除",
-        "noHistoryYet": "暂无对话记录"
+        "noHistoryYet": "暂无对话记录",
+        "agreeToTerms": "继续即表示您同意我们的",
+        "termsOfService": "服务条款",
+        "privacyPolicy": "隐私政策",
+        "and": "和"
     },
     "dashboard": {
         "popularTokens": "热门代币",

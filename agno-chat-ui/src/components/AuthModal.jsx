@@ -401,23 +401,23 @@ const AuthModal = ({ isOpen, onClose }) => {
 
                                 {/* Privacy Policy & Terms of Service */}
                                 <p className="text-center text-xs text-slate-500 mt-4">
-                                    By continuing, you agree to our{' '}
+                                    {t('auth.agreeToTerms')}{' '}
                                     <a
                                         href="/terms"
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-slate-400 hover:text-white underline"
                                     >
-                                        Terms of Service
+                                        {t('auth.termsOfService')}
                                     </a>
-                                    {' '}and{' '}
+                                    {' '}{t('auth.and')}{' '}
                                     <a
                                         href="/privacy"
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-slate-400 hover:text-white underline"
                                     >
-                                        Privacy Policy
+                                        {t('auth.privacyPolicy')}
                                     </a>
                                 </p>
                             </>
