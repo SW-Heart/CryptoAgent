@@ -119,21 +119,29 @@ def summarize_news_with_ai(raw_news):
         ])
         
         prompt = f"""Summarize each of the following crypto news headlines. For each news item, provide:
-1. A concise English summary (max 20 words)
-2. A concise Chinese summary (max 20 characters)
 
-Format your response as JSON array with objects containing: title_en, title_zh, source
+1. title_en: Concise English headline (max 12 words)
+2. title_zh: Concise Chinese headline (max 12 characters)
+3. summary_en: WHY THIS MATTERS - explain the impact, background context, or implications that the title doesn't mention (max 20 words). DO NOT repeat what the title says.
+4. summary_zh: 这条新闻为什么重要 - 解释标题未提及的影响、背景或意义（max 20字）。不要重复标题内容。
+5. source: Original news source
+
+IMPORTANT for summary: Provide NEW information that complements the title. Examples:
+- Title: "BTC drops 5%" → Summary: "Triggered by large whale sell-off and leveraged liquidations"
+- Title: "ETH升级延期" → Summary: "开发者发现关键安全漏洞，需额外测试时间"
+
+Format: JSON array with objects containing: title_en, title_zh, summary_en, summary_zh, source
 
 News:
 {news_text}
 
-Respond ONLY with valid JSON array, no markdown, no explanation."""
+Respond ONLY with valid JSON array, no markdown."""
         
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=500
+            max_tokens=1000
         )
         
         import json

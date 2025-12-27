@@ -1400,15 +1400,21 @@ function AppContent() {
                               // Support both old format (title) and new format (title_en/title_zh)
                               const isZh = i18n.language?.startsWith('zh');
                               const displayTitle = isZh ? (news.title_zh || news.title || news.title_en) : (news.title_en || news.title);
+                              const displaySummary = isZh ? (news.summary_zh || '') : (news.summary_en || '');
                               const queryTitle = news.title_en || news.title || displayTitle;
                               return (
                                 <button
                                   key={i}
                                   onClick={() => setInput(`Analysis news: '${queryTitle}'`)}
-                                  className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
+                                  className="w-full flex items-start gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition-colors text-left"
                                 >
                                   <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
-                                  <span className="flex-1 text-sm text-slate-300 line-clamp-2">{displayTitle}</span>
+                                  <div className="flex-1">
+                                    <span className="text-sm text-slate-300 line-clamp-1">{displayTitle}</span>
+                                    {displaySummary && (
+                                      <span className="text-xs text-slate-500 line-clamp-1 block mt-0.5">{displaySummary}</span>
+                                    )}
+                                  </div>
                                 </button>
                               )
                             }) : (
