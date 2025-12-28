@@ -24,14 +24,15 @@ def init_daily_report_tables():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Daily reports table
+    # Daily reports table - supports multi-language reports per day
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS daily_reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            report_date DATE UNIQUE NOT NULL,
+            report_date TEXT NOT NULL,
             language TEXT DEFAULT 'en',
             content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL,
+            UNIQUE(report_date, language)
         )
     """)
     
@@ -106,6 +107,26 @@ async def get_latest_report(language: str = "en"):
     }
 
 
+@router.get("/api/daily-report/dates")
+async def get_available_dates(language: str = "en", limit: int = 30):
+    """Get list of available report dates"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT report_date 
+        FROM daily_reports 
+        WHERE language = ?
+        ORDER BY report_date DESC 
+        LIMIT ?
+    """, (language, limit))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return {"dates": [row["report_date"] for row in rows]}
+
+
 @router.get("/api/daily-report/{report_date}")
 async def get_report_by_date(report_date: str, language: str = "en"):
     """Get report for a specific date (YYYY-MM-DD)"""
@@ -130,26 +151,6 @@ async def get_report_by_date(report_date: str, language: str = "en"):
         "content": row["content"],
         "created_at": row["created_at"]
     }
-
-
-@router.get("/api/daily-report/dates")
-async def get_available_dates(language: str = "en", limit: int = 30):
-    """Get list of available report dates"""
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT report_date 
-        FROM daily_reports 
-        WHERE language = ?
-        ORDER BY report_date DESC 
-        LIMIT ?
-    """, (language, limit))
-    
-    rows = cursor.fetchall()
-    conn.close()
-    
-    return {"dates": [row["report_date"] for row in rows]}
 
 
 @router.post("/api/subscribe")
