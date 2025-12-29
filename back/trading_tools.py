@@ -172,11 +172,7 @@ def open_position(
         conn.close()
         return {"error": f"Margin {margin} exceeds 20% limit. Max allowed: {available * 0.2:.2f} USDT"}
     
-    if margin > available:
-        conn.close()
-        return {"error": f"Insufficient balance. Available: {available:.2f} USDT"}
-    
-    # Get current price
+    # Get current price first to calculate fee
     entry_price = get_current_price(symbol)
     if entry_price <= 0:
         conn.close()
@@ -188,6 +184,11 @@ def open_position(
     
     # Calculate fee (0.05% of notional value)
     fee = notional_value * 0.0005
+    
+    # Check if margin + fee exceeds available (prevent overdraft)
+    if margin + fee > available:
+        conn.close()
+        return {"error": f"Insufficient balance. Need {margin + fee:.2f} USDT (margin + fee), available: {available:.2f} USDT"}
     
     # Insert position with user_id
     cursor = conn.execute("""
@@ -265,8 +266,8 @@ def close_position(position_id: int, reason: str = "manual", user_id: str = None
     else:
         pnl = pos["quantity"] * (pos["entry_price"] - close_price)
     
-    # Close fee
-    fee = pos["margin"] * 0.0005
+    # Close fee (0.05% of notional value, same as open)
+    fee = pos["notional_value"] * 0.0005
     realized_pnl = pnl - fee
     
     # Determine status
@@ -287,21 +288,25 @@ def close_position(position_id: int, reason: str = "manual", user_id: str = None
         VALUES (?, ?, ?, ?, ?)
     """, (position_id, pos["symbol"], "CLOSE", close_price, fee))
     
-    # Update wallet for the position's owner
+    # Update wallet for the position's owner (使用原子操作防止并发问题)
     position_user_id = pos["user_id"]
-    wallet = conn.execute("SELECT current_balance, total_pnl, total_trades, win_trades FROM virtual_wallet WHERE user_id = ?", (position_user_id,)).fetchone()
-    new_balance = wallet["current_balance"] + pos["margin"] + realized_pnl
-    new_total_pnl = wallet["total_pnl"] + realized_pnl
-    new_total_trades = wallet["total_trades"] + 1
-    new_win_trades = wallet["win_trades"] + (1 if realized_pnl > 0 else 0)
     
+    # Atomic update: directly use SQL arithmetic instead of read-modify-write
     conn.execute("""
         UPDATE virtual_wallet 
-        SET current_balance = ?, total_pnl = ?, total_trades = ?, win_trades = ?, updated_at = CURRENT_TIMESTAMP
+        SET current_balance = current_balance + ? + ?,
+            total_pnl = total_pnl + ?,
+            total_trades = total_trades + 1,
+            win_trades = win_trades + ?,
+            updated_at = CURRENT_TIMESTAMP
         WHERE user_id = ?
-    """, (new_balance, new_total_pnl, new_total_trades, new_win_trades, position_user_id))
+    """, (pos["margin"], realized_pnl, realized_pnl, 1 if realized_pnl > 0 else 0, position_user_id))
     
     conn.commit()
+    
+    # Get updated balance for return value
+    wallet = conn.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = ?", (position_user_id,)).fetchone()
+    new_balance = wallet["current_balance"] if wallet else 0
     conn.close()
     
     return {
@@ -429,13 +434,28 @@ def partial_close_position(
     
     # Update wallet - release proportional margin + add realized PnL
     position_user_id = pos["user_id"]
-    conn.execute("""
-        UPDATE virtual_wallet 
-        SET current_balance = current_balance + ? + ?,
-            total_pnl = total_pnl + ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    """, (margin_to_release, realized_pnl, realized_pnl, position_user_id))
+    
+    # When fully closed, also update trade statistics
+    if is_fully_closed:
+        # Get total realized PnL for this position (including previous partial closes)
+        total_position_pnl = (pos["realized_pnl"] or 0) + realized_pnl
+        conn.execute("""
+            UPDATE virtual_wallet 
+            SET current_balance = current_balance + ? + ?,
+                total_pnl = total_pnl + ?,
+                total_trades = total_trades + 1,
+                win_trades = win_trades + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (margin_to_release, realized_pnl, realized_pnl, 1 if total_position_pnl > 0 else 0, position_user_id))
+    else:
+        conn.execute("""
+            UPDATE virtual_wallet 
+            SET current_balance = current_balance + ? + ?,
+                total_pnl = total_pnl + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (margin_to_release, realized_pnl, realized_pnl, position_user_id))
     
     conn.commit()
     
@@ -596,3 +616,169 @@ def update_stop_loss_take_profit(position_id: int, new_sl: float = None, new_tp:
         "new_stop_loss": new_sl,
         "new_take_profit": new_tp
     }
+
+
+# ==========================================
+# Price Alert Tools
+# ==========================================
+
+def set_price_alert(
+    symbol: str,
+    trigger_price: float,
+    condition: str,
+    strategy_context: str = None
+) -> dict:
+    """
+    设置价格警报。当价格达到触发条件时，系统会自动调用Agent重新分析。
+    
+    使用场景：
+    - 等待价格回调到支撑位再开仓
+    - 等待价格突破阻力位确认后开仓
+    - 监控关键价位的市场反应
+    
+    Args:
+        symbol: 币种符号 (BTC, ETH, SOL)
+        trigger_price: 触发价格
+        condition: 触发条件
+            - "above": 价格突破到 trigger_price 以上时触发
+            - "below": 价格跌破到 trigger_price 以下时触发
+        strategy_context: 策略上下文说明，触发时会作为提示传递给Agent
+            例如: "BTC在100000被拒绝，价格跌回99000时验证是否形成双顶，若确认则开空"
+    
+    Returns:
+        dict with alert details or error
+    
+    Example:
+        set_price_alert(
+            symbol="BTC",
+            trigger_price=99000,
+            condition="below",
+            strategy_context="等待BTC从100000回落到99000，验证是否在100000形成有效阻力后开空"
+        )
+    """
+    from price_alerts import create_alert, get_alerts_by_symbol
+    
+    symbol = symbol.upper()
+    condition = condition.lower()
+    
+    if condition not in ["above", "below"]:
+        return {"error": "condition 必须是 'above' 或 'below'"}
+    
+    if trigger_price <= 0:
+        return {"error": "trigger_price 必须大于0"}
+    
+    # 获取当前价格
+    current_price = get_current_price(symbol)
+    if current_price <= 0:
+        return {"error": f"无法获取 {symbol} 当前价格"}
+    
+    # 验证条件逻辑
+    if condition == "above" and current_price >= trigger_price:
+        return {"error": f"当前价格 ${current_price:,.0f} 已经高于触发价 ${trigger_price:,.0f}，无需设置 above 警报"}
+    
+    if condition == "below" and current_price <= trigger_price:
+        return {"error": f"当前价格 ${current_price:,.0f} 已经低于触发价 ${trigger_price:,.0f}，无需设置 below 警报"}
+    
+    # 检查是否已有相同警报
+    existing = get_alerts_by_symbol(symbol)
+    for alert in existing:
+        if abs(alert["trigger_price"] - trigger_price) < 10:  # 价格相近（<$10差异）
+            return {"error": f"已存在相似警报 (ID:{alert['id']}): {symbol} {alert['trigger_condition']} ${alert['trigger_price']:,.0f}"}
+    
+    # 创建警报
+    alert_id = create_alert(
+        symbol=symbol,
+        trigger_price=trigger_price,
+        trigger_condition=condition,
+        strategy_context=strategy_context
+    )
+    
+    condition_text = "突破" if condition == "above" else "跌破"
+    distance = abs(current_price - trigger_price)
+    distance_pct = distance / current_price * 100
+    
+    return {
+        "success": True,
+        "alert_id": alert_id,
+        "symbol": symbol,
+        "trigger_price": trigger_price,
+        "condition": condition,
+        "current_price": current_price,
+        "distance": f"${distance:,.0f} ({distance_pct:.1f}%)",
+        "message": f"警报已设置：当 {symbol} {condition_text} ${trigger_price:,.0f} 时触发分析"
+    }
+
+
+def get_price_alerts(symbol: str = None) -> dict:
+    """
+    查看当前待触发的价格警报。
+    
+    Args:
+        symbol: 可选，指定币种筛选，不填则返回所有
+    
+    Returns:
+        dict with pending alerts
+    """
+    from price_alerts import get_pending_alerts, get_alerts_by_symbol
+    
+    if symbol:
+        alerts = get_alerts_by_symbol(symbol.upper())
+    else:
+        alerts = get_pending_alerts()
+    
+    if not alerts:
+        return {
+            "count": 0,
+            "alerts": [],
+            "message": "当前没有待触发的价格警报"
+        }
+    
+    formatted_alerts = []
+    for alert in alerts:
+        condition_text = "突破" if alert["trigger_condition"] == "above" else "跌破"
+        current_price = get_current_price(alert["symbol"])
+        distance = abs(current_price - alert["trigger_price"])
+        distance_pct = distance / current_price * 100 if current_price > 0 else 0
+        
+        formatted_alerts.append({
+            "id": alert["id"],
+            "symbol": alert["symbol"],
+            "condition": f"{condition_text} ${alert['trigger_price']:,.0f}",
+            "current_price": current_price,
+            "distance": f"${distance:,.0f} ({distance_pct:.1f}%)",
+            "strategy": alert["strategy_context"][:100] if alert["strategy_context"] else None,
+            "created_at": alert["created_at"]
+        })
+    
+    return {
+        "count": len(formatted_alerts),
+        "alerts": formatted_alerts
+    }
+
+
+def cancel_price_alert(alert_id: int = None, symbol: str = None) -> dict:
+    """
+    取消价格警报。
+    
+    Args:
+        alert_id: 要取消的警报ID（优先）
+        symbol: 取消该币种的所有警报（如果未指定alert_id）
+    
+    Returns:
+        dict with cancellation result
+    """
+    from price_alerts import cancel_alert, cancel_alerts_by_symbol
+    
+    if alert_id:
+        success = cancel_alert(alert_id)
+        if success:
+            return {"success": True, "message": f"警报 {alert_id} 已取消"}
+        else:
+            return {"error": f"警报 {alert_id} 不存在或已触发/取消"}
+    
+    if symbol:
+        count = cancel_alerts_by_symbol(symbol.upper())
+        return {"success": True, "message": f"已取消 {symbol} 的 {count} 个警报"}
+    
+    return {"error": "请指定 alert_id 或 symbol"}
+

@@ -10,13 +10,18 @@ from starlette.requests import Request
 import json
 import threading
 
-# Import Agent and AgentOS from crypto_agent
-from crypto_agent import crypto_agent, agent_os
+# Import both Agents
+# Import agents
+from crypto_agent import crypto_agent
+from trading_agent import trading_agent
+from daily_report_agent import daily_report_agent
+from agno.os import AgentOS
 
 # Import user context setter
 from trading_tools import set_current_user
 
-# Get the app from AgentOS
+# Create AgentOS with all agents
+agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent])
 app = agent_os.get_app()
 
 # Middleware to set user context for trading tools

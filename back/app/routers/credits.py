@@ -73,7 +73,7 @@ def get_user_credits(user_id: str) -> int:
     return row["credits"]
 
 def update_user_credits(user_id: str, credits: int) -> int:
-    """Update user credits"""
+    """Update user credits (direct set - use with caution, prefer atomic functions)"""
     conn = get_db_connection()
     conn.execute(
         "UPDATE user_credits SET credits = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
@@ -82,6 +82,40 @@ def update_user_credits(user_id: str, credits: int) -> int:
     conn.commit()
     conn.close()
     return credits
+
+def add_credits_atomic(user_id: str, amount: int) -> int:
+    """Atomically add credits to user (thread-safe)"""
+    # Ensure user exists first
+    get_user_credits(user_id)
+    
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE user_credits SET credits = credits + ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+        (amount, user_id)
+    )
+    conn.commit()
+    
+    # Get updated value
+    row = conn.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row["credits"] if row else 0
+
+def deduct_credits_atomic(user_id: str, amount: int) -> int:
+    """Atomically deduct credits from user (thread-safe, allows negative)"""
+    # Ensure user exists first
+    get_user_credits(user_id)
+    
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE user_credits SET credits = credits - ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+        (amount, user_id)
+    )
+    conn.commit()
+    
+    # Get updated value
+    row = conn.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row["credits"] if row else 0
 
 def log_credits_history(user_id: str, details: str, credits_change: int):
     """Log a credits change to history"""
@@ -154,15 +188,16 @@ async def api_add_credits(user_id: str, request: Request):
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Amount must be positive")
         
-        current = get_user_credits(user_id)
-        new_credits = update_user_credits(user_id, current + amount)
+        # Use atomic function to prevent race conditions
+        previous = get_user_credits(user_id)
+        new_credits = add_credits_atomic(user_id, amount)
         
         # Log to history
         log_credits_history(user_id, "Credits added", amount)
         
         return {
             "user_id": user_id, 
-            "previous_credits": current,
+            "previous_credits": previous,
             "added": amount,
             "current_credits": new_credits
         }
@@ -180,10 +215,9 @@ async def api_deduct_credits(user_id: str, request: Request):
         details = data.get("details", "Tool usage")  # Question/context
         amount = tool_count * CREDITS_PER_TOOL
         
-        current = get_user_credits(user_id)
-        
-        # Allow deduction even if it goes negative (for mid-conversation tool calls)
-        new_credits = update_user_credits(user_id, current - amount)
+        # Use atomic function to prevent race conditions
+        previous = get_user_credits(user_id)
+        new_credits = deduct_credits_atomic(user_id, amount)
         
         # Log to history with negative value
         log_credits_history(user_id, details, -amount)
@@ -258,18 +292,47 @@ async def api_checkin(user_id: str):
                 "credits_earned": 0
             }
         
-        # Record check-in
-        conn.execute(
-            "INSERT INTO daily_checkins (user_id, checkin_date, credits_earned) VALUES (?, ?, ?)",
-            (user_id, today, CHECKIN_CREDITS)
-        )
-        conn.commit()
-        conn.close()
+        # All operations in a single transaction for consistency
+        try:
+            # Record check-in
+            conn.execute(
+                "INSERT INTO daily_checkins (user_id, checkin_date, credits_earned) VALUES (?, ?, ?)",
+                (user_id, today, CHECKIN_CREDITS)
+            )
+            
+            # Ensure user exists in credits table
+            existing_credits = conn.execute(
+                "SELECT credits FROM user_credits WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            
+            if existing_credits is None:
+                conn.execute(
+                    "INSERT INTO user_credits (user_id, credits) VALUES (?, ?)",
+                    (user_id, DEFAULT_CREDITS + CHECKIN_CREDITS)
+                )
+                new_credits = DEFAULT_CREDITS + CHECKIN_CREDITS
+            else:
+                # Atomic update within same transaction
+                conn.execute(
+                    "UPDATE user_credits SET credits = credits + ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                    (CHECKIN_CREDITS, user_id)
+                )
+                row = conn.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,)).fetchone()
+                new_credits = row["credits"]
+            
+            # Log to history
+            conn.execute(
+                "INSERT INTO credits_history (user_id, details, credits_change) VALUES (?, ?, ?)",
+                (user_id, "Daily check-in", CHECKIN_CREDITS)
+            )
+            
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"Check-in failed: {str(e)}")
         
-        # Add credits
-        current = get_user_credits(user_id)
-        new_credits = update_user_credits(user_id, current + CHECKIN_CREDITS)
-        log_credits_history(user_id, "Daily check-in", CHECKIN_CREDITS)
+        conn.close()
         
         return {
             "success": True,
@@ -277,5 +340,7 @@ async def api_checkin(user_id: str):
             "credits_earned": CHECKIN_CREDITS,
             "current_credits": new_credits
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

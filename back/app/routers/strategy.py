@@ -11,6 +11,9 @@ router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
 DB_PATH = "tmp/test.db"
 
+# Admin user ID for strategy operations (must match trading_tools.py)
+STRATEGY_ADMIN_USER_ID = "ee20fa53-5ac2-44bc-9237-41b308e291d8"
+
 # Binance API base URL (configurable via environment variable)
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
 
@@ -113,10 +116,11 @@ async def get_wallet():
     
     try:
         conn = get_db_connection()
-        row = conn.execute("SELECT * FROM virtual_wallet WHERE id = 1").fetchone()
+        # Use user_id to match trading_tools.py logic
+        row = conn.execute("SELECT * FROM virtual_wallet WHERE user_id = ?", (STRATEGY_ADMIN_USER_ID,)).fetchone()
         
-        # Get open positions for equity calculation
-        positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN'").fetchall()
+        # Get open positions for equity calculation (filtered by user_id)
+        positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = ?", (STRATEGY_ADMIN_USER_ID,)).fetchall()
         conn.close()
         
         if not row:
@@ -169,12 +173,13 @@ async def get_positions(status: str = "OPEN"):
     try:
         conn = get_db_connection()
         
+        # Filter by user_id to only show admin's positions
         if status == "ALL":
-            rows = conn.execute("SELECT * FROM positions ORDER BY opened_at DESC").fetchall()
+            rows = conn.execute("SELECT * FROM positions WHERE user_id = ? ORDER BY opened_at DESC", (STRATEGY_ADMIN_USER_ID,)).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM positions WHERE status = ? ORDER BY opened_at DESC",
-                (status,)
+                "SELECT * FROM positions WHERE status = ? AND user_id = ? ORDER BY opened_at DESC",
+                (status, STRATEGY_ADMIN_USER_ID)
             ).fetchall()
         
         conn.close()
@@ -272,17 +277,17 @@ async def get_equity_curve():
     try:
         conn = get_db_connection()
         
-        # Get initial balance
-        wallet = conn.execute("SELECT initial_balance FROM virtual_wallet WHERE id = 1").fetchone()
+        # Get initial balance (use user_id for consistency)
+        wallet = conn.execute("SELECT initial_balance FROM virtual_wallet WHERE user_id = ?", (STRATEGY_ADMIN_USER_ID,)).fetchone()
         initial = wallet["initial_balance"] if wallet else 10000
         
-        # Get all closed positions ordered by close time
+        # Get all closed positions ordered by close time (filtered by user_id)
         rows = conn.execute("""
             SELECT closed_at, realized_pnl 
             FROM positions 
-            WHERE status IN ('CLOSED', 'LIQUIDATED') AND closed_at IS NOT NULL
+            WHERE status IN ('CLOSED', 'LIQUIDATED') AND closed_at IS NOT NULL AND user_id = ?
             ORDER BY closed_at ASC
-        """).fetchall()
+        """, (STRATEGY_ADMIN_USER_ID,)).fetchall()
         conn.close()
         
         # Build equity curve

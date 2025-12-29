@@ -31,12 +31,6 @@ from crypto_tools import (
     get_defi_tvl_ranking, get_protocol_tvl, get_chain_tvl, get_top_yields  # DefiLlama 工具
 )
 
-# 导入交易工具 (Strategy Nexus)
-from trading_tools import (
-    open_position, close_position, partial_close_position, get_positions_summary, update_stop_loss_take_profit,
-    log_strategy_analysis
-)
-
 # 导入专业技术分析工具
 from technical_analysis import (
     get_multi_timeframe_analysis,
@@ -106,13 +100,6 @@ crypto_agent = Agent(
         get_indicator_reliability_all_timeframes,  # 多周期汇总对比
         search_news,  # 自定义新闻搜索（无 imageUrl）
         search_google,  # 自定义 Google 搜索（无 imageUrl）
-        # Trading Tools (Strategy Nexus)
-        open_position,
-        close_position,
-        partial_close_position,
-        get_positions_summary,
-        update_stop_loss_take_profit,
-        log_strategy_analysis,
         DuckDuckGoTools(all=True),
         # etf_mcp_tools,  # ETF数据MCP工具（暂时禁用）
         # SerperTools 已移除，改用自定义 search_news
@@ -426,85 +413,6 @@ Flow:
 
 Output: Easy to understand
 
-## Mode G: Trading Strategy (Strategy Nexus - 多维共振交易系统)
-Triggers: "构建合约交易策略", "策略分析", "build trading strategy", "如有明确信号"
-
-**多维共振分析框架 (Multi-Dimensional Resonance):**
-
-**Dimension 1: 仓位与资金 (Position & Capital)**
-- get_positions_summary() → 当前仓位、余额、已用保证金
-
-**Dimension 2: 市场情绪面 (Sentiment)**
-- get_market_sentiment() → 恐惧贪婪指数、市场情绪
-- get_funding_rate(symbol) → 资金费率（杠杆情绪）
-
-**Dimension 3: 技术面 - 趋势共振 (Technical - Trend)**
-- get_multi_timeframe_analysis(symbol, deep_analysis=True) → 多周期EMA+Vegas+MACD共振
-- get_indicator_reliability(symbol) → 指标历史可靠性（支撑/阻力成功率）
-
-**Dimension 4: 宏观市场面 (Macro)**
-- get_btc_dominance() → BTC主导地位（山寨季信号）
-- get_global_market_overview() → 全球市场概览
-
-**Dimension 5: 消息面 (News & Narrative)**
-- get_pro_crypto_news() → 最新热点新闻
-- get_market_hotspots() → 当前热点板块
-
-**共振决策矩阵 (Resonance Decision Matrix):**
-| 共振维度 | 做多信号 | 做空信号 |
-|----------|----------|----------|
-| 情绪面 | 恐惧指数<25 + 负资金费率 | 贪婪指数>75 + 正资金费率 |
-| 技术面 | 多周期EMA多头排列 + 支撑有效 | 多周期EMA空头排列 + 阻力有效 |
-| 宏观面 | BTC主导下降 + 市值增长 | BTC主导上升 + 市值萎缩 |
-| 消息面 | 利好新闻 + 板块轮动 | 利空新闻 + 恐慌情绪 |
-
-**必须按顺序执行的工具调用 (MANDATORY TOOL CALL SEQUENCE):**
-```
-Step 1: get_positions_summary()
-Step 2: get_market_sentiment()
-Step 3: get_btc_dominance()
-Step 4: get_global_market_overview()
-Step 5: For EACH symbol (BTC, ETH, SOL):
-        - get_multi_timeframe_analysis(symbol, deep_analysis=True)
-        - get_indicator_reliability(symbol)  
-        - get_funding_rate(symbol)
-Step 6: get_pro_crypto_news()
-Step 7: get_market_hotspots()
-Step 8: 综合分析，决定开仓/持仓
-Step 9: 如开仓 → open_position() 
-Step 10: log_strategy_analysis()
-```
-
-**开仓条件：至少3/4维度共振才开仓！**
-
-**执行规则 (CRITICAL!):**
-如果分析后决定开仓，必须调用:
-```
-open_position(symbol="BTC", direction="SHORT", margin=2000, leverage=10, stop_loss=..., take_profit=...)
-```
-**规则：如果输出"具体操作建议"，必须调用 open_position()！**
-
-**执行顺序:**
-- OPEN: 分析 → open_position() → log_strategy_analysis(action_taken="OPEN_SHORT/LONG")
-- HOLD: 分析 → log_strategy_analysis(action_taken="HOLD") [不给具体建议]
-
-**交易规则:**
-- Margin = 2000 USDT (每仓位)
-- 最多3个仓位（每币种1个）
-- 杠杆: 10x
-- 止损: 入场价2-3%
-- 止盈: 入场价5-8%
-
-**分批止盈策略 (Trailing Take Profit):**
-当价格达到第一止盈目标时：
-```
-partial_close_position(position_id=X, close_percent=80, move_sl_to_entry=True, new_take_profit=下一目标)
-```
-示例：3000开多 → 3300止盈80%仓位，止损移至3000保本，剩余20%目标3500
-
-Tools: get_positions_summary, get_market_sentiment, get_funding_rate, get_multi_timeframe_analysis, get_indicator_reliability, get_btc_dominance, get_global_market_overview, get_pro_crypto_news, get_market_hotspots, open_position, close_position, partial_close_position, update_stop_loss_take_profit, log_strategy_analysis
-
-
 ## Mode F: Quick Q&A (HIGHEST PRIORITY - Check First!)
 **CRITICAL: Always check if this mode applies FIRST before any other mode.**
 
@@ -596,9 +504,5 @@ ALWAYS:
 # Agent OS 初始化
 # ==========================================
 
-# 创建 AgentOS (供 main.py 导入使用)
-agent_os = AgentOS(agents=[crypto_agent])
-
-# Note: API endpoints have been moved to app/routers/
-# Run with: fastapi dev main.py
-
+# Note: AgentOS is created in main.py with both agents
+# Run with: uvicorn main:app --host 127.0.0.1 --port 8000

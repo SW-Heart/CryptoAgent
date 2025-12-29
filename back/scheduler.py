@@ -84,7 +84,8 @@ def update_positions_prices():
     
     try:
         conn = get_db()
-        positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN'").fetchall()
+        # Only process admin's positions (filter by user_id)
+        positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = ?", (SCHEDULER_USER_ID,)).fetchall()
         
         for pos in positions:
             symbol = pos["symbol"]
@@ -170,7 +171,7 @@ def trigger_strategy():
 重要：如果分析结论中包含止损止盈调整建议，必须调用 update_stop_loss_take_profit 工具执行调整，不要只记录不执行。"""
         
         response = requests.post(
-            f"{AGENT_API_URL}/agents/crypto-analyst-agent/runs",
+            f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
             data={
                 "message": strategy_prompt,
                 "user_id": SCHEDULER_USER_ID,
@@ -192,6 +193,103 @@ def trigger_strategy():
         log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"})
     
     print(f"[Scheduler] ========== Round Complete ==========\n")
+
+
+# ============= Price Alert Monitoring =============
+
+def check_price_alerts():
+    """Check if any price alerts have been triggered and call agent"""
+    from price_alerts import get_pending_alerts, mark_alert_triggered
+    from trading_tools import get_current_price
+    
+    pending_alerts = get_pending_alerts()
+    
+    if not pending_alerts:
+        return
+    
+    # Get current prices for all symbols with alerts
+    symbols = list(set(alert["symbol"] for alert in pending_alerts))
+    current_prices = {symbol: get_current_price(symbol) for symbol in symbols}
+    
+    triggered_alerts = []
+    
+    for alert in pending_alerts:
+        symbol = alert["symbol"]
+        current_price = current_prices.get(symbol, 0)
+        
+        if current_price <= 0:
+            continue
+        
+        trigger_price = alert["trigger_price"]
+        condition = alert["trigger_condition"]
+        
+        triggered = False
+        
+        if condition == "above" and current_price >= trigger_price:
+            triggered = True
+        elif condition == "below" and current_price <= trigger_price:
+            triggered = True
+        
+        if triggered:
+            mark_alert_triggered(alert["id"])
+            alert["current_price"] = current_price
+            triggered_alerts.append(alert)
+            print(f"[Scheduler] 🔔 Price alert triggered: {symbol} {condition} ${trigger_price:,.0f} (current: ${current_price:,.0f})")
+    
+    # Call agent for each triggered alert
+    for alert in triggered_alerts:
+        trigger_agent_on_alert(alert)
+
+
+def trigger_agent_on_alert(alert: dict):
+    """Trigger agent to analyze when a price alert is triggered"""
+    symbol = alert["symbol"]
+    trigger_price = alert["trigger_price"]
+    condition = alert["trigger_condition"]
+    strategy_context = alert.get("strategy_context", "")
+    current_price = alert.get("current_price", 0)
+    
+    condition_text = "突破" if condition == "above" else "跌破"
+    
+    print(f"[Scheduler] Calling agent for triggered alert: {symbol}")
+    
+    try:
+        # Construct alert context prompt
+        alert_prompt = f"""⚠️ 价格警报触发！
+
+**警报信息**:
+- 币种: {symbol}
+- 触发条件: {condition_text} ${trigger_price:,.0f}
+- 当前价格: ${current_price:,.0f}
+- 原策略上下文: {strategy_context}
+
+**你需要做的**:
+1. 验证价格走势是否符合原策略预期
+2. 重新分析当前市场状况
+3. 决定是否执行开仓/平仓操作
+4. 如不符合预期，可以放弃或设置新的警报
+
+请执行完整分析后做出决策。"""
+        
+        response = requests.post(
+            f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
+            data={
+                "message": alert_prompt,
+                "user_id": SCHEDULER_USER_ID,
+                "session_id": f"alert-{alert['id']}-{datetime.now().strftime('%H%M')}",
+                "stream": "False"
+            },
+            timeout=120
+        )
+        
+        if response.status_code == 200:
+            print(f"[Scheduler] Alert analysis completed for {symbol}")
+        else:
+            print(f"[Scheduler] Alert analysis error: {response.status_code}")
+            
+    except Exception as e:
+        print(f"[Scheduler] Exception during alert analysis: {e}")
+
 
 # ============= Daily Report Generation =============
 
@@ -241,70 +339,13 @@ def generate_daily_report():
             print(f"\n[DailyReport] Generating {language} report...")
             
             if language == "en":
-                prompt = """Generate a Crypto Daily Report for today.
-
-IMPORTANT RULES:
-1. Start DIRECTLY with "# 📊 Crypto Daily Report - [Date]" - no preamble
-2. After each "## Section Title", add a newline before content
-3. Do NOT repeat section titles in the content (e.g., no "## 1. Market Overview" followed by "**Market Overview:**")
-4. Use bullet points (-) for lists
-
-Structure:
-# 📊 Crypto Daily Report - [Today's Date]
-
-## 1. Market Overview
-- BTC: $xxx (-x.xx% 24h)
-- ETH: $xxx (-x.xx% 24h)
-- Fear & Greed Index: xx
-- Total Market Cap: $x.xxT
-
-## 2. Top News
-- News item 1
-- News item 2
-- News item 3
-
-## 3. Market Analysis
-- Trend analysis
-- Technical patterns
-
-## 4. Investment Insights
-- Opportunities
-- Risks
-
-## 5. Notable Events
-- Key events of the day
-
-Be concise but informative."""
+                prompt = "Generate today's Crypto Daily Brief following the standard 'Alpha Intelligence' format."
             else:
-                prompt = """生成今日加密货币日报。
-
-重要：直接输出报告内容，不要输出任何思考过程、"让我..."或"我来..."等前言。直接从 markdown 标题开始。
-
-包含以下章节：
-# 📊 加密货币日报 - [今日日期]
-
-## 1. 市场概况
-- BTC、ETH 价格和24小时涨跌幅
-- 恐惧贪婪指数
-- 总市值
-
-## 2. 今日要闻
-- 3-5条最重要的加密货币新闻
-
-## 3. 市场分析
-- 关键趋势和技术形态
-
-## 4. 投资建议
-- 值得关注的机会和风险
-
-## 5. 重要事件
-- 重要事件（ETF资金流向、巨鲸动向等）
-
-使用清晰的 Markdown 格式，简洁但信息丰富。"""
+                prompt = "请按照【Alpha情报局】的标准格式生成今日加密早报。"
             
-            # Call agent API - correct path is /agents/{agent_id}/runs
+            # Call agent API - routes to DailyReportAgent
             # Uses multipart/form-data format
-            agent_id = "crypto-analyst-agent"
+            agent_id = "daily-report-agent"
             api_url = f"{AGENT_API_URL}/agents/{agent_id}/runs"
             print(f"[DailyReport] Calling {api_url} ...")
             response = requests.post(
@@ -396,6 +437,7 @@ def main():
     print("[Scheduler] Starting Strategy Nexus Scheduler...")
     print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
     print("[Scheduler] Position monitor runs every 10 seconds")
+    print("[Scheduler] Price alert check runs every 60 seconds")
     print("[Scheduler] Daily Report: UTC 0:00 generation, UTC 0:05 emails")
     print()
     
@@ -406,6 +448,9 @@ def main():
     
     # Schedule position price updates every 10 seconds
     schedule.every(10).seconds.do(update_positions_prices)
+    
+    # Schedule price alert checks every 60 seconds
+    schedule.every(60).seconds.do(check_price_alerts)
     
     # Schedule daily report generation at UTC 0:00
     schedule.every().day.at("00:00").do(generate_daily_report)

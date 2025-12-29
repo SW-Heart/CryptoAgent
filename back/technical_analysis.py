@@ -662,6 +662,205 @@ def get_volume_profile(symbol: str, timeframe: str = "1d", periods: int = 100) -
 
 
 # ==========================================
+# 🔄 时间框架对齐分析 (Timeframe Alignment)
+# ==========================================
+
+def get_timeframe_alignment(symbol: str, timeframes: str = "1d,4h,1h") -> str:
+    """
+    分析多时间周期趋势一致性
+    
+    用于量化"顺大逆小"原则，检查多周期是否共振。
+    
+    Args:
+        symbol: 代币符号 (如 "BTC", "ETH", "SOL")
+        timeframes: 要分析的周期，逗号分隔 (默认 "1d,4h,1h")
+    
+    Returns:
+        时间框架对齐分析报告，包含对齐度、冲突检测、入场建议
+    """
+    clean_symbol = symbol.upper().strip()
+    tf_list = [tf.strip() for tf in timeframes.split(",")]
+    
+    # 获取当前价格
+    price = _get_current_price(clean_symbol)
+    if price is None:
+        return f"无法获取 {clean_symbol} 的价格数据"
+    
+    # 分析各周期趋势
+    trend_data = {}
+    
+    for tf in tf_list:
+        df = _get_binance_klines(clean_symbol, tf)
+        
+        if df is None or len(df) < 50:
+            continue
+        
+        try:
+            # 计算EMA
+            ema21 = ta.ema(df['close'], length=21)
+            ema55 = ta.ema(df['close'], length=55)
+            
+            ema21_val = ema21.iloc[-1] if ema21 is not None else None
+            ema55_val = ema55.iloc[-1] if ema55 is not None else None
+            
+            if ema21_val is None or ema55_val is None:
+                continue
+            
+            # 计算ADX来衡量趋势强度
+            adx_result = ta.adx(df['high'], df['low'], df['close'], length=14)
+            adx_val = adx_result.iloc[-1, 0] if adx_result is not None else 20  # 默认20
+            
+            # 归一化趋势强度 (0-1)
+            trend_strength = min(adx_val / 50, 1.0)  # ADX > 50 视为最强
+            
+            # 判断趋势方向
+            if price > ema21_val > ema55_val:
+                direction = "bullish"
+                direction_score = 1
+            elif price < ema21_val < ema55_val:
+                direction = "bearish"
+                direction_score = -1
+            else:
+                direction = "neutral"
+                direction_score = 0
+            
+            trend_data[tf] = {
+                "direction": direction,
+                "direction_score": direction_score,
+                "strength": trend_strength,
+                "ema21": ema21_val,
+                "ema55": ema55_val,
+                "adx": adx_val
+            }
+            
+        except Exception as e:
+            continue
+    
+    if len(trend_data) < 2:
+        return f"{clean_symbol} 数据不足，无法进行时间框架对齐分析"
+    
+    # 计算对齐度
+    directions = [d["direction"] for d in trend_data.values()]
+    scores = [d["direction_score"] for d in trend_data.values()]
+    strengths = [d["strength"] for d in trend_data.values()]
+    
+    # 同向周期比例
+    bullish_count = directions.count("bullish")
+    bearish_count = directions.count("bearish")
+    neutral_count = directions.count("neutral")
+    total_count = len(directions)
+    
+    # 主导方向
+    if bullish_count > bearish_count:
+        dominant_direction = "bullish"
+        same_direction_ratio = bullish_count / total_count
+    elif bearish_count > bullish_count:
+        dominant_direction = "bearish"
+        same_direction_ratio = bearish_count / total_count
+    else:
+        dominant_direction = "neutral"
+        same_direction_ratio = max(bullish_count, bearish_count, neutral_count) / total_count
+    
+    # 对齐度 = 同向比例 × 平均强度
+    avg_strength = sum(strengths) / len(strengths)
+    alignment_score = same_direction_ratio * avg_strength
+    
+    # 检测冲突
+    has_conflict = bullish_count > 0 and bearish_count > 0
+    conflict_pairs = []
+    
+    if has_conflict:
+        bullish_tfs = [tf for tf, d in trend_data.items() if d["direction"] == "bullish"]
+        bearish_tfs = [tf for tf, d in trend_data.items() if d["direction"] == "bearish"]
+        for b in bullish_tfs:
+            for s in bearish_tfs:
+                conflict_pairs.append((b, s))
+    
+    # 建议入场周期 (选择趋势方向与主导一致且强度最低的，用于精细化入场)
+    matching_tfs = [(tf, d) for tf, d in trend_data.items() if d["direction"] == dominant_direction]
+    if matching_tfs:
+        ideal_entry_tf = min(matching_tfs, key=lambda x: x[1]["strength"])[0]
+    else:
+        ideal_entry_tf = tf_list[-1]  # 默认最小周期
+    
+    # 建议持仓时间
+    duration_map = {
+        "1M": "1-3 months",
+        "1w": "1-4 weeks",
+        "1d": "3-7 days",
+        "4h": "1-3 days",
+        "1h": "4-24 hours"
+    }
+    highest_tf = tf_list[0]
+    suggested_duration = duration_map.get(highest_tf, "N/A")
+    
+    # 构建报告
+    report = f"[{clean_symbol} 时间框架对齐分析]\n"
+    report += "=" * 45 + "\n\n"
+    
+    report += f"💰 当前价格: ${price:,.2f}\n"
+    report += f"📅 分析周期: {', '.join(tf_list)}\n\n"
+    
+    # 对齐度和主导方向
+    alignment_emoji = "🟢" if alignment_score >= 0.7 else ("🟡" if alignment_score >= 0.4 else "🔴")
+    direction_emoji = "📈" if dominant_direction == "bullish" else ("📉" if dominant_direction == "bearish" else "➡️")
+    
+    report += f"🔄 对齐度: {alignment_score:.2f} {alignment_emoji}\n"
+    report += f"   ↳ 同向占比: {same_direction_ratio:.0%}，平均强度: {avg_strength:.2f}\n\n"
+    
+    report += f"📊 主导方向: {dominant_direction.upper()} {direction_emoji}\n\n"
+    
+    # 各周期详情
+    report += "📋 各周期趋势:\n"
+    tf_label_map = {"1M": "月线", "1w": "周线", "1d": "日线", "4h": "4小时", "1h": "1小时"}
+    
+    for tf in tf_list:
+        if tf not in trend_data:
+            continue
+        data = trend_data[tf]
+        tf_label = tf_label_map.get(tf, tf)
+        dir_emoji = "🟢" if data["direction"] == "bullish" else ("🔴" if data["direction"] == "bearish" else "🟡")
+        
+        report += f"   {tf_label}: {dir_emoji} {data['direction'].upper()}"
+        report += f" (强度:{data['strength']:.2f}, ADX:{data['adx']:.1f})\n"
+    
+    report += "\n"
+    
+    # 冲突检测
+    if has_conflict:
+        report += "⚠️ 冲突检测:\n"
+        report += f"   存在周期冲突: {conflict_pairs}\n"
+        
+        # 给出解决建议
+        large_tf = tf_list[0]
+        small_tf = tf_list[-1]
+        large_dir = trend_data.get(large_tf, {}).get("direction", "unknown")
+        small_dir = trend_data.get(small_tf, {}).get("direction", "unknown")
+        
+        if large_dir != small_dir and large_dir != "neutral":
+            report += f"   💡 建议: 等待 {small_tf} 周期顺应 {large_tf} 周期方向后再入场\n"
+            report += f"      → {large_tf} 为 {large_dir}，应等待 {small_tf} 也转为 {large_dir}\n"
+    else:
+        report += "✅ 无周期冲突: 多时间框架趋势一致\n"
+    
+    report += "\n"
+    
+    # 入场建议
+    report += "💡 入场建议:\n"
+    report += f"   理想入场周期: {tf_label_map.get(ideal_entry_tf, ideal_entry_tf)}\n"
+    report += f"   建议持仓时间: {suggested_duration}\n"
+    
+    if alignment_score >= 0.7:
+        report += f"   ✅ 对齐度高，可按 {dominant_direction} 方向操作\n"
+    elif alignment_score >= 0.4:
+        report += f"   ⚠️ 对齐度中等，谨慎操作，减小仓位\n"
+    else:
+        report += f"   ❌ 对齐度低，建议观望，不宜开仓\n"
+    
+    return report
+
+
+# ==========================================
 # 🎯 多周期综合分析 (Agent 主入口)
 # ==========================================
 
@@ -937,6 +1136,101 @@ def get_multi_timeframe_analysis(symbol: str, timeframes: str = None, deep_analy
     report += f"📋 综合判断: {conclusion}\n"
     report += f"   ↳ 判断依据: {reason}\n"
     report += f"💡 操作建议: {suggestion}\n"
+    
+    return report
+
+
+
+# ==========================================
+# 🌊 波动率分析 (Volatility Analysis)
+# ==========================================
+
+def get_volatility_analysis(symbol: str, timeframe: str = "1d", periods: int = 14) -> str:
+    """
+    分析市场波动率 (基于 ATR 和 标准差)
+    
+    用于自适应参数调整：
+    - 高波动率 -> 放宽止损、缩小仓位
+    - 低波动率 -> 收紧止损、增加持仓
+    
+    Args:
+        symbol: 代币符号
+        timeframe: 周期 (默认 1d)
+        periods: ATR计算周期 (默认 14)
+    
+    Returns:
+        波动率分析报告，包含ATR数值、建议止损宽度、波动状态评估
+    """
+    # 获取K线数据 (多获取一些以计算移动平均)
+    df = _get_binance_klines(symbol, timeframe, limit=periods + 50)
+    
+    if df is None or len(df) < periods + 10:
+        return f"无法获取 {symbol} 的 {timeframe} K线数据"
+    
+    # 获取当前价格
+    price = _get_current_price(symbol)
+    if price is None:
+        price = df['close'].iloc[-1]
+    
+    # 计算 ATR
+    atr = ta.atr(df['high'], df['low'], df['close'], length=periods)
+    if atr is None:
+        return "ATR计算失败"
+        
+    current_atr = atr.iloc[-1]
+    
+    # 计算 ATR 均值 (用于判断当前波动率是高还是低)
+    atr_ma = atr.rolling(window=20).mean().iloc[-1]
+    
+    # 波动率比率
+    volatility_ratio = current_atr / atr_ma if atr_ma > 0 else 0
+    
+    # 计算价格波幅百分比 (ATR / Price)
+    atr_percent = (current_atr / price) * 100
+    
+    # 判定波动状态
+    if volatility_ratio > 1.5:
+        status = "🌊 极高波动 (High Volatility)"
+        risk_level = "High"
+        advice = "市场剧烈波动，务必大幅降低仓位，止损放宽"
+        sl_multiplier = 2.0
+    elif volatility_ratio > 1.2:
+        status = "🌊 波动放大 (Elevated Volatility)"
+        risk_level = "Medium-High"
+        advice = "波动率上升，适当放宽止损"
+        sl_multiplier = 1.5
+    elif volatility_ratio < 0.7:
+        status = "💤 极度平静 (Low Volatility)"
+        risk_level = "Low"
+        advice = "死鱼行情，可能会突然变盘（通常是爆发前兆）"
+        sl_multiplier = 1.0  # 虽然波动小但防假突破，不建议太窄
+    else:
+        status = "⚖️ 正常波动 (Normal Volatility)"
+        risk_level = "Medium"
+        advice = "波动率正常，按标准策略执行"
+        sl_multiplier = 1.2
+        
+    # 构建报告
+    tf_label = {"1M": "月线", "1w": "周线", "1d": "日线", "4h": "4小时"}.get(timeframe, timeframe)
+    
+    report = f"[{symbol} 波动率与风控参考 - {tf_label}]\n"
+    report += "=" * 40 + "\n\n"
+    
+    report += f"💰 当前价格: ${price:,.2f}\n"
+    report += f"📊 真实波幅 (ATR{periods}): ${current_atr:,.2f} ({atr_percent:.2f}%)\n"
+    report += f"🌊 波动率比率: {volatility_ratio:.2f}x (当前 vs 均值)\n\n"
+    
+    report += f"🕵️ 状态评估: {status}\n"
+    report += f"   建议: {advice}\n\n"
+    
+    report += "🛡️ 自适应风控建议:\n"
+    report += f"   1. 推荐止损距离: ${current_atr * sl_multiplier:,.2f} ({atr_percent * sl_multiplier:.2f}%)\n"
+    report += f"      ↳ 算法: {sl_multiplier} x ATR\n"
+    
+    safe_zone_top = price + current_atr * 2
+    safe_zone_bottom = price - current_atr * 2
+    report += f"   2. 安全区间 (2xATR): ${safe_zone_bottom:,.2f} ~ ${safe_zone_top:,.2f}\n"
+    report += "      ↳ 超过此区间通常意味着趋势爆发或反转"
     
     return report
 
