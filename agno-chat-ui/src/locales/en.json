@@ -274,6 +274,10 @@
             "detectChartPatterns": "Detecting Chart Patterns",
             "analyzeWaveStructure": "Analyzing Wave Structure",
             "getIndicatorReliability": "Checking Indicator Reliability",
+            "getEtfFlows": "Fetching ETF Fund Flows",
+            "getEtfDaily": "Checking Daily ETF Data",
+            "getEtfSummary": "Getting ETF Summary",
+            "getEtfTicker": "Checking ETF Issuer Data",
             "searching": "Searching..."
         }
     },
@@ -300,6 +304,38 @@
             "result1": "BULLISH DIVERGENCE DETECTED",
             "result2": "ACCUMULATION PHASE ACTIVE",
             "result3": "BREAKOUT IMMINENT - 87% CONF"
+        }
+    },
+    "quickPrompts": {
+        "title": "Quick Prompts",
+        "refresh": "Refresh suggestions",
+        "prompts": {
+            "todayMarket": "What's happening in the crypto market today?",
+            "weeklyOutlook": "Give me the weekly market outlook",
+            "btcTrend": "Analyze Bitcoin's current trend",
+            "ethAnalysis": "What's the outlook for Ethereum?",
+            "altcoinSeason": "Is it altcoin season? What should I watch?",
+            "marketSentiment": "What's the current market sentiment?",
+            "investmentStrategy": "What investment strategies suit the current market?",
+            "riskManagement": "How should I manage risk in my portfolio?",
+            "entryPoints": "Where are the good entry points for BTC?",
+            "portfolioReview": "Review my portfolio allocation suggestions",
+            "profitTaking": "When should I take profits?",
+            "latestNews": "What's the latest crypto news?",
+            "macroImpact": "How do macro events affect crypto?",
+            "etfFlows": "What are the latest ETF fund flows?",
+            "whaleActivity": "Any significant whale movements recently?",
+            "upcomingEvents": "What key events are coming up?",
+            "supportResistance": "What are BTC's key support and resistance levels?",
+            "trendAnalysis": "Multi-timeframe trend analysis for BTC",
+            "indicatorSignals": "What are the technical indicators saying?",
+            "priceTargets": "What are realistic price targets for ETH?",
+            "defiOpportunities": "What DeFi opportunities are available?",
+            "yieldFarming": "What are the best yield farming options now?",
+            "airdropAlerts": "Any upcoming airdrops I should know about?",
+            "tokenResearch": "Deep dive into Solana ecosystem",
+            "projectComparison": "Compare Layer 2 solutions",
+            "fundamentalAnalysis": "Fundamental analysis of top altcoins"
         }
     }
 }

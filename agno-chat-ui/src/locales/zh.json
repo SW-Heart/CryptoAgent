@@ -274,6 +274,10 @@
             "detectChartPatterns": "识别图表形态",
             "analyzeWaveStructure": "分析波浪结构",
             "getIndicatorReliability": "检查指标可靠性",
+            "getEtfFlows": "获取 ETF 资金流趋势",
+            "getEtfDaily": "查看单日 ETF 数据",
+            "getEtfSummary": "获取 ETF 汇总统计",
+            "getEtfTicker": "查看 ETF 机构数据",
             "searching": "搜索中..."
         }
     },
@@ -300,6 +304,38 @@
             "result1": "检测到看涨背离",
             "result2": "吸筹阶段进行中",
             "result3": "突破在即 - 87% 置信度"
+        }
+    },
+    "quickPrompts": {
+        "title": "快捷提问",
+        "refresh": "换一批",
+        "prompts": {
+            "todayMarket": "今天加密市场发生了什么？",
+            "weeklyOutlook": "帮我分析一下本周市场展望",
+            "btcTrend": "分析比特币当前趋势",
+            "ethAnalysis": "以太坊的前景如何？",
+            "altcoinSeason": "现在是山寨季吗？应该关注什么？",
+            "marketSentiment": "当前市场情绪如何？",
+            "investmentStrategy": "当前市场适合什么投资策略？",
+            "riskManagement": "我应该如何管理投资组合风险？",
+            "entryPoints": "BTC 有哪些好的入场点位？",
+            "portfolioReview": "帮我优化投资组合配置",
+            "profitTaking": "什么时候应该止盈？",
+            "latestNews": "最新的加密货币新闻有哪些？",
+            "macroImpact": "宏观事件对加密市场有什么影响？",
+            "etfFlows": "最新的 ETF 资金流向如何？",
+            "whaleActivity": "最近有重大的巨鲸动向吗？",
+            "upcomingEvents": "近期有什么重要事件？",
+            "supportResistance": "BTC 的关键支撑和阻力位是多少？",
+            "trendAnalysis": "帮我做 BTC 多周期趋势分析",
+            "indicatorSignals": "技术指标显示什么信号？",
+            "priceTargets": "ETH 的合理目标价位是多少？",
+            "defiOpportunities": "有什么 DeFi 投资机会？",
+            "yieldFarming": "现在最好的收益农场是什么？",
+            "airdropAlerts": "有什么值得关注的空投？",
+            "tokenResearch": "深度分析 Solana 生态",
+            "projectComparison": "对比各个 Layer2 解决方案",
+            "fundamentalAnalysis": "分析主流山寨币的基本面"
         }
     }
 }

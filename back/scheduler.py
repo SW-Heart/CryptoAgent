@@ -452,11 +452,18 @@ def main():
     # Schedule price alert checks every 60 seconds
     schedule.every(60).seconds.do(check_price_alerts)
     
-    # Schedule daily report generation at UTC 0:00
-    schedule.every().day.at("00:00").do(generate_daily_report)
+    # Daily Report Schedule (Times are LOCAL to the server)
+    # If your server is in UTC+8, set these to 08:00/08:05 to match UTC 00:00/00:05
+    # If your server is in UTC, keep them at 00:00/00:05
+    DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")  # Default: 08:00 local = UTC 00:00 for UTC+8
+    DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")    # Default: 08:05 local = UTC 00:05 for UTC+8
     
-    # Schedule daily report emails at UTC 0:05
-    schedule.every().day.at("00:05").do(send_daily_report_emails)
+    # Schedule daily report generation
+    schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
+    
+    # Schedule daily report emails
+    schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
+    print(f"[Scheduler] Daily Report configured at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR} (local time)")
     
     # Run position update immediately
     update_positions_prices()

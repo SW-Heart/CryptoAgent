@@ -19,6 +19,12 @@ const toolKeyMap = {
     'get_protocol_tvl': 'getProtocolTvl',
     'get_chain_tvl': 'getChainTvl',
     'get_top_yields': 'getTopYields',
+    // ETF Tools
+    'get_etf_flows': 'getEtfFlows',
+    'get_etf_daily': 'getEtfDaily',
+    'get_etf_summary': 'getEtfSummary',
+    'get_etf_ticker': 'getEtfTicker',
+    // Search Tools
     'search_news': 'searchNews',
     'duckduckgo_news': 'searchNews',
     'duckduckgo_search': 'webSearch',
@@ -65,6 +71,12 @@ const toolIconMap = {
     'get_protocol_tvl': 'chart',
     'get_chain_tvl': 'globe',
     'get_top_yields': 'fire',
+    // ETF Tools
+    'get_etf_flows': 'trend',
+    'get_etf_daily': 'activity',
+    'get_etf_summary': 'chart',
+    'get_etf_ticker': 'activity',
+    // Search Tools
     'search_news': 'news',
     'duckduckgo_news': 'news',
     'duckduckgo_search': 'globe',

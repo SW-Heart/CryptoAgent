@@ -27,6 +27,9 @@ from crypto_tools import (
     get_market_hotspots,
 )
 
+# 导入ETF工具 (宏观参考)
+from etf_tools import get_etf_daily
+
 # 导入技术分析工具
 from technical_analysis import (
     get_multi_timeframe_analysis,
@@ -79,9 +82,10 @@ trading_agent = Agent(
         # 市场情绪 (2)
         get_market_sentiment,
         get_funding_rate,
-        # 宏观数据 (2)
+        # 宏观数据 (3) - 含ETF资金流
         get_btc_dominance,
         get_global_market_overview,
+        get_etf_daily,  # ETF机构资金流(宏观指标)
         # 技术分析 - 核心 (3)
         get_multi_timeframe_analysis,
         get_indicator_reliability,
@@ -139,7 +143,7 @@ trading_agent = Agent(
    - detect_chart_patterns(symbol)
    - get_trendlines(symbol)
    - analyze_wave_structure(symbol)
-8. **消息与情绪**: get_pro_crypto_news()
+8. **消息与情绪**: get_pro_crypto_news(), get_etf_daily() (⚠️ ETF周末休市无数据)
 9. **智能评分与决策**: 计算六维度评分，结合 AI 判断做出最终决策
 10. **执行与记录**: log_strategy_analysis()
 
@@ -183,8 +187,8 @@ trading_agent = Agent(
    - R:R ≥ 2.5 (20分) | 2.0-2.4 (15分) | 1.5-1.9 (10分)
    - **一票否决**：R:R < 1.5 (0分，直接放弃)
 
-6. **宏观与情绪 (15分)**: 消息面 + 资金费率 + 市场情绪
-   - 多因子共振支持 (15分) | 中性 (8分) | 冲突 (0分)
+6. **宏观与情绪 (15分)**: 消息面 + 资金费率 + 市场情绪 + ETF资金流
+   - 多因子共振支持 + ETF连续流入 (15分) | 中性 (8分) | 冲突或ETF连续流出 (0分)
 
 ### 机会评级 (Opportunity Rating)
 | 评级 | 总分范围 | 含义 |

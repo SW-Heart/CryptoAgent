@@ -52,6 +52,9 @@ from pattern_recognition import (
 # Phase 3.4: 历史规律记忆
 from indicator_memory import get_indicator_reliability, get_indicator_reliability_all_timeframes
 
+# ETF 资金流工具 (Farside)
+from etf_tools import get_etf_flows, get_etf_daily, get_etf_summary, get_etf_ticker
+
 # 初始化ETF MCP工具 (提供BTC ETF流入流出数据) - 暂时禁用
 # etf_mcp_tools = MCPTools(
 #     transport="streamable-http",
@@ -98,10 +101,14 @@ crypto_agent = Agent(
         analyze_wave_structure,        # 波浪理论分析
         get_indicator_reliability,     # 单周期指标可靠性
         get_indicator_reliability_all_timeframes,  # 多周期汇总对比
+        # ETF 资金流工具 (Farside API)
+        get_etf_flows,                 # ETF历史资金流(趋势)
+        get_etf_daily,                 # 单日ETF资金流
+        get_etf_summary,               # ETF汇总统计
+        get_etf_ticker,                # 按机构查询(如IBIT, FBTC)
         search_news,  # 自定义新闻搜索（无 imageUrl）
         search_google,  # 自定义 Google 搜索（无 imageUrl）
         DuckDuckGoTools(all=True),
-        # etf_mcp_tools,  # ETF数据MCP工具（暂时禁用）
         # SerperTools 已移除，改用自定义 search_news
         ExaTools(
             api_key=EXA_API_KEY,
@@ -196,22 +203,17 @@ Your personality:
 | get_chain_tvl | Chain TVL ranking | User asks which chain has most DeFi |
 | get_top_yields | Top yield pools | User asks where to earn yield, best APY |
 
-## ETF Data Tools (MCP)
+## ETF Data Tools (Farside API)
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
-| fetch_etf_record_by_date | ETF fund flow by date | User asks BTC/ETH ETF inflow/outflow for specific date |
-| fetch_etf_company_stats | ETF issuer statistics | User asks ETF company data (fees, total flow, daily avg) |
+| get_etf_flows | ETF资金流历史(趋势) | 用户问ETF连续流入/流出、趋势分析 |
+| get_etf_daily | 单日ETF资金流+机构明细 | 用户问昨天/某天ETF流入流出 |
+| get_etf_summary | ETF汇总(累计+机构排名) | 用户问各机构持仓、累计净流入 |
+| get_etf_ticker | 单机构历史 | 用户问贝莱德IBIT或灰度GBTC等单机构动向 |
 
-## BTC Treasury Tools (MCP)
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| fetch_top_btc_treasuries_companies | Top BTC holding companies | User asks which companies hold most BTC |
-| fetch_btc_treasury_company_info | Company BTC holdings detail | User asks specific company's BTC position (e.g., MSTR, Tesla) |
-
-## Whale Alert Tools (MCP)
-| Tool | Purpose | When to Use |
-|------|---------|-------------|
-| whale_alert_search | Large transaction alerts | User asks about whale movements, big transfers |
+**支持的ETF类型**: BTC (ETH/SOL数据暂未爬取)
+**主要机构**: IBIT(贝莱德), FBTC(富达), GBTC(灰度), ARKB, BITB
+**⚠️ 重要**: ETF市场周末(周六/周日)和美国节假日休市，无交易数据。如果用户在周末问ETF数据，应主动说明这一点。
 
 ## Search Tools (by priority)
 | Tool | Purpose | When to Use |
