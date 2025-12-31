@@ -21,7 +21,7 @@
     },
     "sidebar": {
         "strategyNexus": "策略中心",
-        "dailyReport": "每日报告",
+        "dailyReport": "加密日报",
         "recentChats": "最近对话",
         "noChats": "暂无对话记录",
         "deleteChat": "删除对话",
@@ -210,7 +210,7 @@
         }
     },
     "dailyReport": {
-        "title": "加密货币日报",
+        "title": "加密日报",
         "updatedAt": "每日 UTC 0:00 更新",
         "subscribe": "订阅",
         "subscribed": "已订阅",
@@ -221,10 +221,10 @@
             "description": "每天 UTC 0:05 将最新的加密货币市场洞察发送到您的邮箱。",
             "email": "邮箱地址",
             "emailPlaceholder": "your@email.com",
-            "language": "报告语言",
+            "language": "日报语言",
             "subscribeNow": "立即订阅",
             "unsubscribe": "取消订阅",
-            "subscribedMessage": "您将于每天 UTC 0:05 收到每日报告。",
+            "subscribedMessage": "您将于每天 UTC 0:05 收到加密日报。",
             "error": "订阅失败，请重试。"
         }
     },
@@ -294,7 +294,7 @@
         },
         "hero": {
             "title": "解码信号",
-            "subtitle": "// 去中心化市场的自主智能"
+            "subtitle": "// 加密货币市场的智能代理"
         },
         "cta": "启动智能体",
         "status": {
