@@ -1285,7 +1285,7 @@ function AppContent() {
         {showDailyReport ? (
           <DailyReport onBack={() => setShowDailyReport(false)} />
         ) : showStrategyNexus ? (
-          <StrategyNexus onBack={() => setShowStrategyNexus(false)} />
+          <StrategyNexus userId={userId} onBack={() => setShowStrategyNexus(false)} />
         ) : (
           /* Chat Section */
           <main className={`flex flex-col h-full relative bg-black transition-all duration-300 ${workspaceOpen ? 'w-1/3 min-w-[400px]' : 'flex-1'}`}>

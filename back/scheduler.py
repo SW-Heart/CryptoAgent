@@ -2,6 +2,7 @@
 Strategy Scheduler - Automated 4-hour strategy trigger
 
 Run as independent process: python scheduler.py
+Or integrate with main.py for API-controlled start/stop
 """
 import schedule
 import time
@@ -10,6 +11,7 @@ import json
 from datetime import datetime
 import requests
 import os
+import threading
 
 # Configuration - use environment variable for API URL
 AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
@@ -18,6 +20,89 @@ DB_PATH = os.getenv("DB_PATH", "tmp/test.db")
 # Use admin user ID for all scheduler operations
 from trading_tools import STRATEGY_ADMIN_USER_ID, set_current_user
 SCHEDULER_USER_ID = STRATEGY_ADMIN_USER_ID  # Scheduler runs as admin
+
+# ============= Scheduler State Management =============
+_scheduler_running = False
+_scheduler_thread = None
+_scheduler_lock = threading.Lock()
+
+def is_scheduler_running() -> bool:
+    """Return current scheduler running status"""
+    return _scheduler_running
+
+def get_scheduler_status() -> dict:
+    """Get detailed scheduler status"""
+    return {
+        "running": _scheduler_running,
+        "admin_user_id": SCHEDULER_USER_ID
+    }
+
+def start_scheduler() -> dict:
+    """Start the scheduler in background thread"""
+    global _scheduler_running, _scheduler_thread
+    
+    with _scheduler_lock:
+        if _scheduler_running:
+            return {"success": False, "message": "Scheduler already running"}
+        
+        _scheduler_running = True
+        _scheduler_thread = threading.Thread(target=_run_scheduler_loop, daemon=True)
+        _scheduler_thread.start()
+        print("[Scheduler] Started via API")
+        return {"success": True, "message": "Scheduler started"}
+
+def stop_scheduler() -> dict:
+    """Stop the scheduler"""
+    global _scheduler_running
+    
+    with _scheduler_lock:
+        if not _scheduler_running:
+            return {"success": False, "message": "Scheduler not running"}
+        
+        _scheduler_running = False
+        schedule.clear()  # Clear all scheduled jobs
+        print("[Scheduler] Stopped via API")
+        return {"success": True, "message": "Scheduler stopped"}
+
+def _run_scheduler_loop():
+    """Internal scheduler loop - runs until stopped"""
+    global _scheduler_running
+    
+    print("[Scheduler] Starting Strategy Nexus Scheduler...")
+    print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
+    print("[Scheduler] Position monitor runs every 10 seconds")
+    print("[Scheduler] Price alert check runs every 60 seconds")
+    print()
+    
+    # Schedule strategy at fixed times (every 1 hour, at :30)
+    for hour in range(24):
+        time_str = f"{hour:02d}:30"
+        schedule.every().day.at(time_str).do(trigger_strategy)
+    
+    # Schedule position price updates every 10 seconds
+    schedule.every(10).seconds.do(update_positions_prices)
+    
+    # Schedule price alert checks every 60 seconds
+    schedule.every(60).seconds.do(check_price_alerts)
+    
+    # Daily Report Schedule
+    DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")
+    DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")
+    schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
+    schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
+    print(f"[Scheduler] Daily Report configured at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR}")
+    
+    # Run position update immediately
+    update_positions_prices()
+    
+    print("[Scheduler] Scheduler is running. Use API to stop.")
+    
+    while _scheduler_running:
+        schedule.run_pending()
+        time.sleep(1)
+    
+    print("[Scheduler] Scheduler loop exited")
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
@@ -434,48 +519,16 @@ def send_daily_report_emails():
 
 
 def main():
-    print("[Scheduler] Starting Strategy Nexus Scheduler...")
-    print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
-    print("[Scheduler] Position monitor runs every 10 seconds")
-    print("[Scheduler] Price alert check runs every 60 seconds")
-    print("[Scheduler] Daily Report: UTC 0:00 generation, UTC 0:05 emails")
-    print()
+    """Standalone scheduler entry point (for running as independent process)"""
+    global _scheduler_running
+    _scheduler_running = True
     
-    # Schedule strategy at fixed times (every 1 hour, at :30)
-    for hour in range(24):
-        time_str = f"{hour:02d}:30"
-        schedule.every().day.at(time_str).do(trigger_strategy)
-    
-    # Schedule position price updates every 10 seconds
-    schedule.every(10).seconds.do(update_positions_prices)
-    
-    # Schedule price alert checks every 60 seconds
-    schedule.every(60).seconds.do(check_price_alerts)
-    
-    # Daily Report Schedule (Times are LOCAL to the server)
-    # If your server is in UTC+8, set these to 08:00/08:05 to match UTC 00:00/00:05
-    # If your server is in UTC, keep them at 00:00/00:05
-    DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")  # Default: 08:00 local = UTC 00:00 for UTC+8
-    DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")    # Default: 08:05 local = UTC 00:05 for UTC+8
-    
-    # Schedule daily report generation
-    schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
-    
-    # Schedule daily report emails
-    schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
-    print(f"[Scheduler] Daily Report configured at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR} (local time)")
-    
-    # Run position update immediately
-    update_positions_prices()
-    
-    # Note: Strategy only runs at scheduled times (00:30, 04:30, 08:30, 12:30, 16:30, 20:30 UTC)
-    # trigger_strategy()  # Disabled: no immediate execution on startup
-    
-    print("[Scheduler] Scheduler is running. Press Ctrl+C to stop.")
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    try:
+        _run_scheduler_loop()
+    except KeyboardInterrupt:
+        print("\n[Scheduler] Stopped by user (Ctrl+C)")
+        _scheduler_running = False
 
 if __name__ == "__main__":
     main()
+

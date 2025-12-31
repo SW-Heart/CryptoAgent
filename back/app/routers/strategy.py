@@ -363,3 +363,53 @@ async def test_trade(symbol: str = "BTC", direction: str = "LONG", margin: float
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============= Scheduler Control Endpoints =============
+
+@router.get("/scheduler/status")
+async def get_scheduler_status():
+    """Get scheduler running status"""
+    try:
+        from scheduler import get_scheduler_status as get_status
+        status = get_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/scheduler/start")
+async def start_scheduler(user_id: str = None):
+    """Start the scheduler (admin only)"""
+    # Verify admin permission
+    if user_id != STRATEGY_ADMIN_USER_ID:
+        raise HTTPException(
+            status_code=403, 
+            detail="Permission denied. Only admin can control the scheduler."
+        )
+    
+    try:
+        from scheduler import start_scheduler as start_sched
+        result = start_sched()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/scheduler/stop")
+async def stop_scheduler(user_id: str = None):
+    """Stop the scheduler (admin only)"""
+    # Verify admin permission
+    if user_id != STRATEGY_ADMIN_USER_ID:
+        raise HTTPException(
+            status_code=403, 
+            detail="Permission denied. Only admin can control the scheduler."
+        )
+    
+    try:
+        from scheduler import stop_scheduler as stop_sched
+        result = stop_sched()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

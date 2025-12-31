@@ -4,13 +4,16 @@ import {
     TrendingUp, TrendingDown, DollarSign, Target,
     ChevronDown, ChevronRight, Activity, Wallet,
     ArrowUpCircle, ArrowDownCircle, Clock, Percent,
-    Award
+    Award, Power
 } from 'lucide-react';
 import TerminalLoader from './TerminalLoader';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-export default function StrategyNexus({ onBack }) {
+// Admin user ID - must match backend STRATEGY_ADMIN_USER_ID
+const ADMIN_USER_ID = 'ee20fa53-5ac2-44bc-9237-41b308e291d8';
+
+export default function StrategyNexus({ userId, onBack }) {
     const { t } = useTranslation();
     const [wallet, setWallet] = useState(null);
     const [positions, setPositions] = useState([]);
@@ -21,13 +24,53 @@ export default function StrategyNexus({ onBack }) {
     const [expandedLog, setExpandedLog] = useState(null);
     const [activeTab, setActiveTab] = useState('positions');
     const [loading, setLoading] = useState(true);
-    const [showLoader, setShowLoader] = useState(true); // 控制加载动画显示
+    const [showLoader, setShowLoader] = useState(true);
+
+    // Scheduler control state
+    const [schedulerRunning, setSchedulerRunning] = useState(false);
+    const [schedulerLoading, setSchedulerLoading] = useState(false);
+    const isAdmin = userId === ADMIN_USER_ID;
 
     useEffect(() => {
         fetchData();
+        fetchSchedulerStatus();
         const interval = setInterval(fetchData, 10000); // Refresh every 10s
         return () => clearInterval(interval);
     }, []);
+
+    // Fetch scheduler status
+    const fetchSchedulerStatus = async () => {
+        try {
+            const res = await fetch(`${BASE_URL}/api/strategy/scheduler/status`);
+            const data = await res.json();
+            setSchedulerRunning(data.running || false);
+        } catch (e) {
+            console.error('Scheduler status fetch error:', e);
+        }
+    };
+
+    // Toggle scheduler on/off (admin only)
+    const toggleScheduler = async () => {
+        if (!isAdmin || schedulerLoading) return;
+
+        setSchedulerLoading(true);
+        try {
+            const endpoint = schedulerRunning ? 'stop' : 'start';
+            const res = await fetch(`${BASE_URL}/api/strategy/scheduler/${endpoint}?user_id=${userId}`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSchedulerRunning(!schedulerRunning);
+            } else {
+                console.error('Scheduler toggle failed:', data.message);
+            }
+        } catch (e) {
+            console.error('Scheduler toggle error:', e);
+        } finally {
+            setSchedulerLoading(false);
+        }
+    };
 
     const fetchData = async () => {
         try {
@@ -81,10 +124,29 @@ export default function StrategyNexus({ onBack }) {
                 <div className="flex items-center gap-3">
                     <Activity className="w-6 h-6 text-indigo-400" />
                     <h1 className="text-xl font-semibold text-white">{t('strategy.title')}</h1>
-                    <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full">{t('strategy.live')}</span>
+                    <span className={`px-2 py-0.5 text-xs rounded-full ${schedulerRunning ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                        {schedulerRunning ? t('strategy.scheduler.running') : t('strategy.scheduler.stopped')}
+                    </span>
                 </div>
-                {/* Auto-refresh indicator */}
-                <span className="text-xs text-slate-500">{t('strategy.autoRefresh')}</span>
+                <div className="flex items-center gap-3">
+                    {/* Scheduler Toggle (Admin Only) */}
+                    {isAdmin && (
+                        <button
+                            onClick={toggleScheduler}
+                            disabled={schedulerLoading}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${schedulerRunning
+                                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                    : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                } ${schedulerLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            title={schedulerRunning ? t('strategy.scheduler.stop') : t('strategy.scheduler.start')}
+                        >
+                            <Power className={`w-4 h-4 ${schedulerLoading ? 'animate-pulse' : ''}`} />
+                            {schedulerRunning ? t('strategy.scheduler.stop') : t('strategy.scheduler.start')}
+                        </button>
+                    )}
+                    {/* Auto-refresh indicator */}
+                    <span className="text-xs text-slate-500">{t('strategy.autoRefresh')}</span>
+                </div>
             </div>
 
             {/* Stats Cards */}

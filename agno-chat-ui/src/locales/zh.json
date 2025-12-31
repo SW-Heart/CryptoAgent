@@ -201,6 +201,12 @@
             "symbols": "币种",
             "noLogs": "暂无策略日志",
             "action": "已执行"
+        },
+        "scheduler": {
+            "running": "运行中",
+            "stopped": "已停止",
+            "start": "启动",
+            "stop": "停止"
         }
     },
     "dailyReport": {

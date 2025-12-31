@@ -88,22 +88,11 @@ init_strategy_tables()
 
 
 # ============= Scheduler Integration =============
-def start_scheduler_background():
-    """Start the scheduler in a background thread"""
-    import time
-    
-    # Wait for FastAPI server to fully start before scheduler makes API calls
-    time.sleep(5)
-    
-    try:
-        from scheduler import main as scheduler_main
-        print("[Main] Starting scheduler in background thread...")
-        scheduler_main()
-    except Exception as e:
-        print(f"[Main] Scheduler error: {e}")
+# Scheduler is now controlled via API endpoints:
+#   GET  /api/strategy/scheduler/status - Get status
+#   POST /api/strategy/scheduler/start  - Start (admin only)
+#   POST /api/strategy/scheduler/stop   - Stop (admin only)
+# Scheduler does NOT auto-start. Users control it via Strategy Nexus UI.
+print("[Main] Scheduler available via API (not auto-started)")
 
-# Start scheduler as daemon thread (won't block server shutdown)
-scheduler_thread = threading.Thread(target=start_scheduler_background, daemon=True)
-scheduler_thread.start()
-print("[Main] Scheduler thread started (will begin after 5 seconds)")
 

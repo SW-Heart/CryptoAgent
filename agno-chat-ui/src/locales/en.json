@@ -201,6 +201,12 @@
             "symbols": "Symbols",
             "noLogs": "No strategy logs yet",
             "action": "ACTION"
+        },
+        "scheduler": {
+            "running": "Running",
+            "stopped": "Stopped",
+            "start": "Start",
+            "stop": "Stop"
         }
     },
     "dailyReport": {
