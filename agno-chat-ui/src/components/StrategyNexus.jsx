@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     TrendingUp, TrendingDown, DollarSign, Target,
@@ -25,6 +25,11 @@ export default function StrategyNexus({ userId, onBack }) {
     const [activeTab, setActiveTab] = useState('positions');
     const [loading, setLoading] = useState(true);
     const [showLoader, setShowLoader] = useState(true);
+
+    // Logs pagination state
+    const [logsHasMore, setLogsHasMore] = useState(true);
+    const [logsLoading, setLogsLoading] = useState(false);
+    const logsContainerRef = useRef(null);
 
     // Scheduler control state
     const [schedulerRunning, setSchedulerRunning] = useState(false);
@@ -79,7 +84,7 @@ export default function StrategyNexus({ userId, onBack }) {
                 fetch(`${BASE_URL}/api/strategy/positions?status=OPEN`).then(r => r.json()),
                 fetch(`${BASE_URL}/api/strategy/positions?status=CLOSED`).then(r => r.json()),
                 fetch(`${BASE_URL}/api/strategy/orders?limit=50`).then(r => r.json()),
-                fetch(`${BASE_URL}/api/strategy/logs?limit=20`).then(r => r.json()),
+                fetch(`${BASE_URL}/api/strategy/logs?limit=20&offset=0`).then(r => r.json()),
                 fetch(`${BASE_URL}/api/strategy/equity-curve`).then(r => r.json())
             ]);
 
@@ -88,6 +93,7 @@ export default function StrategyNexus({ userId, onBack }) {
             setClosedPositions(closedRes.positions || []);
             setOrders(ordersRes.orders || []);
             setLogs(logsRes.logs || []);
+            setLogsHasMore(logsRes.has_more || false);
             setEquityCurve(curveRes.curve || []);
             setLoading(false);
         } catch (e) {
@@ -95,6 +101,38 @@ export default function StrategyNexus({ userId, onBack }) {
             setLoading(false);
         }
     };
+
+    // Load more logs (infinite scroll)
+    const loadMoreLogs = useCallback(async () => {
+        if (logsLoading || !logsHasMore) return;
+
+        setLogsLoading(true);
+        try {
+            const offset = logs.length;
+            const res = await fetch(`${BASE_URL}/api/strategy/logs?limit=20&offset=${offset}`);
+            const data = await res.json();
+
+            if (data.logs && data.logs.length > 0) {
+                setLogs(prev => [...prev, ...data.logs]);
+                setLogsHasMore(data.has_more || false);
+            } else {
+                setLogsHasMore(false);
+            }
+        } catch (e) {
+            console.error('Load more logs error:', e);
+        } finally {
+            setLogsLoading(false);
+        }
+    }, [logs.length, logsLoading, logsHasMore]);
+
+    // Handle logs scroll to detect reaching bottom
+    const handleLogsScroll = useCallback((e) => {
+        const { scrollTop, scrollHeight, clientHeight } = e.target;
+        // Load more when scrolled to near bottom (within 50px)
+        if (scrollHeight - scrollTop - clientHeight < 50 && logsHasMore && !logsLoading) {
+            loadMoreLogs();
+        }
+    }, [loadMoreLogs, logsHasMore, logsLoading]);
 
     // Use backend-calculated values
     const totalUnrealizedPnL = wallet?.unrealized_pnl || 0;
@@ -135,8 +173,8 @@ export default function StrategyNexus({ userId, onBack }) {
                             onClick={toggleScheduler}
                             disabled={schedulerLoading}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${schedulerRunning
-                                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                                    : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
                                 } ${schedulerLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                             title={schedulerRunning ? t('strategy.scheduler.stop') : t('strategy.scheduler.start')}
                         >
@@ -213,26 +251,44 @@ export default function StrategyNexus({ userId, onBack }) {
                 </div>
 
                 {/* Right: Strategy Logs */}
-                <div className="w-full md:w-96 flex flex-col bg-[#131722] rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="w-full md:w-96 flex flex-col min-h-0 bg-[#131722] rounded-xl border border-slate-700/50 overflow-hidden">
                     <div className="p-3 border-b border-slate-700/50 flex-shrink-0">
                         <h3 className="text-sm font-medium text-white flex items-center gap-2">
                             <Clock className="w-4 h-4 text-slate-400" />
                             {t('strategy.logs.title')}
                         </h3>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                    <div
+                        ref={logsContainerRef}
+                        onScroll={handleLogsScroll}
+                        className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2"
+                    >
                         {logs.filter(log => log.market_analysis || log.position_check || log.strategy_decision).length > 0
-                            ? logs
-                                .filter(log => log.market_analysis || log.position_check || log.strategy_decision)
-                                .map((log, idx) => (
-                                    <LogEntry
-                                        key={idx}
-                                        log={log}
-                                        isExpanded={expandedLog === idx}
-                                        onToggle={() => setExpandedLog(expandedLog === idx ? null : idx)}
-                                        t={t}
-                                    />
-                                )) : (
+                            ? (<>
+                                {logs
+                                    .filter(log => log.market_analysis || log.position_check || log.strategy_decision)
+                                    .map((log, idx) => (
+                                        <LogEntry
+                                            key={log.id || idx}
+                                            log={log}
+                                            isExpanded={expandedLog === (log.id || idx)}
+                                            onToggle={() => setExpandedLog(expandedLog === (log.id || idx) ? null : (log.id || idx))}
+                                            t={t}
+                                        />
+                                    ))}
+                                {/* Loading indicator */}
+                                {logsLoading && (
+                                    <div className="text-center text-slate-500 py-3 text-xs">
+                                        {t('strategy.logs.loading', 'Loading...')}
+                                    </div>
+                                )}
+                                {/* No more logs indicator */}
+                                {!logsHasMore && !logsLoading && (
+                                    <div className="text-center text-slate-600 py-3 text-xs border-t border-slate-700/30 mt-2">
+                                        {t('strategy.logs.noMore', 'No more logs')}
+                                    </div>
+                                )}
+                            </>) : (
                                 <div className="text-center text-slate-500 py-8 text-sm">
                                     {t('strategy.logs.noLogs')}
                                 </div>

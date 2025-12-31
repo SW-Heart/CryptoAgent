@@ -256,18 +256,29 @@ async def get_orders(limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/logs")
-async def get_strategy_logs(limit: int = 10):
-    """Get strategy logs"""
+async def get_strategy_logs(limit: int = 10, offset: int = 0):
+    """Get strategy logs with pagination support"""
     try:
         conn = get_db_connection()
+        
+        # Get total count for pagination
+        total_count = conn.execute("SELECT COUNT(*) FROM strategy_logs").fetchone()[0]
+        
+        # Get paginated logs
         rows = conn.execute(
-            "SELECT * FROM strategy_logs ORDER BY timestamp DESC LIMIT ?",
-            (limit,)
+            "SELECT * FROM strategy_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (limit, offset)
         ).fetchall()
         conn.close()
         
         logs = [dict(row) for row in rows]
-        return {"logs": logs}
+        has_more = offset + len(logs) < total_count
+        
+        return {
+            "logs": logs,
+            "total": total_count,
+            "has_more": has_more
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

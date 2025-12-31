@@ -200,7 +200,9 @@
             "title": "策略日志",
             "symbols": "币种",
             "noLogs": "暂无策略日志",
-            "action": "已执行"
+            "action": "已执行",
+            "loading": "加载中...",
+            "noMore": "没有更多日志了"
         },
         "scheduler": {
             "running": "运行中",
