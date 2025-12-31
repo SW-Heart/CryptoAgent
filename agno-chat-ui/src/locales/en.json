@@ -202,6 +202,7 @@
             "noLogs": "No strategy logs yet",
             "action": "ACTION",
             "loading": "Loading...",
+            "loadMore": "Load More",
             "noMore": "No more logs"
         },
         "scheduler": {

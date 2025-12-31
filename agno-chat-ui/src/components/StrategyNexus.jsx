@@ -276,6 +276,15 @@ export default function StrategyNexus({ userId, onBack }) {
                                             t={t}
                                         />
                                     ))}
+                                {/* Load More Button (Manual trigger if scroll ignores) */}
+                                {logsHasMore && !logsLoading && (
+                                    <button
+                                        onClick={loadMoreLogs}
+                                        className="w-full py-2 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-slate-800/50 transition-colors border-t border-slate-700/30 mt-2"
+                                    >
+                                        {t('strategy.logs.loadMore', 'Load More')}
+                                    </button>
+                                )}
                                 {/* Loading indicator */}
                                 {logsLoading && (
                                     <div className="text-center text-slate-500 py-3 text-xs">
