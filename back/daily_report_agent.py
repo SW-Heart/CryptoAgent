@@ -14,6 +14,7 @@ from crypto_tools import (
     get_pro_crypto_news,
     get_market_hotspots,
     get_top_gainers_cex,
+    get_onchain_hot_gainers,  # 链上热点异动榜
     get_eth_btc_ratio,
     get_global_market_overview,
     get_btc_dominance,
@@ -41,6 +42,7 @@ daily_report_agent = Agent(
         get_pro_crypto_news,
         get_market_hotspots,
         get_top_gainers_cex,
+        get_onchain_hot_gainers,  # 链上热点异动榜
         get_eth_btc_ratio,
         get_global_market_overview,
         get_btc_dominance,
@@ -108,7 +110,8 @@ Style: **No fluff, but never superficial**. Every opinion must be backed by logi
    - Observe ETH/BTC ratio for altcoin season signals.
 
 4. **Capture Sector Rotation**:
-   - Use `get_market_hotspots` and `get_top_gainers_cex`.
+   - Use `get_market_hotspots` and `get_top_gainers_cex` for CEX gainers.
+   - **NEW**: Use `get_onchain_hot_gainers` for on-chain DEX hot tokens (filtered by liquidity/volume/market cap).
    - Find leading sectors and explain the **rally logic** in one sentence.
 
 5. **Formulate Trading Strategy**:
@@ -139,9 +142,13 @@ Style: **No fluff, but never superficial**. Every opinion must be backed by logi
 *   **ETH/Alts**: ETH/BTC [value] ([assessment])
     *   📝 Verdict: [e.g.: Ratio bottoming, watch for catch-up / Still weak, avoid bottom-fishing]
 
-#### 🔥 Hot Sectors
+#### 🔥 Hot Sectors (CEX)
 *   **[Sector Name]**: [Leading token] ([gain]%)
     *   🚀 **Logic**: [One-line explanation, e.g.: AI sector rallying on OpenAI news]
+
+#### 🔥 On-Chain Hot (DEX)
+*   **[Token]** ([Chain]): +[gain]% | MCap: $[value] | Vol: $[value]
+    *   🔗 Twitter: [link if available]
 
 #### 💡 Alpha Strategy
 *   **Overall Stance**: [Aggressive/Balanced/Defensive]
@@ -172,9 +179,13 @@ Style: **No fluff, but never superficial**. Every opinion must be backed by logi
 *   **ETH/山寨**: ETH/BTC [数值] ([评价])
     *   📝 判词: [如: 汇率底部背离，关注补涨机会 / 依然弱势，勿轻易抄底。]
 
-#### 🔥 热点板块
+#### 🔥 热点板块 (CEX)
 *   **[板块名]**: [龙头币] ([涨幅]%)
     *   🚀 **逻辑**: [一句话解释为什么涨，如: AI板块受OpenAI新模型发布刺激，资金回流。]
+
+#### 🔥 链上热点 (DEX)
+*   **[代币]** ([链]): +[涨幅]% | 市值: $[数值] | 交易量: $[数值]
+    *   🔗 推特: [链接如有]
 
 #### 💡 Alpha 策略
 *   **[总体基调]**: [激进/稳健/防守]

@@ -34,7 +34,7 @@ def fetch_with_retry(url, params=None, headers=None, timeout=5, retries=1):
 async def get_dashboard_news():
     """Get latest crypto news headlines with AI summary (10min cache)"""
     try:
-        if is_cache_valid("news", 600):
+        if is_cache_valid("news", 3600):
             cached = get_cache("news")
             if cached and len(cached) > 0:
                 return {"news": cached}
@@ -324,3 +324,84 @@ async def get_dashboard_indicators():
     except Exception as e:
         print(f"[Dashboard Indicators] Error: {e}")
         return {"indicators": [], "error": str(e)}
+
+
+@router.get("/onchain-hot")
+async def get_dashboard_onchain_hot(limit: int = 6):
+    """Get on-chain hot tokens from DexScreener (5min cache)"""
+    try:
+        cache_key = f"onchain_hot_{limit}"
+        if is_cache_valid(cache_key, 600):  # 10min cache
+            return {"tokens": get_cache(cache_key)}
+        
+        # Import the tool function
+        from crypto_tools import get_onchain_hot_gainers
+        
+        # Get raw data from the tool
+        raw_result = get_onchain_hot_gainers(limit)
+        
+        # Parse the result into structured data
+        tokens = []
+        if raw_result and "仅找到" not in raw_result and "No tokens" not in raw_result:
+            lines = raw_result.split('\n')
+            current_token = {}
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Parse token entry (e.g., "1. unicorn (SOLANA)")
+                if line and line[0].isdigit() and '. ' in line:
+                    if current_token:
+                        tokens.append(current_token)
+                    
+                    # Extract symbol and chain
+                    parts = line.split('. ', 1)[1]  # Remove "1. "
+                    if '(' in parts and ')' in parts:
+                        symbol = parts.split(' (')[0]
+                        chain = parts.split('(')[1].split(')')[0]
+                        current_token = {"symbol": symbol, "chain": chain}
+                    else:
+                        current_token = {"symbol": parts, "chain": "Unknown"}
+                
+                # Parse price change (e.g., "📈 +932.0% | $0.000538")
+                elif '📈' in line:
+                    parts = line.replace('📈', '').strip().split('|')
+                    if len(parts) >= 2:
+                        change_str = parts[0].strip().replace('+', '').replace('%', '')
+                        price_str = parts[1].strip().replace('$', '').replace(',', '')
+                        try:
+                            current_token["change_24h"] = float(change_str)
+                            current_token["price"] = float(price_str)
+                        except ValueError:
+                            pass
+                
+                # Parse market data (e.g., "💰 市值: $538K | 📊 交易量: $2.1M | 💧 流动性: $76K")
+                elif '💰' in line:
+                    # Extract market cap
+                    if '市值:' in line or 'MCap:' in line:
+                        mcap_part = line.split('市值:' if '市值:' in line else 'MCap:')[1].split('|')[0].strip()
+                        current_token["market_cap"] = mcap_part
+                    # Extract volume
+                    if '交易量:' in line or 'Vol:' in line:
+                        vol_part = line.split('交易量:' if '交易量:' in line else 'Vol:')[1].split('|')[0].strip()
+                        current_token["volume_24h"] = vol_part
+                    # Extract liquidity
+                    if '流动性:' in line or 'Liq:' in line:
+                        liq_part = line.split('流动性:' if '流动性:' in line else 'Liq:')[1].strip()
+                        current_token["liquidity"] = liq_part
+                
+                # Parse Twitter link
+                elif '🐦' in line:
+                    twitter_url = line.replace('🐦', '').strip()
+                    current_token["twitter"] = twitter_url
+            
+            # Don't forget the last token
+            if current_token:
+                tokens.append(current_token)
+        
+        set_cache(cache_key, tokens)
+        return {"tokens": tokens}
+    except Exception as e:
+        print(f"[Dashboard Onchain Hot] Error: {e}")
+        return {"tokens": [], "error": str(e)}
+

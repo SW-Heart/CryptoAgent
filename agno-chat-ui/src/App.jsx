@@ -26,7 +26,7 @@ import TerminalLoader from './components/TerminalLoader';
 import HomePage from './components/HomePage';
 
 // Import from new modular structure
-import { AGENT_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
+import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
 import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
@@ -58,6 +58,10 @@ function AppContent() {
   const [credits, setCredits] = useState(null); // User credits
   const [checkedInToday, setCheckedInToday] = useState(false); // Daily check-in status
   const [toast, setToast] = useState(null); // Toast notification: { message, type }
+
+  // Agent Mode State - 'analyst' (default) or 'trader'
+  const [selectedAgent, setSelectedAgent] = useState('analyst');
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
 
   // Workspace State
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
@@ -343,7 +347,10 @@ function AppContent() {
       params.append('user_id', userId);
       params.append('session_id', sessionId);
 
-      const response = await fetch(`${BASE_URL}/agents/${AGENT_ID}/runs`, {
+      // Dynamic Agent ID based on selected mode
+      const activeAgentId = selectedAgent === 'trader' ? AGENT_TRADER_ID : AGENT_ANALYST_ID;
+
+      const response = await fetch(`${BASE_URL}/agents/${activeAgentId}/runs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -542,6 +549,7 @@ function AppContent() {
     setActiveChart(null);
     setShowStrategyNexus(false); // Exit Strategy Nexus view
     setShowDailyReport(false); // Exit Daily Report view
+    setSelectedAgent('analyst'); // Reset to default analyst mode
   };
 
   // Session management handlers
@@ -1332,14 +1340,14 @@ function AppContent() {
                     </h2>
 
                     <div className="relative group">
-                      <div className="relative bg-[#131722] rounded-2xl flex flex-col">
+                      <div className="relative bg-[#131722] border border-white/10 rounded-2xl flex flex-col p-5 shadow-xl">
+                        {/* Text input area */}
                         <textarea
                           ref={inputRef}
                           value={input}
                           onChange={(e) => {
                             setInput(e.target.value);
-                            // Auto-resize: reset height then set to scrollHeight, max 5 lines (~120px)
-                            e.target.style.height = '56px';
+                            e.target.style.height = '48px';
                             e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
                           }}
                           onKeyDown={(e) => {
@@ -1348,19 +1356,46 @@ function AppContent() {
                               handleSend();
                             }
                           }}
-                          placeholder={t('home.placeholder')}
-                          className="w-full px-4 pt-4 pb-2 bg-transparent border-none outline-none focus:ring-0 focus:outline-none resize-none text-slate-100 placeholder:text-slate-500 text-base overflow-y-auto"
+                          placeholder={selectedAgent === 'trader' ? t('agentMode.traderPlaceholder') : t('agentMode.analystPlaceholder')}
+                          className="w-full bg-transparent border-none outline-none focus:ring-0 focus:outline-none resize-none text-slate-100 placeholder:text-slate-500 text-lg leading-relaxed font-light"
                           rows={1}
-                          style={{ minHeight: '56px', maxHeight: '120px' }}
+                          style={{ minHeight: '48px', maxHeight: '120px' }}
                         />
-                        {/* Bottom row with send button */}
-                        <div className="flex items-center justify-end px-3 pb-3">
+
+                        {/* Toolbar - no divider, just spacing */}
+                        <div className="flex items-center justify-between mt-4">
+                          {/* Agent Mode Tabs - inline toggle like the reference image */}
+                          {messages.length === 0 && (
+                            <div className="flex items-center bg-slate-800 rounded-lg p-1">
+                              <button
+                                onClick={() => setSelectedAgent('analyst')}
+                                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${selectedAgent === 'analyst'
+                                  ? 'bg-slate-700 text-white'
+                                  : 'text-slate-400 hover:text-white'
+                                  }`}
+                              >
+                                {t('agentMode.analyst')}
+                              </button>
+                              <button
+                                onClick={() => setSelectedAgent('trader')}
+                                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${selectedAgent === 'trader'
+                                  ? 'bg-slate-700 text-white'
+                                  : 'text-slate-400 hover:text-white'
+                                  }`}
+                              >
+                                {t('agentMode.trader')}
+                              </button>
+                            </div>
+                          )}
+                          {messages.length > 0 && <div />}
+
+                          {/* Send button - solid purple */}
                           <button
                             onClick={() => handleSend()}
                             disabled={!input.trim()}
-                            className="p-2 bg-white hover:bg-slate-200 text-black disabled:opacity-30 disabled:bg-slate-600 disabled:text-slate-400 rounded-full transition-all duration-200"
+                            className="w-8 h-8 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white disabled:opacity-30 disabled:bg-slate-600 flex items-center justify-center transition-all shadow-lg shadow-indigo-500/20"
                           >
-                            <ArrowUp className="w-5 h-5" />
+                            <ArrowUp className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
@@ -1458,37 +1493,11 @@ function AppContent() {
                       {/* Row 2: Popular Tokens (50%) + Key Indicators (50%) */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         {/* Bottom Left: Popular Tokens */}
-                        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                            <TrendingUp className="w-4 h-4 text-green-400" />
-                            {t('home.popularTokens.title')}
-                          </h3>
-                          <div className="flex flex-col justify-between h-[calc(100%-32px)]">
-                            <div className="grid grid-cols-4 text-xs text-slate-500 px-2 pb-1">
-                              <span>{t('home.popularTokens.name')}</span>
-                              <span className="text-right">{t('home.popularTokens.price')}</span>
-                              <span className="text-right">{t('home.popularTokens.change24h')}</span>
-                              <span className="text-right"></span>
-                            </div>
-                            {dashboardTokens.slice(0, 6).map((token, i) => (
-                              <div key={i} className="grid grid-cols-4 items-center px-2 py-1.5 hover:bg-slate-800 rounded text-sm">
-                                <span className="text-white font-medium">{token.name}</span>
-                                <span className="text-right text-slate-300 text-xs">
-                                  ${token.price < 1 ? token.price.toFixed(4) : token.price < 1000 ? token.price.toFixed(2) : token.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                </span>
-                                <span className={`text-right text-xs ${token.change_24h >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                  {token.change_24h >= 0 ? '+' : ''}{token.change_24h?.toFixed(2)}%
-                                </span>
-                                <button
-                                  onClick={() => setInput(`Analyze token: ${token.name}`)}
-                                  className="text-right text-indigo-400 hover:text-indigo-300"
-                                >
-                                  <Search className="w-3.5 h-3.5 ml-auto" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                        {/* Bottom Left: Popular Tokens */}
+                        <PopularTokens
+                          tokens={dashboardTokens}
+                          onAnalyzeToken={(prompt) => setInput(prompt)}
+                        />
 
                         {/* Bottom Right: Key Indicators + Fear & Greed */}
                         <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">

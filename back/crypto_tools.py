@@ -215,11 +215,24 @@ def get_top_gainers_cex(limit: int = 10) -> str:
     """
     try:
         binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+        
+        # 首先获取所有活跃交易对 (TRADING状态)
+        exchange_info_url = f"{binance_base}/api/v3/exchangeInfo"
+        exchange_info = requests.get(exchange_info_url, timeout=10).json()
+        
+        # 创建只包含TRADING状态的USDT交易对的集合
+        active_usdt_symbols = set()
+        for s in exchange_info.get('symbols', []):
+            if s['status'] == 'TRADING' and s['symbol'].endswith('USDT'):
+                active_usdt_symbols.add(s['symbol'])
+        
+        # 获取24小时行情
         url = f"{binance_base}/api/v3/ticker/24hr"
         resp = requests.get(url, timeout=5).json()
         
-        # Filter USDT pairs and sort by price change
-        usdt_pairs = [t for t in resp if t['symbol'].endswith('USDT') and not t['symbol'].startswith('USDT')]
+        # Filter USDT pairs, only keep TRADING status symbols
+        usdt_pairs = [t for t in resp if t['symbol'] in active_usdt_symbols and not t['symbol'].startswith('USDT')]
+        
         # Filter out stablecoins
         stablecoins = ['USDCUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT', 'FDUSDUSDT']
         usdt_pairs = [t for t in usdt_pairs if t['symbol'] not in stablecoins]
@@ -289,6 +302,215 @@ def get_top_gainers_all(limit: int = 10) -> str:
         return result
     except Exception as e:
         return f"Failed to fetch market gainers: {str(e)}"
+
+
+def get_onchain_hot_gainers(number: int = 10) -> str:
+    """
+    Get top gaining on-chain tokens from DexScreener with quality filters.
+    Shows tokens with significant price movement AND real trading activity.
+    
+    Uses multiple data sources to ensure enough qualified tokens:
+    - Token Boosts (latest & top)
+    - Token Profiles from major chains (Solana, ETH, BSC, Base, Arbitrum)
+    
+    Filters applied:
+    - Minimum liquidity: $50,000
+    - Minimum 24h volume: $100,000
+    - Minimum market cap: $100,000
+    - Minimum 24h gain: 10%
+    
+    Args:
+        number: Number of results to return (1-20, default 10)
+    """
+    # 限制参数范围
+    number = max(1, min(20, number))
+    
+    # 用于存储所有代币地址和合格代币
+    all_token_addresses = set()  # 去重用
+    qualified_tokens = []
+    
+    # 辅助函数：处理单个代币
+    def process_token(address: str, chain_hint: str = None) -> dict:
+        """获取代币数据并检查是否符合条件"""
+        try:
+            token_url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+            token_resp = requests.get(token_url, timeout=5)
+            
+            if token_resp.status_code != 200:
+                return None
+            
+            data = token_resp.json()
+            pairs = data.get('pairs', [])
+            
+            if not pairs:
+                return None
+            
+            # 取流动性最高的交易对
+            best_pair = max(pairs, key=lambda p: float(p.get('liquidity', {}).get('usd', 0) or 0))
+            
+            # 提取数据
+            liquidity = float(best_pair.get('liquidity', {}).get('usd', 0) or 0)
+            volume_24h = float(best_pair.get('volume', {}).get('h24', 0) or 0)
+            market_cap = float(best_pair.get('marketCap', 0) or best_pair.get('fdv', 0) or 0)
+            price_change_24h = float(best_pair.get('priceChange', {}).get('h24', 0) or 0)
+            price_usd = float(best_pair.get('priceUsd', 0) or 0)
+            
+            # 应用筛选条件
+            if liquidity < 50000:  # 最低流动性 $50k
+                return None
+            if volume_24h < 100000:  # 最低24h交易量 $100k
+                return None
+            if market_cap < 100000:  # 最低市值 $100k
+                return None
+            if price_change_24h < 10:  # 最低涨幅 10%
+                return None
+            
+            # 提取社交媒体信息
+            info = best_pair.get('info', {})
+            socials = info.get('socials', [])
+            twitter_url = None
+            for social in socials:
+                if social.get('type') == 'twitter':
+                    twitter_url = social.get('url')
+                    break
+            
+            websites = info.get('websites', [])
+            website_url = websites[0].get('url') if websites else None
+            
+            return {
+                'symbol': best_pair.get('baseToken', {}).get('symbol', 'Unknown'),
+                'name': best_pair.get('baseToken', {}).get('name', 'Unknown')[:20],
+                'chain': best_pair.get('chainId', 'unknown'),
+                'dex': best_pair.get('dexId', 'unknown'),
+                'price': price_usd,
+                'change_24h': price_change_24h,
+                'volume_24h': volume_24h,
+                'liquidity': liquidity,
+                'market_cap': market_cap,
+                'twitter': twitter_url,
+                'website': website_url,
+                'pair_url': best_pair.get('url', ''),
+                'address': address
+            }
+        except Exception:
+            return None
+    
+    try:
+        # ========== 数据源1: Token Boosts (Latest) ==========
+        try:
+            boosts_resp = requests.get("https://api.dexscreener.com/token-boosts/latest/v1", timeout=10)
+            if boosts_resp.status_code == 200:
+                for token in boosts_resp.json():
+                    addr = token.get('tokenAddress', '')
+                    if addr and addr not in all_token_addresses:
+                        all_token_addresses.add(addr)
+                        result = process_token(addr)
+                        if result:
+                            qualified_tokens.append(result)
+                            if len(qualified_tokens) >= number:
+                                break
+        except Exception:
+            pass
+        
+        # 早期退出：如果已经找够了
+        if len(qualified_tokens) >= number:
+            pass  # 跳过后续数据源
+        else:
+            # ========== 数据源2: Token Boosts (Top) ==========
+            try:
+                top_resp = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=10)
+                if top_resp.status_code == 200:
+                    for token in top_resp.json():
+                        addr = token.get('tokenAddress', '')
+                        if addr and addr not in all_token_addresses:
+                            all_token_addresses.add(addr)
+                            result = process_token(addr)
+                            if result:
+                                qualified_tokens.append(result)
+                                if len(qualified_tokens) >= number:
+                                    break
+            except Exception:
+                pass
+        
+        # 早期退出检查
+        if len(qualified_tokens) >= number:
+            pass
+        else:
+            # ========== 数据源3: Token Profiles (各主链) ==========
+            chains = ['solana', 'ethereum', 'bsc', 'base', 'arbitrum']
+            for chain in chains:
+                if len(qualified_tokens) >= number:
+                    break
+                try:
+                    profiles_resp = requests.get(
+                        f"https://api.dexscreener.com/token-profiles/latest/v1?chainId={chain}",
+                        timeout=10
+                    )
+                    if profiles_resp.status_code == 200:
+                        for token in profiles_resp.json():
+                            addr = token.get('tokenAddress', '')
+                            if addr and addr not in all_token_addresses:
+                                all_token_addresses.add(addr)
+                                result = process_token(addr, chain)
+                                if result:
+                                    qualified_tokens.append(result)
+                                    if len(qualified_tokens) >= number:
+                                        break
+                except Exception:
+                    continue
+        
+        if not qualified_tokens:
+            return "No tokens meeting quality criteria (Liq>$50k, Vol>$100k, MCap>$100k, Gain>10%)"
+        
+        # 按涨幅排序
+        sorted_tokens = sorted(qualified_tokens, key=lambda x: x['change_24h'], reverse=True)
+        
+        # 格式化输出
+        result = "🔥 链上热点异动榜 (24h)\n"
+        result += "━" * 35 + "\n"
+        result += "筛选条件: 流动性>$50k | 交易量>$100k | 市值>$100k | 涨幅>10%\n\n"
+        
+        # 辅助函数：格式化大数字
+        def format_usd(value):
+            if value >= 1e9:
+                return f"${value/1e9:.1f}B"
+            elif value >= 1e6:
+                return f"${value/1e6:.1f}M"
+            elif value >= 1e3:
+                return f"${value/1e3:.0f}K"
+            else:
+                return f"${value:.0f}"
+        
+        for i, token in enumerate(sorted_tokens[:number], 1):
+            # 智能价格格式化
+            price = token['price']
+            if price < 0.0001:
+                price_str = f"${price:.8f}"
+            elif price < 0.01:
+                price_str = f"${price:.6f}"
+            elif price < 1:
+                price_str = f"${price:.4f}"
+            else:
+                price_str = f"${price:,.2f}"
+            
+            result += f"{i}. {token['symbol']} ({token['chain'].upper()})\n"
+            result += f"   📈 +{token['change_24h']:.1f}% | {price_str}\n"
+            result += f"   💰 市值: {format_usd(token['market_cap'])} | 📊 交易量: {format_usd(token['volume_24h'])} | 💧 流动性: {format_usd(token['liquidity'])}\n"
+            
+            # 社交媒体链接
+            if token['twitter']:
+                result += f"   🐦 {token['twitter']}\n"
+            
+            result += "\n"
+        
+        # 显示找到的总数
+        if len(sorted_tokens) < number:
+            result += f"\n⚠️ 仅找到 {len(sorted_tokens)} 个符合条件的代币（请求 {number} 个）"
+        
+        return result.strip()
+        
+    except Exception as e:
+        return f"Failed to fetch on-chain hot gainers: {str(e)}"
 
 
 def get_btc_dominance() -> str:

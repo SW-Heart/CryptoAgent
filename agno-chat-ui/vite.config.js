@@ -8,7 +8,12 @@ export default defineConfig({
       '/agents': {
         // 🔴 之前是 7777，现在改成 8000
         // ✅ 保持使用 127.0.0.1 以防 IPv6 问题
-        target: 'http://127.0.0.1:8000', 
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/api': {
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },

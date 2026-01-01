@@ -29,7 +29,8 @@ from crypto_tools import (
     get_btc_dominance, get_funding_rate, get_top_gainers_cex,
     get_global_market_overview, get_eth_btc_ratio,  # 大盘宏观数据
     get_eth_gas_price, get_wallet_balance, get_wallet_transactions,  # Etherscan 工具
-    get_defi_tvl_ranking, get_protocol_tvl, get_chain_tvl, get_top_yields  # DefiLlama 工具
+    get_defi_tvl_ranking, get_protocol_tvl, get_chain_tvl, get_top_yields,  # DefiLlama 工具
+    get_onchain_hot_gainers  # 链上热点异动榜 (DexScreener)
 )
 
 # 导入专业技术分析工具
@@ -72,7 +73,8 @@ crypto_agent = Agent(
         get_market_sentiment,
         get_token_analysis,
         get_market_hotspots,
-        get_top_gainers_cex,   # Binance 涨幅榜
+        get_top_gainers_cex,          # Binance 涨幅榜 (CEX)
+        get_onchain_hot_gainers,      # 链上热点异动榜 (DEX/DexScreener)
         get_pro_crypto_news,
         get_narrative_dominance,
         get_btc_dominance,   # BTC 主导率 + 山寨季指标
