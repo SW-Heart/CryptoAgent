@@ -11,7 +11,7 @@ from os import getenv
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.models.deepseek import DeepSeek
-from agno.os import AgentOS
+#from agno.os import AgentOS
 
 
 # Load environment variables
@@ -212,11 +212,11 @@ log_strategy_analysis()
     timezone_identifier="Etc/UTC",
 )
 
-agent_os = AgentOS(
-    agents=[trading_agent],
-)
+# agent_os = AgentOS(
+#     agents=[trading_agent],
+# )
 
-app = agent_os.get_app()
+# app = agent_os.get_app()
 
-if __name__ == "__main__":
-    agent_os.serve(app="trading_agent:app", reload=True)
+# if __name__ == "__main__":
+#     agent_os.serve(app="trading_agent:app", reload=True)
