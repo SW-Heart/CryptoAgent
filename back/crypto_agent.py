@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from agno.os import AgentOS
+# from agno.os import AgentOS  # 已在 main.py 中导入
 from textwrap import dedent
 from os import getenv
 from agno.agent import Agent
@@ -9,7 +9,7 @@ from agno.models.deepseek import DeepSeek  # LLM 模型
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.serper import SerperTools
 from agno.tools.exa import ExaTools
-from agno.os import AgentOS
+#from agno.os import AgentOS
 # from agno.tools.mcp import MCPTools  # MCP工具支持 (暂时禁用)
 
 # Load environment variables from .env file
@@ -43,11 +43,9 @@ from technical_analysis import (
     get_volume_profile
 )
 
-# Phase 3: 趋势线和形态识别
+# Phase 3: 趋势线分析
 from pattern_recognition import (
     get_trendlines,
-    detect_chart_patterns,
-    analyze_wave_structure
 )
 
 # Phase 3.4: 历史规律记忆
@@ -96,10 +94,8 @@ crypto_agent = Agent(
         # Phase 2: Volume Analysis Tools (量价分析)
         get_volume_analysis,           # 成交量分析
         get_volume_profile,            # 密集成交区识别
-        # Phase 3: Pattern Recognition Tools (形态识别)
+        # Phase 3: Pattern Recognition Tools (趋势线)
         get_trendlines,                # 趋势线识别
-        detect_chart_patterns,         # 经典形态识别
-        analyze_wave_structure,        # 波浪理论分析
         get_indicator_reliability,     # 单周期指标可靠性
         get_indicator_reliability_all_timeframes,  # 多周期汇总对比
         # ETF 资金流工具 (Farside API)
@@ -181,12 +177,10 @@ Your personality:
 | get_volume_analysis | Volume ratio, divergence, fund flow | User asks about volume, divergence, fund flow |
 | get_volume_profile | High-volume zones (support/resistance) | User asks support/resistance, key levels, volume profile |
 
-## Pattern Recognition Tools (形态识别)
+## Pattern Recognition Tools (趋势线)
 | Tool | Purpose | When to Use |
 |------|---------|-------------|
 | get_trendlines | Auto-detect uptrend/downtrend lines | User asks trendline, support line, trend analysis |
-| detect_chart_patterns | Head-shoulders, double top/bottom | User asks patterns, formations, reversal signals |
-| analyze_wave_structure | Elliott Wave analysis (5-wave structure) | User asks wave analysis, impulse/correction waves |
 | get_indicator_reliability | Indicator success rate by time period | User asks which indicator is reliable, best EMA to follow |
 
 ## Etherscan Tools (ETH On-chain Data)
