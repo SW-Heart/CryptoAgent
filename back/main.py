@@ -7,6 +7,7 @@ Run with: fastapi dev main.py
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import Response
 import json
 import threading
 
@@ -54,6 +55,69 @@ class UserContextMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(UserContextMiddleware)
+
+# Token Credit Middleware - 扣除 agent token 消耗积分
+from app.routers.credits import deduct_token_credits
+
+class TokenCreditMiddleware(BaseHTTPMiddleware):
+    """拦截 agent runs 响应，统计 token 并扣除积分
+    
+    规则：5万 token = 1积分，向上取整
+    仅处理非流式响应（stream=false）
+    """
+    
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # 只处理 agent runs 端点
+        url_path = str(request.url.path)
+        if "/agents/" in url_path and "/runs" in url_path and request.method == "POST":
+            # 检查是否为非流式响应（JSON 类型）
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    # 读取响应体
+                    body = b""
+                    async for chunk in response.body_iterator:
+                        body += chunk
+                    
+                    data = json.loads(body.decode())
+                    
+                    # 提取 metrics 和 user_id
+                    metrics = data.get("metrics", {})
+                    total_tokens = metrics.get("total_tokens", 0)
+                    user_id = data.get("user_id")
+                    session_id = data.get("session_id")
+                    
+                    if total_tokens > 0 and user_id:
+                        # 扣除积分
+                        result = deduct_token_credits(user_id, total_tokens, session_id)
+                        print(f"[TokenCredit] User {user_id}: {total_tokens:,} tokens -> -{result['deducted']} credits")
+                        
+                        # 可选：注入积分扣除信息到响应
+                        data["credits_deducted"] = result
+                        body = json.dumps(data).encode()
+                    
+                    # 重新构建响应
+                    return Response(
+                        content=body,
+                        status_code=response.status_code,
+                        headers=dict(response.headers),
+                        media_type=response.media_type
+                    )
+                except Exception as e:
+                    print(f"[TokenCreditMiddleware] Error processing response: {e}")
+                    # 如果处理失败，返回原始响应体
+                    return Response(
+                        content=body if 'body' in locals() else b"",
+                        status_code=response.status_code,
+                        headers=dict(response.headers),
+                        media_type=response.media_type
+                    )
+        
+        return response
+
+app.add_middleware(TokenCreditMiddleware)
 
 # Add CORS middleware
 app.add_middleware(

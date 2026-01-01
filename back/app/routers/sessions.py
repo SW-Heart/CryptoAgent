@@ -97,8 +97,11 @@ async def get_history(session_id: str):
             runs = json.loads(runs)
         all_messages = []
         
-        for run in runs:
-            msgs = run.get("messages", [])
+        # Fix: Only process the LAST run, as each run already contains
+        # the full conversation history (due to agno's num_history_runs setting).
+        # Processing all runs causes Fibonacci-like duplication.
+        if runs:
+            msgs = runs[-1].get("messages", [])
             i = 0
             while i < len(msgs):
                 msg = msgs[i]

@@ -126,19 +126,42 @@ def open_position(
     margin: float,
     leverage: int = 10,
     stop_loss: float = None,
-    take_profit: float = None,
+    take_profit: float = None,  # 兼容旧接口，等同于 tp1_price
+    tp1_price: float = None,
+    tp2_price: float = None,
+    tp3_price: float = None,
+    tp1_percent: int = 50,  # TP1 平仓比例 (默认50%)
+    tp2_percent: int = 30,  # TP2 平仓比例 (默认30%)
+    tp3_percent: int = 20,  # TP3 平仓比例 (默认20%，即余仓)
     user_id: str = None
 ) -> dict:
     """
     Open a virtual contract position with leverage. Admin only.
+    
+    分批止盈配置：
+    - 可设置 1-3 个止盈价位 (tp1_price, tp2_price, tp3_price)
+    - 每个止盈对应平仓比例 (tp1_percent, tp2_percent, tp3_percent)
+    - 比例之和应该等于 100%
+    - 如果只设 tp1_price 且 tp1_percent=100，则一次性止盈
+    
+    示例：
+    - 保守策略: tp1_price=3100, tp1_percent=80 (TP1平80%，剩余随走)
+    - 标准策略: tp1_price=3100, tp2_price=3200, tp3_price=3300, tp1_percent=50, tp2_percent=30, tp3_percent=20
+    - 极致策略: tp1_price=3100, tp1_percent=100 (一次性止盈)
     
     Args:
         symbol: Coin symbol (BTC, ETH, SOL)
         direction: LONG or SHORT
         margin: Margin (collateral) in USDT
         leverage: Leverage multiplier (default 10x)
-        stop_loss: Optional stop loss price
-        take_profit: Optional take profit price
+        stop_loss: Stop loss price
+        take_profit: Legacy param, same as tp1_price
+        tp1_price: First take profit price (trigger partial close)
+        tp2_price: Second take profit price (optional)
+        tp3_price: Third take profit price (optional)
+        tp1_percent: Percentage to close at TP1 (default 50)
+        tp2_percent: Percentage to close at TP2 (default 30)
+        tp3_percent: Percentage to close at TP3 (default 20)
         user_id: User ID for permission check
     
     Returns:
@@ -155,6 +178,22 @@ def open_position(
     
     if leverage < 1 or leverage > 125:
         return {"error": "Leverage must be between 1 and 125"}
+    
+    # 兼容旧接口: take_profit -> tp1_price
+    if take_profit and not tp1_price:
+        tp1_price = take_profit
+    
+    # 验证止盈比例
+    total_percent = 0
+    if tp1_price:
+        total_percent += tp1_percent
+    if tp2_price:
+        total_percent += tp2_percent
+    if tp3_price:
+        total_percent += tp3_percent
+    
+    if total_percent > 0 and total_percent != 100:
+        return {"error": f"Take profit percentages must sum to 100%, got {total_percent}%"}
     
     conn = get_db()
     
@@ -205,11 +244,18 @@ def open_position(
         conn.close()
         return {"error": f"Insufficient balance. Need {margin + fee:.2f} USDT (margin + fee), available: {available:.2f} USDT"}
     
-    # Insert position with user_id
+    # Insert position with user_id and multi-TP fields
     cursor = conn.execute("""
-        INSERT INTO positions (user_id, symbol, direction, leverage, margin, notional_value, entry_price, quantity, stop_loss, take_profit, current_price, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
-    """, (effective_user, symbol, direction, leverage, margin, notional_value, entry_price, quantity, stop_loss, take_profit, entry_price))
+        INSERT INTO positions (
+            user_id, symbol, direction, leverage, margin, notional_value, entry_price, quantity, 
+            stop_loss, take_profit, current_price, status,
+            tp1_price, tp2_price, tp3_price, tp1_percent, tp2_percent, tp3_percent,
+            tp1_triggered, tp2_triggered, tp3_triggered
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, 0, 0, 0)
+    """, (effective_user, symbol, direction, leverage, margin, notional_value, entry_price, quantity, 
+          stop_loss, tp1_price, entry_price,
+          tp1_price, tp2_price, tp3_price, tp1_percent, tp2_percent, tp3_percent))
     
     position_id = cursor.lastrowid
     
@@ -217,7 +263,7 @@ def open_position(
     conn.execute("""
         INSERT INTO orders (position_id, symbol, action, margin, entry_price, stop_loss, take_profit, fee)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (position_id, symbol, f"OPEN_{direction}", margin, entry_price, stop_loss, take_profit, fee))
+    """, (position_id, symbol, f"OPEN_{direction}", margin, entry_price, stop_loss, tp1_price, fee))
     
     # Deduct margin and fee from user's wallet (使用原子操作防止并发问题)
     conn.execute("""
@@ -233,7 +279,14 @@ def open_position(
     conn.commit()
     conn.close()
     
-    # Note: Strategy log is handled by log_strategy_analysis tool, not here
+    # Build take profit summary
+    tp_summary = []
+    if tp1_price:
+        tp_summary.append(f"TP1: ${tp1_price:,.0f} ({tp1_percent}%)")
+    if tp2_price:
+        tp_summary.append(f"TP2: ${tp2_price:,.0f} ({tp2_percent}%)")
+    if tp3_price:
+        tp_summary.append(f"TP3: ${tp3_price:,.0f} ({tp3_percent}%)")
     
     return {
         "success": True,
@@ -244,10 +297,11 @@ def open_position(
         "entry_price": entry_price,
         "quantity": quantity,
         "stop_loss": stop_loss,
-        "take_profit": take_profit,
+        "take_profit_levels": tp_summary if tp_summary else None,
         "fee": fee,
         "remaining_balance": new_balance
     }
+
 
 
 def close_position(position_id: int, reason: str = "manual", user_id: str = None) -> dict:
@@ -545,6 +599,18 @@ def get_positions_summary(user_id: str = None) -> dict:
         roi = unrealized_pnl / pos["margin"] * 100 if pos["margin"] > 0 else 0
         total_unrealized_pnl += unrealized_pnl
         
+        # Build take profit levels info
+        tp_levels = []
+        if pos["tp1_price"]:
+            status = "✅" if pos["tp1_triggered"] else "⏳"
+            tp_levels.append(f"{status} TP1: ${pos['tp1_price']:,.0f} ({pos['tp1_percent']}%)")
+        if pos["tp2_price"]:
+            status = "✅" if pos["tp2_triggered"] else "⏳"
+            tp_levels.append(f"{status} TP2: ${pos['tp2_price']:,.0f} ({pos['tp2_percent']}%)")
+        if pos["tp3_price"]:
+            status = "✅" if pos["tp3_triggered"] else "⏳"
+            tp_levels.append(f"{status} TP3: ${pos['tp3_price']:,.0f} ({pos['tp3_percent']}%)")
+        
         open_positions.append({
             "id": pos["id"],
             "symbol": pos["symbol"],
@@ -555,7 +621,8 @@ def get_positions_summary(user_id: str = None) -> dict:
             "unrealized_pnl": round(unrealized_pnl, 2),
             "roi_percent": round(roi, 2),
             "stop_loss": pos["stop_loss"],
-            "take_profit": pos["take_profit"],
+            "take_profit_levels": tp_levels if tp_levels else None,
+            "tp1_triggered": bool(pos["tp1_triggered"]),
             "opened_at": pos["opened_at"]
         })
     

@@ -161,8 +161,15 @@ def log_strategy_round(round_id: str, symbols: str, response: dict):
         print(f"[Scheduler] Error logging strategy: {e}")
 
 def update_positions_prices():
-    """Update current prices and check SL/TP for all open positions"""
-    positions_to_close = []  # Collect positions to close
+    """Update current prices and check SL/TP for all open positions.
+    
+    分批止盈逻辑:
+    - TP1 触发: 平仓 tp1_percent，自动移止损到开仓价保本
+    - TP2 触发: 平仓 tp2_percent (相对于原始仓位)
+    - TP3 触发: 平掉余仓
+    """
+    positions_to_close = []  # Collect positions to fully close
+    partial_close_actions = []  # Collect partial close actions
     
     try:
         conn = get_db()
@@ -199,23 +206,93 @@ def update_positions_prices():
             if unrealized_pnl <= -pos["margin"]:
                 print(f"[Scheduler] LIQUIDATION triggered for position {pos['id']} ({symbol} {pos['direction']})")
                 positions_to_close.append((pos["id"], "liquidated"))
+                continue
+            
             # Check stop loss
-            elif pos["stop_loss"]:
+            if pos["stop_loss"]:
                 if (pos["direction"] == "LONG" and current_price <= pos["stop_loss"]) or \
                    (pos["direction"] == "SHORT" and current_price >= pos["stop_loss"]):
                     print(f"[Scheduler] STOP LOSS triggered for position {pos['id']} ({symbol})")
                     positions_to_close.append((pos["id"], "stop_loss"))
-            # Check take profit
-            elif pos["take_profit"]:
-                if (pos["direction"] == "LONG" and current_price >= pos["take_profit"]) or \
-                   (pos["direction"] == "SHORT" and current_price <= pos["take_profit"]):
-                    print(f"[Scheduler] TAKE PROFIT triggered for position {pos['id']} ({symbol})")
+                    continue
+            
+            # ========== 分批止盈检查 ==========
+            is_long = pos["direction"] == "LONG"
+            
+            def price_hit(target_price):
+                """Check if price hit target for this direction"""
+                if is_long:
+                    return current_price >= target_price
+                else:
+                    return current_price <= target_price
+            
+            # Check TP1 (if not yet triggered)
+            if pos["tp1_price"] and not pos["tp1_triggered"]:
+                if price_hit(pos["tp1_price"]):
+                    tp1_pct = pos["tp1_percent"] or 50
+                    print(f"[Scheduler] TP1 triggered for position {pos['id']} ({symbol}) - closing {tp1_pct}%, moving SL to entry")
+                    partial_close_actions.append({
+                        "position_id": pos["id"],
+                        "close_percent": tp1_pct,
+                        "move_sl_to_entry": True,  # 保本铁律
+                        "tp_level": 1
+                    })
+                    continue  # Don't check further TPs this cycle
+            
+            # Check TP2 (only if TP1 already triggered)
+            elif pos["tp2_price"] and pos["tp1_triggered"] and not pos["tp2_triggered"]:
+                if price_hit(pos["tp2_price"]):
+                    # Calculate percentage of remaining position
+                    # If original was 100 and TP1 closed 50%, now we have 50%
+                    # To close TP2's 30% of original, we close 60% of remaining (30/50=60%)
+                    tp1_pct = pos["tp1_percent"] or 50
+                    tp2_pct = pos["tp2_percent"] or 30
+                    remaining_pct = 100 - tp1_pct
+                    close_pct_of_remaining = (tp2_pct / remaining_pct) * 100 if remaining_pct > 0 else 100
+                    print(f"[Scheduler] TP2 triggered for position {pos['id']} ({symbol}) - closing {close_pct_of_remaining:.0f}% of remaining")
+                    partial_close_actions.append({
+                        "position_id": pos["id"],
+                        "close_percent": min(close_pct_of_remaining, 100),
+                        "move_sl_to_entry": False,
+                        "tp_level": 2
+                    })
+                    continue
+            
+            # Check TP3 (only if TP2 already triggered)
+            elif pos["tp3_price"] and pos["tp2_triggered"] and not pos["tp3_triggered"]:
+                if price_hit(pos["tp3_price"]):
+                    print(f"[Scheduler] TP3 triggered for position {pos['id']} ({symbol}) - closing remaining position")
                     positions_to_close.append((pos["id"], "take_profit"))
+                    continue
         
         conn.commit()
         conn.close()
         
-        # Now close positions AFTER releasing the connection
+        # Execute partial closes AFTER releasing the connection
+        if partial_close_actions:
+            set_current_user(SCHEDULER_USER_ID)
+            from trading_tools import partial_close_position
+            
+            for action in partial_close_actions:
+                try:
+                    result = partial_close_position(
+                        position_id=action["position_id"],
+                        close_percent=action["close_percent"],
+                        move_sl_to_entry=action["move_sl_to_entry"]
+                    )
+                    print(f"[Scheduler] Partial close result: {result}")
+                    
+                    # Mark TP level as triggered
+                    conn2 = get_db()
+                    tp_level = action["tp_level"]
+                    conn2.execute(f"UPDATE positions SET tp{tp_level}_triggered = 1 WHERE id = ?", (action["position_id"],))
+                    conn2.commit()
+                    conn2.close()
+                    
+                except Exception as e:
+                    print(f"[Scheduler] Error partial closing position {action['position_id']}: {e}")
+        
+        # Execute full closes AFTER releasing the connection
         if positions_to_close:
             set_current_user(SCHEDULER_USER_ID)
             from trading_tools import close_position
@@ -245,12 +322,12 @@ def trigger_strategy():
 1. 分析市场多维共振信号（技术面、宏观面、消息面）
 2. 检查当前持仓状态和盈亏情况
 3. 根据分析结果执行策略：
-   - 如有明确开仓信号，使用 open_position 开仓
-   - 如需调整现有仓位的止损止盈，使用 update_stop_loss_take_profit 执行调整
+   - 如有明确开仓信号，使用 open_position 开仓（开仓时必须确定止损止盈）
    - 如需平仓，使用 close_position 平仓
+   - 如果 TP1 已触发，使用 update_stop_loss_take_profit 移动止损到开仓价保本
 4. 记录策略分析结果
 
-重要：如果分析结论中包含止损止盈调整建议，必须调用 update_stop_loss_take_profit 工具执行调整，不要只记录不执行。"""
+⚠️ 铁律：开仓后不得频繁调整止损止盈！除非 TP1 触发需要保本，或发生重大事件影响趋势。3162→3163 这种微调是韭菜行为，严禁！"""
         
         response = requests.post(
             f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",

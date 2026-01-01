@@ -360,6 +360,7 @@ function AppContent() {
       let buffer = '';
       let currentEvent = null;
       const activeTools = {}; // Track active tool calls: { toolCallId: { name, startTime } }
+      let runMetrics = null; // Store metrics from RunCompleted event
 
       while (true) {
         const { done, value } = await reader.read();
@@ -433,7 +434,10 @@ function AppContent() {
                 delete activeTools[toolCallId];
                 setIsThinking(true); // Tool completed, waiting for next action
               } else if (currentEvent === 'RunCompleted' || data.event === 'RunCompleted') {
-                // Skip RunCompleted - it contains full content again which would cause duplication
+                // Extract metrics from RunCompleted event for token credit deduction
+                if (data.metrics) {
+                  runMetrics = data.metrics;
+                }
                 setIsThinking(false); // Run completed, stop thinking
               } else if (data.content) {
                 // Regular content update (RunContent events)
@@ -464,19 +468,25 @@ function AppContent() {
       const toolMatches = assistantMessage.match(/completed in \d+\.\d+s\./g);
       const actualToolCount = toolMatches ? toolMatches.length : 0;
 
-      if (actualToolCount > 0 && user?.id) {
+      // Deduct credits based on token usage (5万 tokens = 1 credit)
+      // Use metrics from RunCompleted event
+      if (runMetrics?.total_tokens > 0 && user?.id) {
         try {
-          const res = await fetch(`${BASE_URL}/api/credits/${user.id}/deduct`, {
+          const res = await fetch(`${BASE_URL}/api/credits/${user.id}/deduct-tokens`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tool_count: actualToolCount })
+            body: JSON.stringify({
+              total_tokens: runMetrics.total_tokens,
+              session_id: sessionId
+            })
           });
           if (res.ok) {
             const data = await res.json();
             setCredits(data.current_credits);
+            console.log(`[TokenCredit] ${runMetrics.total_tokens.toLocaleString()} tokens -> -${data.deducted} credits`);
           }
         } catch (e) {
-          console.error('Failed to deduct credits:', e);
+          console.error('Failed to deduct token credits:', e);
         }
       }
 

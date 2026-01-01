@@ -10,6 +10,7 @@ router = APIRouter(prefix="/api/credits", tags=["credits"])
 
 DEFAULT_CREDITS = 100  # New user default credits
 CREDITS_PER_TOOL = 5   # Credits deducted per tool call
+TOKENS_PER_CREDIT = 50000  # 5万 token = 1积分
 
 def get_db_connection():
     """Get database connection"""
@@ -127,6 +128,48 @@ def log_credits_history(user_id: str, details: str, credits_change: int):
     conn.commit()
     conn.close()
 
+def calculate_token_credits(total_tokens: int) -> int:
+    """计算 token 消耗对应的积分数
+    
+    规则：5万 token = 1积分，不足1积分按1积分算（向上取整）
+    """
+    if total_tokens <= 0:
+        return 0
+    # 向上取整：任何 >0 的 token 消耗至少扣 1 积分
+    return max(1, (total_tokens + TOKENS_PER_CREDIT - 1) // TOKENS_PER_CREDIT)
+
+def deduct_token_credits(user_id: str, total_tokens: int, session_id: str = None) -> dict:
+    """根据 token 消耗扣除积分并记录历史
+    
+    Args:
+        user_id: 用户 ID
+        total_tokens: 本次 run 消耗的总 token 数
+        session_id: 可选，会话 ID（用于记录）
+        
+    Returns:
+        dict: 包含 previous_credits, deducted, current_credits, tokens
+    """
+    credits_to_deduct = calculate_token_credits(total_tokens)
+    
+    if credits_to_deduct <= 0:
+        return {"deducted": 0, "tokens": total_tokens, "previous_credits": 0, "current_credits": 0}
+    
+    previous = get_user_credits(user_id)
+    new_credits = deduct_credits_atomic(user_id, credits_to_deduct)
+    
+    # 记录历史
+    details = f"LLM Token: {total_tokens:,}"
+    if session_id:
+        details += f" (session: {session_id[:8]}...)"
+    log_credits_history(user_id, details, -credits_to_deduct)
+    
+    return {
+        "previous_credits": previous,
+        "deducted": credits_to_deduct,
+        "current_credits": new_credits,
+        "tokens": total_tokens
+    }
+
 @router.get("/{user_id}")
 async def api_get_credits(user_id: str):
     """Get user's current credits"""
@@ -230,6 +273,28 @@ async def api_deduct_credits(user_id: str, request: Request):
         }
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{user_id}/deduct-tokens")
+async def api_deduct_token_credits(user_id: str, request: Request):
+    """Deduct credits based on token usage (5万 tokens = 1 credit).
+    
+    Called by frontend after stream completion with RunCompleted metrics.
+    """
+    try:
+        data = await request.json()
+        total_tokens = data.get("total_tokens", 0)
+        session_id = data.get("session_id")
+        
+        if total_tokens <= 0:
+            return {"user_id": user_id, "deducted": 0, "tokens": 0}
+        
+        result = deduct_token_credits(user_id, total_tokens, session_id)
+        return {
+            "user_id": user_id,
+            **result
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
