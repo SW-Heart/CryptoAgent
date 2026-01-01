@@ -88,11 +88,41 @@ init_strategy_tables()
 
 
 # ============= Scheduler Integration =============
-# Scheduler is now controlled via API endpoints:
+# Strategy Scheduler: Controlled via API endpoints (not auto-started)
 #   GET  /api/strategy/scheduler/status - Get status
 #   POST /api/strategy/scheduler/start  - Start (admin only)
 #   POST /api/strategy/scheduler/stop   - Stop (admin only)
-# Scheduler does NOT auto-start. Users control it via Strategy Nexus UI.
-print("[Main] Scheduler available via API (not auto-started)")
+print("[Main] Strategy scheduler available via API (not auto-started)")
+
+# Daily Report Scheduler: Always runs automatically (independent from strategy)
+def start_daily_report_scheduler():
+    """Start the daily report scheduler in background thread"""
+    import schedule
+    import time
+    import os
+    
+    # Wait for FastAPI server to fully start
+    time.sleep(5)
+    
+    print("[DailyReportScheduler] Starting...")
+    
+    DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")
+    DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")
+    
+    from scheduler import generate_daily_report, send_daily_report_emails
+    
+    schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
+    schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
+    
+    print(f"[DailyReportScheduler] Daily Report at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR} (local time)")
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
+daily_report_thread = threading.Thread(target=start_daily_report_scheduler, daemon=True)
+daily_report_thread.start()
+print("[Main] Daily report scheduler started (always runs)")
+
 
 

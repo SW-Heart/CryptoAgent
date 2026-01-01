@@ -65,13 +65,14 @@ def stop_scheduler() -> dict:
         return {"success": True, "message": "Scheduler stopped"}
 
 def _run_scheduler_loop():
-    """Internal scheduler loop - runs until stopped"""
+    """Internal scheduler loop - runs until stopped (Strategy tasks only)"""
     global _scheduler_running
     
     print("[Scheduler] Starting Strategy Nexus Scheduler...")
     print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
     print("[Scheduler] Position monitor runs every 10 seconds")
     print("[Scheduler] Price alert check runs every 60 seconds")
+    print("[Scheduler] Note: Daily Report runs independently (not controlled here)")
     print()
     
     # Schedule strategy at fixed times (every 1 hour, at :30)
@@ -85,12 +86,8 @@ def _run_scheduler_loop():
     # Schedule price alert checks every 60 seconds
     schedule.every(60).seconds.do(check_price_alerts)
     
-    # Daily Report Schedule
-    DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")
-    DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")
-    schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
-    schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
-    print(f"[Scheduler] Daily Report configured at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR}")
+    # NOTE: Daily Report is now scheduled independently in main.py
+    # It runs automatically regardless of strategy scheduler status
     
     # Run position update immediately
     update_positions_prices()

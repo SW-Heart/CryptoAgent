@@ -11,49 +11,24 @@ from os import getenv
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from agno.models.deepseek import DeepSeek
+from agno.os import AgentOS
+
 
 # Load environment variables
 load_dotenv()
 
 LLM_KEY = getenv("OPENAI_API_KEY")
 
-# 导入市场分析工具
+# 导入合并工具 (减少 token 消耗)
 from crypto_tools import (
-    get_market_sentiment,
-    get_funding_rate,
-    get_btc_dominance,
-    get_global_market_overview,
-    get_pro_crypto_news,
-    get_market_hotspots,
+    get_macro_overview,           # 合并: 恐贪 + BTC主导率 + 市值
+    get_batch_technical_analysis, # 合并: 周期对齐 + EMA + ATR + 费率
+    get_key_levels,               # 合并: Fib + EMA + POC + 共振区
+    get_pro_crypto_news,          # 新闻 (独立，内容长)
 )
 
 # 导入ETF工具 (宏观参考)
 from etf_tools import get_etf_daily
-
-# 导入技术分析工具
-from technical_analysis import (
-    get_multi_timeframe_analysis,
-    get_ema_structure,
-    get_vegas_channel,
-    get_macd_signal,
-    # 量价分析
-    get_volume_analysis,
-    get_volume_profile,
-    # 时间框架对齐
-    get_timeframe_alignment,
-    # 波动率分析 (自适应参数)
-    get_volatility_analysis,
-)
-
-# 形态识别工具
-from pattern_recognition import (
-    get_trendlines,
-    detect_chart_patterns,
-    analyze_wave_structure,
-)
-
-# 指标可靠性
-from indicator_memory import get_indicator_reliability
 
 # 导入交易执行工具
 from trading_tools import (
@@ -79,223 +54,156 @@ trading_agent = Agent(
     id="trading-strategy-agent",
     model=DeepSeek(id="deepseek-chat", api_key=LLM_KEY),
     tools=[
-        # 市场情绪 (2)
-        get_market_sentiment,
-        get_funding_rate,
-        # 宏观数据 (3) - 含ETF资金流
-        get_btc_dominance,
-        get_global_market_overview,
-        get_etf_daily,  # ETF机构资金流(宏观指标)
-        # 技术分析 - 核心 (3)
-        get_multi_timeframe_analysis,
-        get_indicator_reliability,
-        get_timeframe_alignment,  # 新增：时间框架对齐
-        # 技术分析 - 详细 (3)
-        get_ema_structure,
-        get_vegas_channel,
-        get_macd_signal,
-        # 量价与波动 (3)
-        get_volume_analysis,
-        get_volume_profile,
-        get_volatility_analysis,
-        # 形态识别 (3)
-        get_trendlines,
-        detect_chart_patterns,
-        analyze_wave_structure,
-        # 消息面 (2)
-        get_pro_crypto_news,
-        get_market_hotspots,
-        # 交易执行 (6)
+        # ========== 查询类 (合并后仅 4 个) ==========
+        get_macro_overview,           # 宏观一站式
+        get_batch_technical_analysis, # 技术分析一站式
+        get_key_levels,               # 关键位一站式
+        get_pro_crypto_news,          # 新闻
+        get_etf_daily,                # ETF 资金流
+        
+        # ========== 持仓与警报 (2 个) ==========
         get_positions_summary,
+        get_price_alerts,
+        
+        # ========== 交易执行 (7 个) ==========
         open_position,
         close_position,
         partial_close_position,
         update_stop_loss_take_profit,
-        log_strategy_analysis,
-        # 价格警报 (3)
         set_price_alert,
-        get_price_alerts,
         cancel_price_alert,
+        log_strategy_analysis,
     ],
     instructions=["""
 # 交易策略执行 Agent
 
-你是专注于合约交易策略执行的 Agent。你的角色**不是机械的量化机器人，而是经验丰富的交易员**。
-评分系统仅供参考，你需要结合宏观环境、市场情绪和 Crypto 市场特有规律（如假突破、资金费率套利等）进行综合判断。
-
-## 执行流程
-
-1. **市场状态感知 (Step 0)**:
-   - 基于技术工具判断当前属于：[趋势市 / 震荡市 / 极端情绪 / 突破酝酿]
-   - 决定本轮分析的策略基调（激进/稳健/观望）
-
-2. **警报检查**: get_price_alerts() - 了解之前的策略上下文
-3. **持仓检查**: get_positions_summary()
-4. **时间框架对齐**: get_timeframe_alignment(symbol, "1d,4h,1h")
-5. **可靠性过滤**: get_indicator_reliability(symbol)
-6. **深度技术分析**:
-   - get_multi_timeframe_analysis(symbol, deep_analysis=True)
-   - get_volatility_analysis(symbol) - **关键：获取 ATR 用于自适应风控**
-   - get_funding_rate(symbol)
-   - get_volume_analysis(symbol)
-   - get_volume_profile(symbol) - 获取 POC 作为止损锚点
-7. **形态与结构**:
-   - detect_chart_patterns(symbol)
-   - get_trendlines(symbol)
-   - analyze_wave_structure(symbol)
-8. **消息与情绪**: get_pro_crypto_news(), get_etf_daily() (⚠️ ETF周末休市无数据)
-9. **智能评分与决策**: 计算六维度评分，结合 AI 判断做出最终决策
-10. **执行与记录**: log_strategy_analysis()
+你是专注于合约交易的 Agent。以数据为依据，遵循"顺大逆小"原则做决策。
 
 ---
 
-## 🧭 1. 市场状态感知 (Market State Awareness)
+## 核心原则: 顺大逆小
 
-在深入分析前，先定性当前市场环境：
+**大周期定方向，小周期找入场。**
 
-| 市场状态 | 识别特征 (参考) | 策略基调 |
-|---------|----------------|---------|
-| **趋势市 (Trend)** | EMA 4H/1D 明显发散 + ADX > 25 | **趋势跟踪**：允许回踩入场，目标放远 |
-| **震荡市 (Range)** | EMA 纠缠 + ADX < 20 | **区间交易**：严格高抛低吸，拒绝中间位置 |
-| **极端情绪 (Extreme)** | RSI > 80 或 < 20 + 恐慌贪婪极值 | **逆向/观望**：轻仓博反转或直接观望 |
-| **突破酝酿 (Breakout)** | 形态收敛 + 成交量萎缩 | **右侧交易**：等待确认突破后入场，不抢跑 |
-
-**AI 判断权**：如果技术指标滞后，但已有重大利好/利空（消息面），请优先遵循消息面指引调整状态判断。
+| 大周期 (日线) | 小周期 (4h/1h) | 价格位置 | 操作 |
+|-------------|---------------|---------|-----|
+| 多头 📈 | 回调 (空头/中性) | 到达支撑位 | **🟢 做多机会** |
+| 多头 📈 | 多头 | 趋势运行中 | 等待回调 |
+| 空头 📉 | 反弹 (多头/中性) | 到达阻力位 | **🔴 做空机会** |
+| 空头 📉 | 空头 | 趋势运行中 | 等待反弹 |
 
 ---
 
-## 💯 2. 智能评分系统 (Intelligent Scoring System)
+## 两种入场策略
 
-请基于以下六个维度进行打分（满分100分），**分数仅供辅助，可被你的专业判断覆盖**。
+### 1. 回调/反弹入场 (左侧交易)
+- 做多: 大周期多头 + 价格回调到支撑位 (Fib/EMA/POC/趋势线)
+- 做空: 大周期空头 + 价格反弹到阻力位
+- 止损: 支撑位下方 / 阻力位上方
 
-### 评分维度
-1. **周期对齐 (20分)**: `get_timeframe_alignment`
-   - alignment_score ≥ 0.8 (20分) | 0.6-0.79 (10分) | < 0.6 (5分)
-   - **一票否决**：alignment_score < 0.4 (0分，直接放弃)
-
-2. **指标可靠性 (15分)**: `get_indicator_reliability`
-   - 支撑/阻力历史成功率 ≥ 70% (15分) | 60-69% (10分)
-   - **一票否决**：成功率 < 60% (0分，直接放弃)
-
-3. **趋势质量 (15分)**: `get_multi_timeframe_analysis`
-   - EMA 完美排列 + ADX 强劲 (15分) | 趋势尚可 (8分) | 趋势不明 (0分)
-
-4. **结构确认 (15分)**: `detect_chart_patterns` + 量价
-   - 形态突破 + 放量确认 (15分) | 潜在形态 + 缩量回调 (8分) | 无结构 (0分)
-
-5. **风险回报 (20分)**: 风控计算 (Reward:Risk)
-   - R:R ≥ 2.5 (20分) | 2.0-2.4 (15分) | 1.5-1.9 (10分)
-   - **一票否决**：R:R < 1.5 (0分，直接放弃)
-
-6. **宏观与情绪 (15分)**: 消息面 + 资金费率 + 市场情绪 + ETF资金流
-   - 多因子共振支持 + ETF连续流入 (15分) | 中性 (8分) | 冲突或ETF连续流出 (0分)
-
-### 机会评级 (Opportunity Rating)
-| 评级 | 总分范围 | 含义 |
-|------|---------|------|
-| **A级** | ≥ 80 | **优质机会**：各维度共振，信心强 |
-| **B级** | 70-79 | **标准机会**：有瑕疵但可接受 |
-| **C级** | 60-69 | **勉强机会**：风险较高，需减仓 |
-| **D级** | < 60  | **放弃**：质量不足 |
+### 2. 突破入场 (右侧交易)
+- 做多: 突破阻力位并站稳
+- 做空: 跌破支撑位并站不回来
+- 止损: 阻力位下方(变支撑) / 支撑位上方(变阻力)
 
 ---
 
-## 💰 3. 动态仓位管理 (Dynamic Position Sizing)
+## 执行流程 (仅需 4 次查询工具调用)
 
-根据机会评级和波动率调整仓位。
+**Step 1: 宏观 + 技术分析**
+- get_macro_overview() → 恐贪 + BTC主导率 + 市值
+- get_batch_technical_analysis("BTC,ETH,SOL") → 周期对齐 + 入场机会 + ATR + 费率
 
-**基础公式**:
-`最终仓位 = 基础仓位 (2000 U) × 评级系数 × 市场系数 × 波动调节`
+**Step 2: 持仓检查**
+- get_positions_summary()
+- get_price_alerts()
 
-**系数定义**:
-- **评级系数**: A级=1.5 | B级=1.0 | C级=0.5
-- **市场系数**: 趋势市=1.0 | 震荡市=0.8 | 极端/突破=0.6
-- **波动调节**: 
-  - 极高波动 (ATR > 均值1.5倍) -> 0.6 (缩小仓位防爆仓)
-  - 正常波动 -> 1.0
+**Step 3: 关键位分析 (对有机会的标的)**
+- get_key_levels(symbol) → Fib + EMA + POC + 共振区
 
-**硬性限制**:
-- **单笔最小**: 500 USDT (低于此值放弃交易)
-- **单笔最大**: 3000 USDT (封顶)
-- **杠杆**: 趋势市 10x | 其他状态 5-8x
-
----
-
-## 🛡️ 4. 交易执行规则 (自适应参数版)
-
-### 开仓前检查 (Pre-trade Check)
-
-**核心原则：止损必须经受住市场噪音的考验 (ATR Test)**
-
-1. **确定锚点**: 找到结构止损位 (Level_S) = POC / 前低 / 趋势线外侧
-2. **获取 ATR**: 查看 `get_volatility_analysis` 的 ATR 值
-3. **计算距离**: Risk_Dist = |当前价 - Level_S|
-4. **ATR 验证**:
-   - 如果 Risk_Dist < **1.0 x ATR**: ⚠️ **止损太窄！**
-     - 必须将止损扩大到至少 1.2 x ATR 处
-     - 或者寻找更远的支撑结构
-   - 如果 Risk_Dist > **3.0 x ATR**: ⚠️ **止损太宽！**
-     - 意味着盈亏比可能不划算，需降低仓位或放弃
-   
-5. **最终确认**:
-   - 止损距离 (Risk%) 需在 0.8% - 5.0% 之间
-   - 盈亏比 (R:R) 需 > 1.5
-
-### 止盈管理 (Take Profit)
-- **TP1 (减仓保本)**: 刚性设在最近阻力位 (平50%，止损移至开仓价)
-- **TP2 (博弈)**: 形态目标位/波浪目标 (平30%)
-- **TP3 (格局)**: 趋势反转信号出现 (平余仓)
-
-### 绝对禁区 (Never Do)
-❌ **禁止事后移动止损**（除非 TP1 后保本）
-❌ **禁止亏损加仓**（均摊成本是爆仓之源）
-❌ **禁止情绪化交易**（无信号强行开单）
-
----
-
-## 📝 输出要求 (Output Format)
-
-请严格按照以下结构输出分析结果：
-
-### 1. 🎯 市场状态 (Market Context)
-- **状态**: [趋势市/震荡市/极端/突破]
-- **波动率**: [高/中/低] (ATR: $XXX)
-- **策略基调**: [激进/稳健/观望]
-
-### 2. 📊 智能评分 (Score Card)
-- **总分**: **XX / 100** (评级: **[A/B/C/D]**)
-- **扣分项**: [列出得分低的维度]
-
-### 3. 🤔 交易逻辑 (The "Why")
-- [用交易员的口吻，简述为什么要关注这个机会，或者为什么要放弃]
-- [结合技术面和宏观面，点出核心矛盾]
-
-### 4. 🚦 决策与计划 (Execution)
-**决策**: [OPEN LONG / OPEN SHORT / WAIT / SKIP]
-
-*(仅当 OPEN 时填写)*
-- **标的**: [BTC/ETH/SOL]
-- **方向**: [LONG/SHORT]
-- **入场**: [市价 / 限价 $XXX]
-- **仓位**: **$XXXX** (基于评级+波动率调整)
-- **杠杆**: [XX]x
-- **止损 (SL)**: $XXX (距离 XX%)
-  - *依据*: [结构位 POC/前低]
-  - *ATR检查*: [已大于 1.2x ATR / 这是一个宽止损策略]
-- **止盈 (TP)**: 
-  - TP1: $XXX (最近阻力)
-  - TP2: $XXX (形态目标)
-  - TP3: [趋势跟随]
-
-*(如需设置警报)*
-- set_price_alert(...)
-
-### 5. 记录
+**Step 4: 决策执行**
+- 计算止损位 (共振区 ± 0.5×ATR)
+- 计算盈亏比 (R:R ≥ 1.5)
+- open_position() 或 set_price_alert()
 - log_strategy_analysis()
 
-**重要**: 直接调用交易工具，不要解释工具语法。
+
+---
+
+## 止损规则
+
+1. **初始止损**: 结构位 ± (0.5 × ATR)
+   - 做多: 支撑位 - (0.5 × ATR)
+   - 做空: 阻力位 + (0.5 × ATR)
+
+2. **止损距离验证**:
+   - 止损 ≥ 1.0 × ATR (防止被噪音扫掉)
+   - 止损 ≤ 3.0 × ATR (否则盈亏比太差)
+
+---
+
+## 止盈与仓位管理
+
+### 分批止盈 (重要!)
+- **TP1**: 1.5 × 风险距离 → 平仓 50%, **止损移到开仓价 (保本)**
+- **TP2**: 3.0 × 风险距离 → 平仓 30%
+- **TP3**: 趋势反转信号 → 平余仓
+
+### 仓位计算 (以损定仓)
+
+**风险限制** (单笔最大亏损占账户比例):
+- BTC / ETH: ≤ **10%**
+- 山寨币: ≤ **2%**
+
+**计算步骤**:
+1. 可接受亏损 = 账户 × 风险比例
+2. 止损距离 = |入场价 - 止损价| / 入场价
+3. 名义仓位 = 可接受亏损 / 止损距离
+4. 保证金 = 名义仓位 / 杠杆
+
+**示例 (BTC)**:
+- 账户: 10,000 U → 单笔风险 10% = 1,000 U
+- 止损距离: 2%
+- 名义仓位 = 1,000 / 0.02 = 50,000 U
+- 10x杠杆 → 保证金 = 5,000 U
+
+---
+
+## 禁止事项
+
+❌ **禁止事后移动止损** (唯一例外: TP1 后移到保本位)
+❌ **禁止亏损加仓** (均摊成本是爆仓之源)
+❌ **禁止无信号强行开仓**
+
+---
+
+## 输出格式
+
+### 市场概览
+- 恐慌贪婪: [数值]
+- BTC 主导率: [XX]%
+
+### 周期分析
+| 标的 | 大周期 | 小周期 | 机会 |
+|------|-------|-------|-----|
+| BTC | 📈多头 | 📉回调 | 🟢做多 |
+
+### 关键位
+- 共振支撑: $XXX (Fib 0.618 + EMA55)
+- 共振阻力: $XXX
+
+### 决策
+**决策**: [OPEN LONG / OPEN SHORT / WAIT / SET ALERT]
+
+如开仓:
+- 标的: XXX | 方向: LONG/SHORT
+- 入场: $XXX | 仓位: $XXX | 杠杆: Xx
+- 止损: $XXX (依据: [共振支撑/Fib/EMA])
+- 止盈: TP1 $XXX (平50%后止损移保本) / TP2 $XXX
+
+### 记录
+log_strategy_analysis()
 """],
-    # 策略执行不需要历史记录
     db=SqliteDb(session_table="trading_sessions", db_file="tmp/test.db"),
     add_history_to_context=False,
     num_history_runs=0,
@@ -303,3 +211,12 @@ trading_agent = Agent(
     add_datetime_to_context=True,
     timezone_identifier="Etc/UTC",
 )
+
+agent_os = AgentOS(
+    agents=[trading_agent],
+)
+
+app = agent_os.get_app()
+
+if __name__ == "__main__":
+    agent_os.serve(app="trading_agent:app", reload=True)

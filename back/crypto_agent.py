@@ -9,6 +9,7 @@ from agno.models.deepseek import DeepSeek  # LLM 模型
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.serper import SerperTools
 from agno.tools.exa import ExaTools
+from agno.os import AgentOS
 # from agno.tools.mcp import MCPTools  # MCP工具支持 (暂时禁用)
 
 # Load environment variables from .env file
@@ -508,3 +509,14 @@ ALWAYS:
 
 # Note: AgentOS is created in main.py with both agents
 # Run with: uvicorn main:app --host 127.0.0.1 --port 8000
+# 创建 AgentOS
+
+
+# agent_os = AgentOS(
+#     agents=[crypto_agent],
+# )
+
+# app = agent_os.get_app()
+
+# if __name__ == "__main__":
+#     agent_os.serve(app="crypto_agent:app", reload=True)

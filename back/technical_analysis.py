@@ -1236,6 +1236,350 @@ def get_volatility_analysis(symbol: str, timeframe: str = "1d", periods: int = 1
 
 
 # ==========================================
+# 📦 批量分析工具 (Batch Analysis Tools)
+# 减少API调用次数和token消耗
+# ==========================================
+
+def batch_timeframe_alignment(symbols: str, timeframes: str = "1d,4h,1h") -> str:
+    """
+    批量分析多个币种的时间框架对齐情况
+    
+    识别"顺大逆小"的入场机会:
+    - 大周期多头 + 小周期回调 = 做多机会
+    - 大周期空头 + 小周期反弹 = 做空机会
+    
+    Args:
+        symbols: 代币符号列表，逗号分隔 (如 "BTC,ETH,SOL")
+        timeframes: 要分析的周期，逗号分隔 (默认 "1d,4h,1h"，第一个为大周期)
+    
+    Returns:
+        所有币种的时间框架分析汇总报告
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    
+    report = "=" * 50 + "\n"
+    report += "📊 批量时间框架分析 (顺大逆小)\n"
+    report += f"标的: {', '.join(symbol_list)}\n"
+    report += "=" * 50 + "\n\n"
+    
+    results = []
+    
+    for symbol in symbol_list:
+        try:
+            price = _get_current_price(symbol)
+            if price is None:
+                results.append({"symbol": symbol, "error": "无法获取价格"})
+                continue
+            
+            tf_list = [tf.strip() for tf in timeframes.split(",")]
+            trend_data = {}
+            
+            for tf in tf_list:
+                df = _get_binance_klines(symbol, tf)
+                if df is None or len(df) < 50:
+                    continue
+                
+                try:
+                    ema21 = ta.ema(df['close'], length=21)
+                    ema55 = ta.ema(df['close'], length=55)
+                    
+                    ema21_val = ema21.iloc[-1] if ema21 is not None else None
+                    ema55_val = ema55.iloc[-1] if ema55 is not None else None
+                    
+                    if ema21_val is None or ema55_val is None:
+                        continue
+                    
+                    adx_result = ta.adx(df['high'], df['low'], df['close'], length=14)
+                    adx_val = adx_result.iloc[-1, 0] if adx_result is not None else 20
+                    
+                    if price > ema21_val > ema55_val:
+                        direction = "bullish"
+                    elif price < ema21_val < ema55_val:
+                        direction = "bearish"
+                    else:
+                        direction = "neutral"
+                    
+                    trend_data[tf] = {
+                        "direction": direction,
+                        "ema21": ema21_val,
+                        "ema55": ema55_val,
+                        "adx": adx_val
+                    }
+                except:
+                    continue
+            
+            if len(trend_data) < 2:
+                results.append({"symbol": symbol, "error": "数据不足"})
+                continue
+            
+            # 获取大周期和小周期的趋势
+            big_tf = tf_list[0]  # 第一个周期为大周期
+            small_tf = tf_list[-1]  # 最后一个周期为小周期
+            
+            big_trend = trend_data.get(big_tf, {}).get("direction", "neutral")
+            small_trend = trend_data.get(small_tf, {}).get("direction", "neutral")
+            
+            # 判断入场机会
+            opportunity = None
+            opportunity_type = None
+            
+            if big_trend == "bullish":
+                if small_trend == "bearish" or small_trend == "neutral":
+                    # 大周期多头 + 小周期回调 = 做多机会
+                    opportunity = "做多机会"
+                    opportunity_type = "回调入场"
+                elif small_trend == "bullish":
+                    opportunity = "趋势运行中"
+                    opportunity_type = "等待回调"
+            elif big_trend == "bearish":
+                if small_trend == "bullish" or small_trend == "neutral":
+                    # 大周期空头 + 小周期反弹 = 做空机会
+                    opportunity = "做空机会"
+                    opportunity_type = "反弹入场"
+                elif small_trend == "bearish":
+                    opportunity = "趋势运行中"
+                    opportunity_type = "等待反弹"
+            else:
+                opportunity = "震荡"
+                opportunity_type = "观望"
+            
+            results.append({
+                "symbol": symbol,
+                "price": price,
+                "big_tf": big_tf,
+                "big_trend": big_trend,
+                "small_tf": small_tf,
+                "small_trend": small_trend,
+                "opportunity": opportunity,
+                "opportunity_type": opportunity_type,
+                "tf_details": trend_data
+            })
+            
+        except Exception as e:
+            results.append({"symbol": symbol, "error": str(e)})
+    
+    # 生成汇总报告
+    for r in results:
+        symbol = r["symbol"]
+        
+        if "error" in r:
+            report += f"❌ {symbol}: {r['error']}\n"
+            continue
+        
+        # 方向表情
+        big_emoji = "📈" if r["big_trend"] == "bullish" else ("📉" if r["big_trend"] == "bearish" else "➡️")
+        small_emoji = "📈" if r["small_trend"] == "bullish" else ("📉" if r["small_trend"] == "bearish" else "➡️")
+        
+        # 机会标记
+        if r["opportunity"] == "做多机会":
+            opp_emoji = "🟢 做多机会"
+        elif r["opportunity"] == "做空机会":
+            opp_emoji = "🔴 做空机会"
+        elif r["opportunity"] == "趋势运行中":
+            opp_emoji = "🟡 " + r["opportunity_type"]
+        else:
+            opp_emoji = "⚪ 观望"
+        
+        report += f"【{symbol}】 ${r['price']:,.2f}\n"
+        report += f"   大周期({r['big_tf']}): {r['big_trend']} {big_emoji} | 小周期({r['small_tf']}): {r['small_trend']} {small_emoji}\n"
+        report += f"   📌 {opp_emoji}\n"
+        
+        # 关键位提示
+        if r["opportunity"] in ["做多机会", "做空机会"]:
+            small_data = r["tf_details"].get(r["small_tf"], {})
+            ema55 = small_data.get("ema55")
+            if ema55:
+                report += f"   ↳ 关注EMA55支撑/阻力: ${ema55:,.0f}\n"
+        
+        report += "\n"
+    
+    return report
+
+
+
+def batch_multi_timeframe_analysis(symbols: str, deep_analysis: bool = False) -> str:
+    """
+    批量多周期技术分析
+    
+    一次调用分析多个币种的EMA/Vegas/MACD等技术指标。
+    
+    Args:
+        symbols: 代币符号列表，逗号分隔 (如 "BTC,ETH,SOL")
+        deep_analysis: 是否深度分析（使用月/周/日/4h全周期）
+    
+    Returns:
+        所有币种的技术分析汇总报告 (精简版)
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    tf_list = ["1M", "1w", "1d", "4h"] if deep_analysis else ["1d", "4h"]
+    
+    report = "=" * 50 + "\n"
+    report += "📊 批量多周期技术分析\n"
+    report += f"标的: {', '.join(symbol_list)} | 周期: {', '.join(tf_list)}\n"
+    report += "=" * 50 + "\n\n"
+    
+    for symbol in symbol_list:
+        try:
+            price = _get_current_price(symbol)
+            if price is None:
+                report += f"❌ {symbol}: 无法获取价格\n\n"
+                continue
+            
+            ema_signals = {}
+            vegas_signals = {}
+            macd_signals = {}
+            
+            for tf in tf_list:
+                df = _get_binance_klines(symbol, tf)
+                if df is None or len(df) < 50:
+                    continue
+                
+                try:
+                    # EMA
+                    ema21 = ta.ema(df['close'], length=21)
+                    ema55 = ta.ema(df['close'], length=55)
+                    ema21_val = ema21.iloc[-1] if ema21 is not None else None
+                    ema55_val = ema55.iloc[-1] if ema55 is not None else None
+                    
+                    if ema21_val and ema55_val:
+                        if price > ema21_val > ema55_val:
+                            ema_signals[tf] = 1
+                        elif price < ema21_val < ema55_val:
+                            ema_signals[tf] = -1
+                        else:
+                            ema_signals[tf] = 0
+                    
+                    # Vegas
+                    if len(df) >= 170:
+                        ema144 = ta.ema(df['close'], length=144)
+                        ema169 = ta.ema(df['close'], length=169)
+                        ema144_val = ema144.iloc[-1]
+                        ema169_val = ema169.iloc[-1]
+                        channel_top = max(ema144_val, ema169_val)
+                        channel_bottom = min(ema144_val, ema169_val)
+                        
+                        if price > channel_top:
+                            vegas_signals[tf] = 1
+                        elif price < channel_bottom:
+                            vegas_signals[tf] = -1
+                        else:
+                            vegas_signals[tf] = 0
+                    
+                    # MACD
+                    macd_result = ta.macd(df['close'], fast=12, slow=26, signal=9)
+                    if macd_result is not None:
+                        macd_line = macd_result.iloc[-1, 0]
+                        signal_line = macd_result.iloc[-1, 1]
+                        if macd_line > signal_line:
+                            macd_signals[tf] = 1
+                        else:
+                            macd_signals[tf] = -1
+                except:
+                    continue
+            
+            # 计算综合得分
+            ema_score = sum(ema_signals.values()) / len(ema_signals) if ema_signals else 0
+            vegas_score = sum(vegas_signals.values()) / len(vegas_signals) if vegas_signals else 0
+            macd_score = sum(macd_signals.values()) / len(macd_signals) if macd_signals else 0
+            total_score = (ema_score + vegas_score + macd_score) / 3
+            
+            # 判断
+            if total_score >= 0.5:
+                verdict = "🟢 强势多头"
+            elif total_score >= 0.2:
+                verdict = "🟢 偏多"
+            elif total_score >= -0.2:
+                verdict = "🟡 中性"
+            elif total_score >= -0.5:
+                verdict = "🔴 偏空"
+            else:
+                verdict = "🔴 强势空头"
+            
+            # 汇总信号
+            def sig_emoji(signals):
+                bullish = sum(1 for v in signals.values() if v > 0)
+                bearish = sum(1 for v in signals.values() if v < 0)
+                return f"{bullish}🟢/{bearish}🔴"
+            
+            report += f"【{symbol}】 ${price:,.2f} → {verdict}\n"
+            report += f"   EMA: {sig_emoji(ema_signals)} | Vegas: {sig_emoji(vegas_signals)} | MACD: {sig_emoji(macd_signals)}\n\n"
+            
+        except Exception as e:
+            report += f"❌ {symbol}: {str(e)}\n\n"
+    
+    return report
+
+
+def batch_volatility_analysis(symbols: str, timeframe: str = "1d") -> str:
+    """
+    批量波动率分析
+    
+    一次调用分析多个币种的ATR和波动率状态。
+    
+    Args:
+        symbols: 代币符号列表，逗号分隔 (如 "BTC,ETH,SOL")
+        timeframe: 周期 (默认 1d)
+    
+    Returns:
+        所有币种的波动率汇总报告
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    
+    report = "=" * 50 + "\n"
+    report += f"🌊 批量波动率分析 ({timeframe})\n"
+    report += f"标的: {', '.join(symbol_list)}\n"
+    report += "=" * 50 + "\n\n"
+    
+    for symbol in symbol_list:
+        try:
+            df = _get_binance_klines(symbol, timeframe, limit=64)
+            if df is None or len(df) < 24:
+                report += f"❌ {symbol}: 数据不足\n"
+                continue
+            
+            price = _get_current_price(symbol)
+            if price is None:
+                price = df['close'].iloc[-1]
+            
+            # ATR
+            atr = ta.atr(df['high'], df['low'], df['close'], length=14)
+            if atr is None:
+                report += f"❌ {symbol}: ATR计算失败\n"
+                continue
+            
+            current_atr = atr.iloc[-1]
+            atr_ma = atr.rolling(window=20).mean().iloc[-1]
+            volatility_ratio = current_atr / atr_ma if atr_ma > 0 else 0
+            atr_percent = (current_atr / price) * 100
+            
+            # 状态
+            if volatility_ratio > 1.5:
+                status = "🌊 极高"
+                sl_mult = 2.0
+            elif volatility_ratio > 1.2:
+                status = "📈 偏高"
+                sl_mult = 1.5
+            elif volatility_ratio < 0.7:
+                status = "💤 极低"
+                sl_mult = 1.0
+            else:
+                status = "⚖️ 正常"
+                sl_mult = 1.2
+            
+            suggested_sl = current_atr * sl_mult
+            suggested_sl_pct = atr_percent * sl_mult
+            
+            report += f"【{symbol}】 ${price:,.2f}\n"
+            report += f"   ATR: ${current_atr:,.2f} ({atr_percent:.2f}%) | 波动: {status} ({volatility_ratio:.2f}x)\n"
+            report += f"   建议止损: ${suggested_sl:,.2f} ({suggested_sl_pct:.2f}%)\n\n"
+            
+        except Exception as e:
+            report += f"❌ {symbol}: {str(e)}\n"
+    
+    return report
+
+
+# ==========================================
 # 🧪 测试入口
 # ==========================================
 
