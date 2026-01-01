@@ -83,6 +83,21 @@ def log_strategy_analysis(
     conn = get_db()
     round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
     
+    # Check if a log for the same symbols exists within last 3 minutes (avoid duplicates)
+    existing = conn.execute("""
+        SELECT 1 FROM strategy_logs 
+        WHERE symbols = ? 
+        AND timestamp > datetime('now', '-3 minutes')
+    """, (symbols,)).fetchone()
+    
+    if existing:
+        conn.close()
+        return {
+            "success": True,
+            "round_id": round_id,
+            "message": f"Strategy log for {symbols} already exists (skipped duplicate)"
+        }
+    
     conn.execute("""
         INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
         VALUES (?, ?, ?, ?, ?, ?, ?)
