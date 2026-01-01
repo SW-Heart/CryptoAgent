@@ -159,8 +159,6 @@ def deduct_token_credits(user_id: str, total_tokens: int, session_id: str = None
     
     # 记录历史
     details = f"LLM Token: {total_tokens:,}"
-    if session_id:
-        details += f" (session: {session_id[:8]}...)"
     log_credits_history(user_id, details, -credits_to_deduct)
     
     return {

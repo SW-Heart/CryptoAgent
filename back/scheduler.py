@@ -111,7 +111,7 @@ def get_db():
 def log_strategy_round(round_id: str, symbols: str, response: dict):
     """Save strategy log to database"""
     try:
-        conn = get_db()
+        conn = _retry_db_operation(get_db)
         
         # Extract structured content from response
         raw_response = response.get("content", "")
@@ -160,6 +160,24 @@ def log_strategy_round(round_id: str, symbols: str, response: dict):
     except Exception as e:
         print(f"[Scheduler] Error logging strategy: {e}")
 
+def _retry_db_operation(func, max_retries=3, base_delay=1.0):
+    """Execute a database operation with retry logic for handling locks"""
+    import random
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e):
+                last_error = e
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                print(f"[Scheduler] DB locked, retry {attempt + 1}/{max_retries} after {delay:.1f}s...")
+                time.sleep(delay)
+            else:
+                raise
+    raise last_error
+
+
 def update_positions_prices():
     """Update current prices and check SL/TP for all open positions.
     
@@ -172,7 +190,7 @@ def update_positions_prices():
     partial_close_actions = []  # Collect partial close actions
     
     try:
-        conn = get_db()
+        conn = _retry_db_operation(get_db)
         # Only process admin's positions (filter by user_id)
         positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = ?", (SCHEDULER_USER_ID,)).fetchall()
         
@@ -283,7 +301,7 @@ def update_positions_prices():
                     print(f"[Scheduler] Partial close result: {result}")
                     
                     # Mark TP level as triggered
-                    conn2 = get_db()
+                    conn2 = _retry_db_operation(get_db)
                     tp_level = action["tp_level"]
                     conn2.execute(f"UPDATE positions SET tp{tp_level}_triggered = 1 WHERE id = ?", (action["position_id"],))
                     conn2.commit()
