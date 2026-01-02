@@ -20,7 +20,7 @@ export default function TrendingBar({ onTokenClick }) {
     useEffect(() => {
         const fetchTrending = async () => {
             try {
-                const res = await fetch(`${BASE_URL} /api/dashboard / trending ? limit = 10`);
+                const res = await fetch(`${BASE_URL}/api/dashboard/trending?limit=10`);
                 if (res.ok) {
                     const data = await res.json();
                     setTokens(data.tokens || []);
