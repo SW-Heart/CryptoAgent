@@ -192,5 +192,11 @@ daily_report_thread = threading.Thread(target=start_daily_report_scheduler, daem
 daily_report_thread.start()
 print("[Main] Daily report scheduler started (always runs)")
 
+# ============= Cache Warmup =============
+# Pre-populate dashboard cache on startup to eliminate first-load delay
+from app.services.cache_warmup import start_warmup_thread
+warmup_thread = start_warmup_thread()
+print("[Main] Cache warmup started in background")
+
 
 

@@ -13,6 +13,7 @@ from crypto_tools import (
     search_news,
     get_pro_crypto_news,
     get_market_hotspots,
+    get_trending_tokens,          # 热门代币榜
     get_top_gainers_cex,
     get_onchain_hot_gainers,  # 链上热点异动榜
     get_eth_btc_ratio,
@@ -41,6 +42,7 @@ daily_report_agent = Agent(
         DuckDuckGoTools(all=True),
         get_pro_crypto_news,
         get_market_hotspots,
+        get_trending_tokens,          # 热门代币榜
         get_top_gainers_cex,
         get_onchain_hot_gainers,  # 链上热点异动榜
         get_eth_btc_ratio,

@@ -445,3 +445,147 @@ async def get_dashboard_onchain_hot(limit: int = 6):
         print(f"[Dashboard Onchain Hot] Error: {e}")
         return {"tokens": [], "error": str(e)}
 
+
+@router.get("/trending")
+async def get_dashboard_trending(limit: int = 10):
+    """Get CoinGecko trending tokens with real-time Binance prices
+    
+    CoinGecko trending list is cached for 15min (to respect rate limits).
+    Binance prices are fetched fresh on every request.
+    """
+    try:
+        limit = max(1, min(15, limit))
+        
+        # ===== Step 1: Get CoinGecko trending list + prices (cached 15min) =====
+        trending_cache_key = "trending_list_v2"
+        coin_info = {}
+        symbols = []
+        cg_prices = {}  # Cached CoinGecko prices for fallback
+        
+        if is_cache_valid(trending_cache_key, 900):  # 15min cache
+            cached_list = get_cache(trending_cache_key)
+            if cached_list:
+                coin_info = cached_list.get('coin_info', {})
+                symbols = cached_list.get('symbols', [])
+                cg_prices = cached_list.get('cg_prices', {})
+        
+        # If no cache or cache expired, fetch from CoinGecko
+        if not symbols:
+            coingecko_api_key = os.getenv("COINGECKO_API_KEY", "")
+            
+            if coingecko_api_key:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0',
+                    'x-cg-demo-api-key': coingecko_api_key
+                }
+            else:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+            
+            trending_resp = fetch_with_retry(
+                "https://api.coingecko.com/api/v3/search/trending",
+                headers=headers,
+                timeout=10,
+                retries=2
+            )
+            
+            if not trending_resp or 'coins' not in trending_resp:
+                return {"tokens": [], "error": "Failed to fetch CoinGecko trending"}
+            
+            trending_coins = trending_resp['coins'][:15]  # Cache up to 15 for flexibility
+            
+            for coin in trending_coins:
+                item = coin.get('item', {})
+                symbol = item.get('symbol', '').upper()
+                symbols.append(symbol)
+                coin_info[symbol] = {
+                    'name': item.get('name', 'Unknown'),
+                    'symbol': symbol,
+                    'image': item.get('thumb', ''),
+                    'market_cap_rank': item.get('market_cap_rank'),
+                    'coingecko_id': item.get('id', '')
+                }
+            
+            # Fetch prices from CoinGecko (once, cached with list)
+            cg_ids = [info['coingecko_id'] for info in coin_info.values() if info.get('coingecko_id')]
+            if cg_ids:
+                try:
+                    ids_str = ','.join(cg_ids)
+                    price_resp = fetch_with_retry(
+                        f"https://api.coingecko.com/api/v3/simple/price?ids={ids_str}&vs_currencies=usd&include_24hr_change=true",
+                        headers=headers,
+                        timeout=10,
+                        retries=1
+                    )
+                    if price_resp:
+                        for cg_id, data in price_resp.items():
+                            for sym, info in coin_info.items():
+                                if info['coingecko_id'] == cg_id:
+                                    cg_prices[sym] = {
+                                        'price': data.get('usd'),
+                                        'change_24h': data.get('usd_24h_change', 0) or 0
+                                    }
+                                    break
+                        print(f"[Dashboard Trending] Cached CoinGecko prices for {len(cg_prices)} tokens")
+                except Exception as e:
+                    print(f"[Dashboard Trending] CoinGecko price fetch error: {e}")
+            
+            # Cache everything together
+            set_cache(trending_cache_key, {
+                'coin_info': coin_info, 
+                'symbols': symbols,
+                'cg_prices': cg_prices
+            })
+            print(f"[Dashboard Trending] Cached trending list: {symbols[:5]}...")
+        
+        # ===== Step 2: Fetch REAL-TIME prices from Binance (no cache) =====
+        price_map = {}
+        try:
+            ticker_resp = fetch_with_retry(
+                f"{BINANCE_API_BASE}/api/v3/ticker/24hr",
+                timeout=5,
+                retries=1
+            )
+            if ticker_resp:
+                for t in ticker_resp:
+                    sym = t.get('symbol', '')
+                    if sym.endswith('USDT'):
+                        base = sym.replace('USDT', '')
+                        price_map[base] = {
+                            'price': float(t.get('lastPrice', 0)),
+                            'change_24h': float(t.get('priceChangePercent', 0))
+                        }
+        except Exception as e:
+            print(f"[Dashboard Trending] Binance price fetch error: {e}")
+        
+        # ===== Step 3: Build token list with fresh prices =====
+        tokens = []
+        for symbol in symbols[:limit]:
+            if symbol not in coin_info:
+                continue
+            info = coin_info[symbol]
+            token = {
+                'symbol': symbol,
+                'name': info['name'],
+                'image': info['image'],
+                'market_cap_rank': info['market_cap_rank'],
+                'coingecko_id': info['coingecko_id']
+            }
+            
+            # Priority: Binance (real-time) > CoinGecko (cached)
+            if symbol in price_map:
+                token['price'] = price_map[symbol]['price']
+                token['change_24h'] = price_map[symbol]['change_24h']
+            elif symbol in cg_prices:
+                token['price'] = cg_prices[symbol]['price']
+                token['change_24h'] = cg_prices[symbol]['change_24h']
+            else:
+                token['price'] = None
+                token['change_24h'] = None
+            
+            tokens.append(token)
+        
+        return {"tokens": tokens}
+    except Exception as e:
+        print(f"[Dashboard Trending] Error: {e}")
+        return {"tokens": [], "error": str(e)}
+

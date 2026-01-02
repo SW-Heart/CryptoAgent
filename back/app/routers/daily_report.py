@@ -48,6 +48,30 @@ def init_daily_report_tables():
         )
     """)
     
+    # Suggested questions table - AI生成的每日推荐问题
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS suggested_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_date TEXT NOT NULL,
+            language TEXT DEFAULT 'zh',
+            questions TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(question_date, language)
+        )
+    """)
+    
+    # User question clicks table - 用户点击记录
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_question_clicks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            question_date TEXT NOT NULL,
+            current_index INTEGER DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, question_date)
+        )
+    """)
+    
     conn.commit()
     conn.close()
     print("[DailyReport] Tables initialized")
@@ -264,3 +288,156 @@ def get_all_subscribers(language: str = None):
     conn.close()
     
     return [{"email": row["email"], "token": row["unsubscribe_token"], "language": row["language"]} for row in rows]
+
+
+# ============= Suggested Questions API =============
+
+class QuestionClickRequest(BaseModel):
+    user_id: str
+    question_index: int
+
+
+@router.get("/api/suggested-questions")
+async def get_suggested_question(user_id: str = "", language: str = "zh"):
+    """
+    获取用户当前应该看到的推荐问题
+    返回单个问题，根据用户点击进度返回下一个未看过的
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    today = str(date.today())
+    
+    # 获取今日的推荐问题
+    cursor.execute("""
+        SELECT questions FROM suggested_questions 
+        WHERE question_date = ? AND language = ?
+    """, (today, language))
+    
+    row = cursor.fetchone()
+    
+    if not row:
+        conn.close()
+        # 如果今天还没生成问题，返回默认问题
+        default_zh = [
+            "今天市场怎么走？",
+            "BTC 能买吗？",
+            "什么板块最火？",
+            "止盈点位在哪？",
+            "链上有啥机会？",
+            "山寨季来了吗？",
+            "仓位怎么配？",
+            "空投值得做吗？",
+            "ETH 能追吗？",
+            "DeFi 收益哪家强？"
+        ]
+        default_en = [
+            "What's the market outlook?",
+            "Should I buy BTC now?",
+            "What sectors are hot?",
+            "Where to take profit?",
+            "Any on-chain alpha?",
+            "Is altcoin season here?",
+            "How to size positions?",
+            "Any airdrop worth doing?",
+            "Will ETH pump?",
+            "Best DeFi yields?"
+        ]
+        questions = default_zh if language == "zh" else default_en
+        current_index = 0
+    else:
+        import json
+        questions = json.loads(row["questions"])
+        
+        # 获取用户当前的进度
+        if user_id:
+            cursor.execute("""
+                SELECT current_index FROM user_question_clicks
+                WHERE user_id = ? AND question_date = ?
+            """, (user_id, today))
+            click_row = cursor.fetchone()
+            current_index = click_row["current_index"] if click_row else 0
+        else:
+            current_index = 0
+        
+        conn.close()
+    
+    # 循环显示问题
+    if current_index >= len(questions):
+        current_index = 0
+    
+    return {
+        "question": questions[current_index],
+        "current_index": current_index,
+        "total": len(questions),
+        "question_date": today,
+        "all_questions": questions  # 前端可以预加载所有问题
+    }
+
+
+@router.post("/api/suggested-questions/click")
+async def record_question_click(request: QuestionClickRequest):
+    """
+    记录用户点击问题，并返回下一个问题
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    today = str(date.today())
+    next_index = request.question_index + 1
+    
+    # 更新或插入用户点击记录
+    cursor.execute("""
+        INSERT OR REPLACE INTO user_question_clicks 
+        (user_id, question_date, current_index, updated_at)
+        VALUES (?, ?, ?, ?)
+    """, (request.user_id, today, next_index, datetime.now().isoformat()))
+    
+    conn.commit()
+    
+    # 获取今日问题列表
+    cursor.execute("""
+        SELECT questions FROM suggested_questions 
+        WHERE question_date = ?
+    """, (today,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        import json
+        questions = json.loads(row["questions"])
+        # 循环
+        if next_index >= len(questions):
+            next_index = 0
+        return {
+            "next_question": questions[next_index],
+            "next_index": next_index,
+            "total": len(questions)
+        }
+    
+    return {
+        "next_question": None,
+        "next_index": 0,
+        "total": 0
+    }
+
+
+def save_suggested_questions(question_date: str, questions: list, language: str = "zh"):
+    """保存AI生成的推荐问题到数据库"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    import json
+    questions_json = json.dumps(questions, ensure_ascii=False)
+    
+    cursor.execute("""
+        INSERT OR REPLACE INTO suggested_questions 
+        (question_date, language, questions, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (question_date, language, questions_json, datetime.now().isoformat()))
+    
+    conn.commit()
+    conn.close()
+    print(f"[SuggestedQuestions] Saved {len(questions)} questions for {question_date} ({language})")
+

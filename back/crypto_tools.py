@@ -205,6 +205,127 @@ def get_market_hotspots() -> str:
         return "Failed to fetch trending data"
 
 
+# CoinGecko API configuration
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
+
+
+def get_trending_tokens(limit: int = 10) -> str:
+    """
+    Get top trending tokens from CoinGecko with real-time Binance prices.
+    Returns token name, symbol, 24h price change, and current price.
+    Best for discovering what tokens are getting the most attention right now.
+    
+    Args:
+        limit: Number of results (1-15, default 10)
+    
+    Returns:
+        List of trending tokens with prices and 24h changes
+    """
+    limit = max(1, min(15, limit))
+    
+    try:
+        # Use CoinGecko Pro API if key available, otherwise free API
+        if COINGECKO_API_KEY:
+            headers = {
+                'User-Agent': 'Mozilla/5.0',
+                'x-cg-demo-api-key': COINGECKO_API_KEY
+            }
+            url = "https://api.coingecko.com/api/v3/search/trending"
+        else:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            url = "https://api.coingecko.com/api/v3/search/trending"
+        
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return f"Failed to fetch trending data: HTTP {resp.status_code}"
+        
+        data = resp.json()
+        trending_coins = data.get('coins', [])[:limit]
+        
+        if not trending_coins:
+            return "No trending tokens found"
+        
+        # Extract coin symbols for Binance price lookup
+        coin_symbols = []
+        coin_data = {}
+        for coin in trending_coins:
+            item = coin.get('item', {})
+            symbol = item.get('symbol', '').upper()
+            coin_symbols.append(symbol)
+            coin_data[symbol] = {
+                'name': item.get('name', 'Unknown'),
+                'symbol': symbol,
+                'market_cap_rank': item.get('market_cap_rank'),
+                'thumb': item.get('thumb', ''),
+                'coingecko_id': item.get('id', ''),
+                # CoinGecko trending API includes price data
+                'price_btc': item.get('price_btc', 0),
+            }
+        
+        # Fetch real-time prices from Binance
+        binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+        try:
+            ticker_url = f"{binance_base}/api/v3/ticker/24hr"
+            ticker_resp = requests.get(ticker_url, timeout=5).json()
+            
+            # Build price map
+            price_map = {}
+            for t in ticker_resp:
+                sym = t.get('symbol', '')
+                if sym.endswith('USDT'):
+                    base = sym.replace('USDT', '')
+                    price_map[base] = {
+                        'price': float(t.get('lastPrice', 0)),
+                        'change_24h': float(t.get('priceChangePercent', 0))
+                    }
+        except:
+            price_map = {}
+        
+        # Build report
+        result = "🔥 CoinGecko 热门搜索榜\n"
+        result += "━" * 35 + "\n\n"
+        
+        for i, symbol in enumerate(coin_symbols, 1):
+            info = coin_data[symbol]
+            
+            # Get price from Binance if available
+            if symbol in price_map:
+                price = price_map[symbol]['price']
+                change = price_map[symbol]['change_24h']
+                
+                # Smart price formatting
+                if price < 0.0001:
+                    price_str = f"${price:.8f}"
+                elif price < 0.01:
+                    price_str = f"${price:.6f}"
+                elif price < 1:
+                    price_str = f"${price:.4f}"
+                else:
+                    price_str = f"${price:,.2f}"
+                
+                # Change emoji
+                change_emoji = "📈" if change >= 0 else "📉"
+                change_str = f"{change_emoji} {change:+.2f}%"
+            else:
+                price_str = "N/A"
+                change_str = ""
+            
+            # Market cap rank
+            rank_str = f"#{info['market_cap_rank']}" if info['market_cap_rank'] else ""
+            
+            result += f"{i}. {info['name']} ({symbol}) {rank_str}\n"
+            if price_str != "N/A":
+                result += f"   💰 {price_str} | {change_str}\n"
+            else:
+                result += f"   ⚠️ 未在 Binance 上市\n"
+            result += "\n"
+        
+        return result.strip()
+        
+    except Exception as e:
+        return f"Failed to fetch trending tokens: {str(e)}"
+
+
 def get_top_gainers_cex(limit: int = 10) -> str:
     """
     Get top gaining tokens by 24h price change from Binance (CEX).

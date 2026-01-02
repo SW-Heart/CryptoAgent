@@ -546,6 +546,18 @@ def generate_daily_report():
                     # Save directly to database (avoid FastAPI import issues)
                     save_report_to_db(report_date, content, language)
                     print(f"[DailyReport] ✓ {language} report saved successfully")
+                    
+                    # Generate suggested questions based on the report
+                    try:
+                        from suggested_questions_agent import generate_suggested_questions
+                        from app.routers.daily_report import save_suggested_questions
+                        
+                        print(f"[DailyReport] Generating suggested questions for {language}...")
+                        questions = generate_suggested_questions(content, language)
+                        save_suggested_questions(report_date, questions, language)
+                        print(f"[DailyReport] ✓ {len(questions)} suggested questions saved for {language}")
+                    except Exception as e:
+                        print(f"[DailyReport] ✗ Error generating suggested questions: {e}")
                 else:
                     print(f"[DailyReport] ✗ Agent returned empty content")
                     print(f"[DailyReport] Full response: {data}")

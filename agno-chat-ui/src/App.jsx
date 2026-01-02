@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import html2canvas from 'html2canvas';
 import {
   Send, Settings, User, Bot, Trash2, Loader2, StopCircle,
-  Sparkles, MessageSquare, MessageSquarePlus, ChevronLeft, ChevronRight, Plus, History,
+  Sparkles, MessageSquare, MessageSquarePlus, Columns2, Plus, History,
   Image as ImageIcon, BarChart2, Globe, Code, Copy, Check,
   Search, Zap, Terminal, CheckCircle2, ArrowRight, Download, ArrowUp,
   TrendingUp, Flame, Newspaper, Activity, LogOut, LogIn,
@@ -28,7 +28,7 @@ import HomePage from './components/HomePage';
 // Import from new modular structure
 import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
-import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators } from './components/dashboard';
+import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
 
 
@@ -971,7 +971,7 @@ function AppContent() {
               {/* 折叠状态 hover 显示展开图标 */}
               {!isSidebarOpen && (
                 <div className="absolute inset-0 hidden lg:flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <ChevronRight className="w-5 h-5 text-slate-300" />
+                  <Columns2 className="w-5 h-5 text-slate-300" />
                 </div>
               )}
             </div>
@@ -984,7 +984,7 @@ function AppContent() {
             className={`p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors ${!isSidebarOpen && 'lg:hidden'}`}
             title={isSidebarOpen ? t('common.collapseSidebar') : t('common.expandSidebar')}
           >
-            {isSidebarOpen ? <ChevronLeft className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+            <Columns2 className="w-5 h-5" />
           </button>
         </div>
 
@@ -1162,23 +1162,27 @@ function AppContent() {
           {user ? (
             // Logged in user
             <div className="relative" ref={userMenuRef}>
-              <button
-                onClick={() => setShowUserMenu(!showUserMenu)}
-                className={`flex items-center gap-3 rounded-lg hover:bg-slate-800 transition-colors ${isSidebarOpen ? 'w-full px-2 py-1' : 'lg:p-2 w-full px-2 py-1'}`}
+              <div
+                className={`flex items-center gap-3 rounded-lg transition-colors ${isSidebarOpen ? 'w-full px-2 py-1' : 'lg:p-2 w-full px-2 py-1'}`}
               >
-                {/* Avatar */}
-                {(user.user_metadata?.picture || user.user_metadata?.avatar_url) ? (
-                  <img
-                    src={user.user_metadata.picture || user.user_metadata.avatar_url}
-                    alt="avatar"
-                    className="w-8 h-8 rounded-full flex-shrink-0 object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                    {user.user_metadata?.full_name?.[0]?.toUpperCase() || user.user_metadata?.name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || 'W'}
-                  </div>
-                )}
+                {/* Avatar - clickable */}
+                <div
+                  onClick={() => setShowUserMenu(!showUserMenu)}
+                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                >
+                  {(user.user_metadata?.picture || user.user_metadata?.avatar_url) ? (
+                    <img
+                      src={user.user_metadata.picture || user.user_metadata.avatar_url}
+                      alt="avatar"
+                      className="w-8 h-8 rounded-full flex-shrink-0 object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                      {user.user_metadata?.full_name?.[0]?.toUpperCase() || user.user_metadata?.name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || 'W'}
+                    </div>
+                  )}
+                </div>
                 {/* Credits badge - capsule style */}
                 <div className={`flex items-center gap-2 ${!isSidebarOpen && 'lg:hidden'}`}>
                   {/* Check-in button */}
@@ -1217,7 +1221,7 @@ function AppContent() {
                     <span className="text-sm font-semibold text-indigo-300">{credits ?? '--'}</span>
                   </div>
                 </div>
-              </button>
+              </div>
 
               {/* User Dropdown Menu */}
               {showUserMenu && (
@@ -1308,22 +1312,24 @@ function AppContent() {
           /* Chat Section */
           <main className={`flex flex-col h-full relative bg-black transition-all duration-300 ${workspaceOpen ? 'w-1/3 min-w-[400px]' : 'flex-1'}`}>
 
-            {/* Header */}
-            <header className="h-16 flex items-center justify-between px-4 lg:px-6 bg-black sticky top-0 z-10">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setShowMobileSidebar(!showMobileSidebar)}
-                  className="lg:hidden p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition-colors"
-                >
-                  <History className="w-5 h-5" />
-                </button>
+            {/* Header with TrendingBar */}
+            <header className="bg-black sticky top-0 z-10 flex items-center">
+              {/* Mobile menu button */}
+              <button
+                onClick={() => setShowMobileSidebar(!showMobileSidebar)}
+                className="lg:hidden p-2 ml-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded-lg transition-colors flex-shrink-0"
+              >
+                <History className="w-5 h-5" />
+              </button>
 
-                <div className="flex items-center gap-2">
-                  <h1 className="font-semibold text-slate-100">Alpha</h1>
-                  <span className="px-2 py-0.5 rounded-full bg-purple-600/80 text-white text-xs font-medium">
-                    Beta
-                  </span>
-                </div>
+              {/* TrendingBar */}
+              <div className="flex-1 min-w-0">
+                <TrendingBar
+                  onTokenClick={(symbol) => {
+                    setInput(`分析 ${symbol} 的走势`);
+                    inputRef.current?.focus();
+                  }}
+                />
               </div>
             </header>
 
@@ -1335,9 +1341,10 @@ function AppContent() {
                   {/* Title and Input - centered 768px width */}
                   <div className="w-full space-y-6 text-center mb-8" style={{ maxWidth: '768px' }}>
 
-                    <h2 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-orange-400 via-purple-400 to-cyan-400 bg-clip-text text-transparent tracking-tight">
-                      {t('home.title')}
-                    </h2>
+                    <SuggestedQuestion
+                      userId={userId}
+                      onFillInput={(text) => setInput(text)}
+                    />
 
                     <div className="relative group">
                       <div className="relative bg-[#131722] border border-white/10 rounded-2xl flex flex-col p-5 shadow-xl">

@@ -25,6 +25,7 @@ from crypto_tools import (
     get_batch_technical_analysis, # 合并: 周期对齐 + EMA + ATR + 费率
     get_key_levels,               # 合并: Fib + EMA + POC + 共振区
     get_pro_crypto_news,          # 新闻 (独立，内容长)
+    get_trending_tokens,          # 热门代币榜
 )
 
 # 导入ETF工具 (宏观参考)
@@ -59,6 +60,7 @@ trading_agent = Agent(
         get_batch_technical_analysis, # 技术分析一站式
         get_key_levels,               # 关键位一站式
         get_pro_crypto_news,          # 新闻
+        get_trending_tokens,          # 热门代币榜
         get_etf_daily,                # ETF 资金流
         
         # ========== 持仓与警报 (2 个) ==========
