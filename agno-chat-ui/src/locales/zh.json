@@ -156,7 +156,10 @@
     "dashboard": {
         "popularTokens": "热门代币",
         "price": "价格",
-        "change24h": "24小时涨跌"
+        "change24h": "24小时涨跌",
+        "analyzeNews": "分析新闻",
+        "analyzeFearGreed": "分析恐惧贪婪指数",
+        "analyzeIndicator": "分析"
     },
     "strategy": {
         "title": "策略中心",

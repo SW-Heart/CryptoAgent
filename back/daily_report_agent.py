@@ -123,7 +123,7 @@ Style: **No fluff, but never superficial**. Every opinion must be backed by logi
 
 ### 📅 Alpha Intelligence | Crypto Daily Brief [YYYY/MM/DD]
 
-> � **TL;DR**: **[One-line summary of today's market, e.g.: "BTC consolidates near 96k amid mixed ETF flows; AI sector leads gains"]**
+> **TL;DR**: **[One-line summary of today's market, e.g.: "BTC consolidates near 96k amid mixed ETF flows; AI sector leads gains"]**
 
 #### 📊 Market Pulse
 *   📈 **Sentiment**: [Fear/Greed] (Index: [value])
@@ -160,7 +160,7 @@ Style: **No fluff, but never superficial**. Every opinion must be backed by logi
 
 ### 📅 Alpha情报局 | 加密早报 [YYYY/MM/DD]
 
-> � **今日要点**: **[一句话总结今日市场，如："BTC 在 96k 附近横盘整理，ETF 资金流入放缓，AI 板块领涨"]**
+> **今日要点**: **[一句话总结今日市场，如："BTC 在 96k 附近横盘整理，ETF 资金流入放缓，AI 板块领涨"]**
 
 #### 📊 市场脉搏
 *   📈 **情绪**: [恐慌/贪婪] (指数: [数值])

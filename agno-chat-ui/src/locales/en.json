@@ -156,7 +156,10 @@
     "dashboard": {
         "popularTokens": "Popular Tokens",
         "price": "Price",
-        "change24h": "24h Change"
+        "change24h": "24h Change",
+        "analyzeNews": "Analyze news",
+        "analyzeFearGreed": "Analyze Fear & Greed Index",
+        "analyzeIndicator": "Analyze"
     },
     "strategy": {
         "title": "Strategy Nexus",

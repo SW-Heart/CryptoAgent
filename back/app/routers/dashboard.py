@@ -328,76 +328,116 @@ async def get_dashboard_indicators():
 
 @router.get("/onchain-hot")
 async def get_dashboard_onchain_hot(limit: int = 6):
-    """Get on-chain hot tokens from DexScreener (5min cache)"""
+    """Get on-chain hot tokens from DexScreener (10min cache)"""
     try:
         cache_key = f"onchain_hot_{limit}"
         if is_cache_valid(cache_key, 600):  # 10min cache
             return {"tokens": get_cache(cache_key)}
         
-        # Import the tool function
-        from crypto_tools import get_onchain_hot_gainers
-        
-        # Get raw data from the tool
-        raw_result = get_onchain_hot_gainers(limit)
-        
-        # Parse the result into structured data
         tokens = []
-        if raw_result and "仅找到" not in raw_result and "No tokens" not in raw_result:
-            lines = raw_result.split('\n')
-            current_token = {}
-            
-            for line in lines:
-                line = line.strip()
+        all_addresses = set()
+        
+        def process_token(address: str) -> dict:
+            """Fetch token data and check quality criteria"""
+            try:
+                token_url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+                resp = requests.get(token_url, timeout=5)
+                if resp.status_code != 200:
+                    return None
                 
-                # Parse token entry (e.g., "1. unicorn (SOLANA)")
-                if line and line[0].isdigit() and '. ' in line:
-                    if current_token:
-                        tokens.append(current_token)
-                    
-                    # Extract symbol and chain
-                    parts = line.split('. ', 1)[1]  # Remove "1. "
-                    if '(' in parts and ')' in parts:
-                        symbol = parts.split(' (')[0]
-                        chain = parts.split('(')[1].split(')')[0]
-                        current_token = {"symbol": symbol, "chain": chain}
-                    else:
-                        current_token = {"symbol": parts, "chain": "Unknown"}
+                data = resp.json()
+                pairs = data.get('pairs', [])
+                if not pairs:
+                    return None
                 
-                # Parse price change (e.g., "📈 +932.0% | $0.000538")
-                elif '📈' in line:
-                    parts = line.replace('📈', '').strip().split('|')
-                    if len(parts) >= 2:
-                        change_str = parts[0].strip().replace('+', '').replace('%', '')
-                        price_str = parts[1].strip().replace('$', '').replace(',', '')
-                        try:
-                            current_token["change_24h"] = float(change_str)
-                            current_token["price"] = float(price_str)
-                        except ValueError:
-                            pass
+                # Get the pair with highest liquidity
+                best_pair = max(pairs, key=lambda p: float(p.get('liquidity', {}).get('usd', 0) or 0))
                 
-                # Parse market data (e.g., "💰 市值: $538K | 📊 交易量: $2.1M | 💧 流动性: $76K")
-                elif '💰' in line:
-                    # Extract market cap
-                    if '市值:' in line or 'MCap:' in line:
-                        mcap_part = line.split('市值:' if '市值:' in line else 'MCap:')[1].split('|')[0].strip()
-                        current_token["market_cap"] = mcap_part
-                    # Extract volume
-                    if '交易量:' in line or 'Vol:' in line:
-                        vol_part = line.split('交易量:' if '交易量:' in line else 'Vol:')[1].split('|')[0].strip()
-                        current_token["volume_24h"] = vol_part
-                    # Extract liquidity
-                    if '流动性:' in line or 'Liq:' in line:
-                        liq_part = line.split('流动性:' if '流动性:' in line else 'Liq:')[1].strip()
-                        current_token["liquidity"] = liq_part
+                liquidity = float(best_pair.get('liquidity', {}).get('usd', 0) or 0)
+                volume_24h = float(best_pair.get('volume', {}).get('h24', 0) or 0)
+                market_cap = float(best_pair.get('marketCap', 0) or best_pair.get('fdv', 0) or 0)
+                price_change_24h = float(best_pair.get('priceChange', {}).get('h24', 0) or 0)
+                price_usd = float(best_pair.get('priceUsd', 0) or 0)
                 
-                # Parse Twitter link
-                elif '🐦' in line:
-                    twitter_url = line.replace('🐦', '').strip()
-                    current_token["twitter"] = twitter_url
-            
-            # Don't forget the last token
-            if current_token:
-                tokens.append(current_token)
+                # Quality filters
+                if liquidity < 50000 or volume_24h < 100000 or market_cap < 100000 or price_change_24h < 10:
+                    return None
+                
+                # Extract social info
+                info = best_pair.get('info', {})
+                socials = info.get('socials', [])
+                websites = info.get('websites', [])
+                
+                # Build social links list
+                social_links = []
+                for social in socials:
+                    social_type = social.get('type', '').lower()
+                    url = social.get('url', '')
+                    if url:
+                        social_links.append({'type': social_type, 'url': url})
+                
+                # Get website URL
+                website_url = websites[0].get('url') if websites else None
+                
+                # Format market cap
+                def format_usd(value):
+                    if value >= 1e9:
+                        return f"${value/1e9:.1f}B"
+                    elif value >= 1e6:
+                        return f"${value/1e6:.1f}M"
+                    elif value >= 1e3:
+                        return f"${value/1e3:.0f}K"
+                    return f"${value:.0f}"
+                
+                return {
+                    'symbol': best_pair.get('baseToken', {}).get('symbol', 'Unknown'),
+                    'chain': best_pair.get('chainId', 'unknown'),
+                    'price': price_usd,
+                    'change_24h': price_change_24h,
+                    'market_cap': format_usd(market_cap),
+                    'socials': social_links,  # List of {type, url}
+                    'website': website_url,
+                    'dex_url': best_pair.get('url', ''),  # DexScreener page URL
+                    'address': address
+                }
+            except Exception:
+                return None
+        
+        # Fetch from Token Boosts (latest)
+        try:
+            boosts_resp = requests.get("https://api.dexscreener.com/token-boosts/latest/v1", timeout=10)
+            if boosts_resp.status_code == 200:
+                for token in boosts_resp.json():
+                    addr = token.get('tokenAddress', '')
+                    if addr and addr not in all_addresses:
+                        all_addresses.add(addr)
+                        result = process_token(addr)
+                        if result:
+                            tokens.append(result)
+                            if len(tokens) >= limit:
+                                break
+        except Exception:
+            pass
+        
+        # If not enough, try Token Boosts (top)
+        if len(tokens) < limit:
+            try:
+                top_resp = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=10)
+                if top_resp.status_code == 200:
+                    for token in top_resp.json():
+                        addr = token.get('tokenAddress', '')
+                        if addr and addr not in all_addresses:
+                            all_addresses.add(addr)
+                            result = process_token(addr)
+                            if result:
+                                tokens.append(result)
+                                if len(tokens) >= limit:
+                                    break
+            except Exception:
+                pass
+        
+        # Sort by 24h change
+        tokens.sort(key=lambda x: x['change_24h'], reverse=True)
         
         set_cache(cache_key, tokens)
         return {"tokens": tokens}

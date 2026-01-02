@@ -1446,11 +1446,10 @@ function AppContent() {
                               const isZh = i18n.language?.startsWith('zh');
                               const displayTitle = isZh ? (news.title_zh || news.title || news.title_en) : (news.title_en || news.title);
                               const displaySummary = isZh ? (news.summary_zh || '') : (news.summary_en || '');
-                              const queryTitle = news.title_en || news.title || displayTitle;
                               return (
                                 <button
                                   key={i}
-                                  onClick={() => setInput(`Analysis news: '${queryTitle}'`)}
+                                  onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
                                   className="w-full flex items-start gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition-colors text-left"
                                 >
                                   <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
@@ -1462,30 +1461,30 @@ function AppContent() {
                                   </div>
                                 </button>
                               )
-                            }) : (
-                              <>
-                                <button onClick={() => setInput("Analysis news: 'Bitcoin holds steady as market awaits Fed decision'")} className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left">
-                                  <span className="text-xs text-slate-500">1.</span>
-                                  <span className="text-sm text-slate-300">Bitcoin holds steady as market awaits Fed decision</span>
-                                </button>
-                                <button onClick={() => setInput("Analysis news: 'Ethereum Layer 2 solutions see record TVL growth'")} className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left">
-                                  <span className="text-xs text-slate-500">2.</span>
-                                  <span className="text-sm text-slate-300">Ethereum Layer 2 solutions see record TVL growth</span>
-                                </button>
-                                <button onClick={() => setInput("Analysis news: 'Institutional crypto adoption accelerates in Asia'")} className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left">
-                                  <span className="text-xs text-slate-500">3.</span>
-                                  <span className="text-sm text-slate-300">Institutional crypto adoption accelerates in Asia</span>
-                                </button>
-                                <button onClick={() => setInput("Analysis news: 'DeFi protocols show renewed growth momentum'")} className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left">
-                                  <span className="text-xs text-slate-500">4.</span>
-                                  <span className="text-sm text-slate-300">DeFi protocols show renewed growth momentum</span>
-                                </button>
-                                <button onClick={() => setInput("Analysis news: 'NFT market sees signs of recovery in Q4'")} className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left">
-                                  <span className="text-xs text-slate-500">5.</span>
-                                  <span className="text-sm text-slate-300">NFT market sees signs of recovery in Q4</span>
-                                </button>
-                              </>
-                            )}
+                            }) : (() => {
+                              // Default news when no dashboardNews
+                              const DEFAULT_NEWS = [
+                                { title_en: "Bitcoin holds steady as market awaits Fed decision", title_zh: "比特币保持稳定，市场等待美联储决议" },
+                                { title_en: "Ethereum Layer 2 solutions see record TVL growth", title_zh: "以太坊二层解决方案TVL创历史新高" },
+                                { title_en: "Institutional crypto adoption accelerates in Asia", title_zh: "亚洲机构加密货币采用加速" },
+                                { title_en: "DeFi protocols show renewed growth momentum", title_zh: "DeFi协议增长势头强劲" },
+                                { title_en: "NFT market sees signs of recovery in Q4", title_zh: "NFT市场第四季度复苏迹象显现" }
+                              ];
+                              const isZh = i18n.language?.startsWith('zh');
+                              return DEFAULT_NEWS.map((news, i) => {
+                                const displayTitle = isZh ? news.title_zh : news.title_en;
+                                return (
+                                  <button
+                                    key={i}
+                                    onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
+                                    className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
+                                  >
+                                    <span className="text-xs text-slate-500">{i + 1}.</span>
+                                    <span className="text-sm text-slate-300">{displayTitle}</span>
+                                  </button>
+                                );
+                              });
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1508,7 +1507,10 @@ function AppContent() {
 
                           {/* Fear & Greed at top */}
                           <button
-                            onClick={() => setInput(`Analyze today's Fear & Greed Index: ${dashboardFearGreed.value} (${dashboardFearGreed.classification})`)}
+                            onClick={() => {
+                              const translatedClassification = t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification);
+                              setInput(`${t('dashboard.analyzeFearGreed', 'Analyze Fear & Greed Index')}: ${dashboardFearGreed.value} (${translatedClassification})`);
+                            }}
                             className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700 rounded-lg mb-3 transition-colors"
                           >
                             <div className="flex items-center gap-2">
@@ -1544,7 +1546,7 @@ function AppContent() {
                               return (
                                 <button
                                   key={i}
-                                  onClick={() => setInput(`Analyze ${indicator.name}: ${indicator.value}`)}
+                                  onClick={() => setInput(`${t('dashboard.analyzeIndicator', 'Analyze')}: ${translatedName} ${indicator.value}`)}
                                   className="flex flex-col p-2.5 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors text-left"
                                 >
                                   <span className="text-xs text-slate-500 truncate">{translatedName}</span>

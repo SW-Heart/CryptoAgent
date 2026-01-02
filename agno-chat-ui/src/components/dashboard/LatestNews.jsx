@@ -75,7 +75,7 @@ export default function LatestNews({ news = [], onSelectNews }) {
                     return (
                         <button
                             key={i}
-                            onClick={() => onSelectNews(`Analysis news: '${item.title_en || item.title || title}'`)}
+                            onClick={() => onSelectNews(`${t('dashboard.analyzeNews', 'Analyze news')}: '${title}'`)}
                             className="w-full flex items-start gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition-colors text-left"
                         >
                             <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
