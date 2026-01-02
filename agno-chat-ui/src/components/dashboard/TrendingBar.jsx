@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Flame } from 'lucide-react';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import React, { useState, useEffect } from 'react';
+import { Flame, Star, TrendingUp, Pause, Play, Download, ExternalLink } from 'lucide-react';
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 /**
  * TrendingBar - Horizontal scrolling bar showing CoinGecko trending tokens
@@ -19,7 +20,7 @@ export default function TrendingBar({ onTokenClick }) {
     useEffect(() => {
         const fetchTrending = async () => {
             try {
-                const res = await fetch(`${BASE_URL}/api/dashboard/trending?limit=10`);
+                const res = await fetch(`${BASE_URL} /api/dashboard / trending ? limit = 10`);
                 if (res.ok) {
                     const data = await res.json();
                     setTokens(data.tokens || []);
@@ -41,10 +42,10 @@ export default function TrendingBar({ onTokenClick }) {
     // Format price with smart decimals
     const formatPrice = (price) => {
         if (!price) return 'N/A';
-        if (price < 0.0001) return `$${price.toFixed(8)}`;
-        if (price < 0.01) return `$${price.toFixed(6)}`;
-        if (price < 1) return `$${price.toFixed(4)}`;
-        return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        if (price < 0.0001) return `$${price.toFixed(8)} `;
+        if (price < 0.01) return `$${price.toFixed(6)} `;
+        if (price < 1) return `$${price.toFixed(4)} `;
+        return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} `;
     };
 
     if (loading || tokens.length === 0) {
@@ -75,13 +76,13 @@ export default function TrendingBar({ onTokenClick }) {
                         <div
                             className="flex gap-6 whitespace-nowrap animate-marquee"
                             style={{
-                                animationDuration: `${tokens.length * 4}s`,
+                                animationDuration: `${tokens.length * 4} s`,
                                 animationPlayState: isPaused ? 'paused' : 'running',
                             }}
                         >
                             {displayTokens.map((token, idx) => (
                                 <button
-                                    key={`${token.symbol}-${idx}`}
+                                    key={`${token.symbol} -${idx} `}
                                     onClick={() => onTokenClick?.(token.symbol)}
                                     className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/50 transition-colors flex-shrink-0"
                                 >
@@ -106,8 +107,8 @@ export default function TrendingBar({ onTokenClick }) {
 
                                     {/* 24h Change */}
                                     {token.change_24h !== null && (
-                                        <span className={`text-xs font-medium ${token.change_24h >= 0 ? 'text-green-400' : 'text-red-400'
-                                            }`}>
+                                        <span className={`text - xs font - medium ${token.change_24h >= 0 ? 'text-green-400' : 'text-red-400'
+                                            } `}>
                                             {token.change_24h >= 0 ? '+' : ''}{token.change_24h?.toFixed(2)}%
                                         </span>
                                     )}
@@ -120,14 +121,14 @@ export default function TrendingBar({ onTokenClick }) {
 
             {/* CSS for marquee animation */}
             <style>{`
-                @keyframes marquee {
-                    0% { transform: translateX(0); }
-                    100% { transform: translateX(-50%); }
-                }
-                .animate-marquee {
-                    animation: marquee linear infinite;
-                }
-            `}</style>
+@keyframes marquee {
+    0 % { transform: translateX(0); }
+    100 % { transform: translateX(-50 %); }
+}
+                .animate - marquee {
+    animation: marquee linear infinite;
+}
+`}</style>
         </div>
     );
 }
