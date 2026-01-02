@@ -70,19 +70,17 @@ export default function TrendingBar({ onTokenClick }) {
 
                 {/* Scrolling container - CRITICAL: must have overflow:hidden and explicit width */}
                 <div className="flex-1 overflow-hidden relative h-full min-w-0">
-                    <div
-                        className="absolute inset-0 flex items-center"
-                    >
+                    <div className="absolute inset-0 flex items-center">
                         <div
                             className="flex gap-6 whitespace-nowrap animate-marquee"
                             style={{
-                                animationDuration: `${tokens.length * 4} s`,
+                                animationDuration: `${tokens.length * 4}s`,
                                 animationPlayState: isPaused ? 'paused' : 'running',
                             }}
                         >
                             {displayTokens.map((token, idx) => (
                                 <button
-                                    key={`${token.symbol} -${idx} `}
+                                    key={`${token.symbol}-${idx}`}
                                     onClick={() => onTokenClick?.(token.symbol)}
                                     className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/50 transition-colors flex-shrink-0"
                                 >
@@ -107,8 +105,8 @@ export default function TrendingBar({ onTokenClick }) {
 
                                     {/* 24h Change */}
                                     {token.change_24h !== null && (
-                                        <span className={`text - xs font - medium ${token.change_24h >= 0 ? 'text-green-400' : 'text-red-400'
-                                            } `}>
+                                        <span className={`text-xs font-medium ${token.change_24h >= 0 ? 'text-green-400' : 'text-red-400'
+                                            }`}>
                                             {token.change_24h >= 0 ? '+' : ''}{token.change_24h?.toFixed(2)}%
                                         </span>
                                     )}
@@ -122,10 +120,10 @@ export default function TrendingBar({ onTokenClick }) {
             {/* CSS for marquee animation */}
             <style>{`
 @keyframes marquee {
-    0 % { transform: translateX(0); }
-    100 % { transform: translateX(-50 %); }
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
 }
-                .animate - marquee {
+.animate-marquee {
     animation: marquee linear infinite;
 }
 `}</style>
