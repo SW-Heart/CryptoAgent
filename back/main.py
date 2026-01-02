@@ -98,20 +98,24 @@ class TokenCreditMiddleware(BaseHTTPMiddleware):
                         data["credits_deducted"] = result
                         body = json.dumps(data).encode()
                     
-                    # 重新构建响应
+                    # 重新构建响应 - 不复制原始 Content-Length，让框架自动计算
+                    new_headers = {k: v for k, v in response.headers.items() 
+                                   if k.lower() != "content-length"}
                     return Response(
                         content=body,
                         status_code=response.status_code,
-                        headers=dict(response.headers),
+                        headers=new_headers,
                         media_type=response.media_type
                     )
                 except Exception as e:
                     print(f"[TokenCreditMiddleware] Error processing response: {e}")
                     # 如果处理失败，返回原始响应体
+                    new_headers = {k: v for k, v in response.headers.items() 
+                                   if k.lower() != "content-length"}
                     return Response(
                         content=body if 'body' in locals() else b"",
                         status_code=response.status_code,
-                        headers=dict(response.headers),
+                        headers=new_headers,
                         media_type=response.media_type
                     )
         
