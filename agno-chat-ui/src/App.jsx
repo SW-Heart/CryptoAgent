@@ -28,7 +28,7 @@ import HomePage from './components/HomePage';
 // Import from new modular structure
 import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
-import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
+import { QuickPrompts, QuickPromptsPills, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
 
 
@@ -88,6 +88,32 @@ function AppContent() {
   const [dashboardIndicators, setDashboardIndicators] = useState([]);
   const [dashboardLoading, setDashboardLoading] = useState(true); // Loading state for skeleton
 
+  // Trending State (lifted from TrendingBar for caching) - read from localStorage on init
+  const [trendingTokens, setTrendingTokens] = useState(() => {
+    try {
+      const cached = localStorage.getItem('trendingTokens');
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached);
+        // Use cache if less than 10 minutes old
+        if (Date.now() - timestamp < 10 * 60 * 1000) {
+          return data;
+        }
+      }
+    } catch (e) { }
+    return [];
+  });
+  const [trendingLoading, setTrendingLoading] = useState(() => {
+    // If we have cached data, don't show loading
+    try {
+      const cached = localStorage.getItem('trendingTokens');
+      if (cached) {
+        const { data } = JSON.parse(cached);
+        return !data || data.length === 0;
+      }
+    } catch (e) { }
+    return true;
+  });
+
   // Fetch credits and check-in status when user logs in
   useEffect(() => {
     if (user?.id) {
@@ -143,11 +169,12 @@ function AppContent() {
 
     const fetchDashboardData = async () => {
       // Use Promise.allSettled to not block on slow APIs
-      const [newsRes, tokensRes, fearGreedRes, indicatorsRes] = await Promise.all([
+      const [newsRes, tokensRes, fearGreedRes, indicatorsRes, trendingRes] = await Promise.all([
         fetchWithTimeout(`${BASE_URL}/api/dashboard/news`, 5000, { news: [] }),
         fetchWithTimeout(`${BASE_URL}/api/dashboard/tokens`, 5000, { tokens: [] }),
         fetchWithTimeout(`${BASE_URL}/api/dashboard/fear-greed`, 5000, { value: 50, classification: 'Neutral' }),
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/indicators`, 5000, { indicators: [] })
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/indicators`, 5000, { indicators: [] }),
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/trending?limit=10`, 5000, { tokens: [] })
       ]);
 
       setDashboardNews(newsRes.news || []);
@@ -155,6 +182,18 @@ function AppContent() {
       setDashboardFearGreed(fearGreedRes);
       setDashboardIndicators(indicatorsRes.indicators || []);
       setDashboardLoading(false); // Data loaded, hide skeleton
+
+      // Update trending and cache to localStorage
+      const trendingData = trendingRes.tokens || [];
+      if (trendingData.length > 0) {
+        setTrendingTokens(trendingData);
+        setTrendingLoading(false);
+        try {
+          localStorage.setItem('trendingTokens', JSON.stringify({ data: trendingData, timestamp: Date.now() }));
+        } catch (e) { }
+      } else {
+        setTrendingLoading(false);
+      }
     };
 
     fetchDashboardData();
@@ -173,9 +212,26 @@ function AppContent() {
       fetch(`${BASE_URL}/api/dashboard/indicators`).then(r => r.json()).then(data => setDashboardIndicators(data.indicators || [])).catch(() => { });
     }, 600000);
 
+    // Trending refresh every 5 minutes
+    const trendingInterval = setInterval(() => {
+      fetch(`${BASE_URL}/api/dashboard/trending?limit=10`)
+        .then(r => r.json())
+        .then(data => {
+          const tokens = data.tokens || [];
+          if (tokens.length > 0) {
+            setTrendingTokens(tokens);
+            try {
+              localStorage.setItem('trendingTokens', JSON.stringify({ data: tokens, timestamp: Date.now() }));
+            } catch (e) { }
+          }
+        })
+        .catch(console.error);
+    }, 300000);
+
     return () => {
       clearInterval(tokenInterval);
       clearInterval(otherInterval);
+      clearInterval(trendingInterval);
     };
   }, []);
 
@@ -1335,6 +1391,8 @@ function AppContent() {
               {/* TrendingBar */}
               <div className="flex-1 min-w-0">
                 <TrendingBar
+                  tokens={trendingTokens}
+                  loading={trendingLoading}
                   onTokenClick={(symbol) => {
                     setInput(`分析 ${symbol} 的走势`);
                     inputRef.current?.focus();
@@ -1425,31 +1483,30 @@ function AppContent() {
 
                       {/* Row 1: Quick Prompts (50%) + Latest News (50%) */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
-                        {/* Top Left: Inspiration Prompts */}
-                        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                            <Sparkles className="w-4 h-4 text-purple-400" />
-                            {t('home.quickPrompts.title')}
-                          </h3>
-                          <div className="flex flex-col justify-between h-[calc(100%-32px)]">
-                            {[
-                              { key: 'marketAnalysis', text: t('home.quickPrompts.marketAnalysis') },
-                              { key: 'investmentStrategies', text: t('home.quickPrompts.investmentStrategies') },
-                              { key: 'marketForecast', text: t('home.quickPrompts.marketForecast') },
-                              { key: 'investmentOpportunities', text: t('home.quickPrompts.investmentOpportunities') },
-                              { key: 'topGainers', text: t('home.quickPrompts.topGainers') },
-                              { key: 'defiYields', text: t('home.quickPrompts.defiYields') }
-                            ].map((prompt, i) => (
-                              <button
-                                key={i}
-                                onClick={() => setInput(prompt.text)}
-                                className="w-full text-left px-3 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-                              >
-                                {prompt.text}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                        {/* Top Left: Trending Prompts - Pills with rotation */}
+                        {(() => {
+                          // Static prompts from translations
+                          const staticPrompts = [
+                            { key: 'marketAnalysis', text: t('home.quickPrompts.marketAnalysis') },
+                            { key: 'investmentStrategies', text: t('home.quickPrompts.investmentStrategies') },
+                            { key: 'marketForecast', text: t('home.quickPrompts.marketForecast') },
+                            { key: 'investmentOpportunities', text: t('home.quickPrompts.investmentOpportunities') },
+                            { key: 'topGainers', text: t('home.quickPrompts.topGainers') },
+                            { key: 'defiYields', text: t('home.quickPrompts.defiYields') },
+                            { key: 'whale', text: t('home.quickPrompts.whale') },
+                            { key: 'meme', text: t('home.quickPrompts.meme') },
+                            { key: 'airdrop', text: t('home.quickPrompts.airdrop') },
+                            { key: 'layer2', text: t('home.quickPrompts.layer2') },
+                            { key: 'altseason', text: t('home.quickPrompts.altseason') },
+                            { key: 'macro', text: t('home.quickPrompts.macro') }
+                          ];
+                          return (
+                            <QuickPromptsPills
+                              staticPrompts={staticPrompts}
+                              onSelectPrompt={(text) => setInput(text)}
+                            />
+                          );
+                        })()}
 
                         {/* Top Right: Latest News */}
                         <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">

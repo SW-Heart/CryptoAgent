@@ -40,13 +40,19 @@
         "title": "Your Personal Crypto Analyst",
         "placeholder": "Ask about prices, find opportunities, analyze projects...",
         "quickPrompts": {
-            "title": "Quick Prompts",
-            "marketAnalysis": "Today's Market Analysis",
-            "investmentStrategies": "What investment strategies suit the current market?",
-            "marketForecast": "Market Forecast: Future trends prediction",
-            "investmentOpportunities": "Current investment opportunities search",
-            "topGainers": "Top gainers and losers today",
-            "defiYields": "DeFi yields: Best opportunities now"
+            "title": "Trending Now",
+            "marketAnalysis": "🔥 Why did BTC break $90k today?",
+            "investmentStrategies": "🎯 Safest investment strategy right now?",
+            "marketForecast": "🔮 What's the market outlook for next week?",
+            "investmentOpportunities": "💎 Which coins are undervalued?",
+            "topGainers": "🚀 Who's leading the rally today?",
+            "defiYields": "💰 Best stablecoin yield farms right now?",
+            "whale": "🐳 What are whales buying?",
+            "meme": "🎭 Hottest meme coin today?",
+            "airdrop": "🎁 Any airdrops worth farming?",
+            "layer2": "⚡️ Latest L2 ecosystem updates?",
+            "altseason": "📈 Is altseason coming?",
+            "macro": "🌍 How is the Fed affecting crypto?"
         },
         "latestNews": "Latest News",
         "popularTokens": {

@@ -1,9 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Flame, Star, TrendingUp, Pause, Play, Download, ExternalLink } from 'lucide-react';
 import { TrendingBarSkeleton } from './Skeleton';
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 /**
  * TrendingBar - Horizontal scrolling bar showing CoinGecko trending tokens
@@ -11,34 +9,14 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
  * - Auto-scrolling marquee effect
  * - Pauses on hover
  * - Shows price and 24h change from Binance
+ * 
+ * Props:
+ * - tokens: Array of trending tokens (managed by parent for caching)
+ * - loading: Boolean indicating if data is still loading
+ * - onTokenClick: Callback when a token is clicked
  */
-export default function TrendingBar({ onTokenClick }) {
-    const [tokens, setTokens] = useState([]);
+export default function TrendingBar({ tokens = [], loading = false, onTokenClick }) {
     const [isPaused, setIsPaused] = useState(false);
-    const [loading, setLoading] = useState(true);
-
-    // Fetch trending tokens
-    useEffect(() => {
-        const fetchTrending = async () => {
-            try {
-                const res = await fetch(`${BASE_URL}/api/dashboard/trending?limit=10`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setTokens(data.tokens || []);
-                }
-            } catch (err) {
-                console.error('[TrendingBar] Fetch error:', err);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchTrending();
-
-        // Refresh every 5 minutes
-        const interval = setInterval(fetchTrending, 300000);
-        return () => clearInterval(interval);
-    }, []);
 
     // Format price with smart decimals
     const formatPrice = (price) => {
