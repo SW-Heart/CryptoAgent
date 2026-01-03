@@ -12,7 +12,7 @@ const skeletonBase = "bg-slate-700/50 animate-pulse";
 // KeyIndicators 骨架屏
 export function KeyIndicatorsSkeleton() {
     return (
-        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden w-full min-w-0 box-border">
+        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
             {/* Header */}
             <div className="flex items-center gap-2 mb-3">
                 <div className={`${skeletonBase} rounded-full w-4 h-4 flex-shrink-0`} />
@@ -47,7 +47,7 @@ export function KeyIndicatorsSkeleton() {
 // PopularTokens 骨架屏
 export function PopularTokensSkeleton() {
     return (
-        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden flex flex-col w-full min-w-0 box-border">
+        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden flex flex-col" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
             {/* Header */}
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
                 <div className="flex items-center gap-2">
@@ -86,7 +86,7 @@ export function PopularTokensSkeleton() {
 // LatestNews 骨架屏
 export function LatestNewsSkeleton() {
     return (
-        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden w-full min-w-0 box-border">
+        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
             {/* Header - 与实际组件匹配 */}
             <div className="flex items-center gap-2 mb-3">
                 <div className={`${skeletonBase} rounded-full w-4 h-4 flex-shrink-0`} />
@@ -94,13 +94,13 @@ export function LatestNewsSkeleton() {
             </div>
 
             {/* News items - 使用 flex 布局匹配实际组件 */}
-            <div className="flex flex-col justify-between h-[calc(100%-32px)]">
+            <div className="flex flex-col justify-between h-[calc(100%-32px)] overflow-hidden">
                 {[...Array(5)].map((_, i) => (
-                    <div key={i} className="flex items-start gap-2 px-2 py-1">
+                    <div key={i} className="flex items-start gap-2 px-2 py-1 overflow-hidden">
                         <div className={`${skeletonBase} rounded w-4 h-4 flex-shrink-0 mt-0.5`} />
-                        <div className="flex-1 min-w-0">
-                            <div className={`${skeletonBase} rounded w-full h-4`} />
-                            <div className={`${skeletonBase} rounded w-2/3 h-3 mt-1`} />
+                        <div className="flex-1 overflow-hidden">
+                            <div className={`${skeletonBase} rounded h-4`} style={{ width: '90%' }} />
+                            <div className={`${skeletonBase} rounded h-3 mt-1`} style={{ width: '60%' }} />
                         </div>
                     </div>
                 ))}
@@ -112,7 +112,7 @@ export function LatestNewsSkeleton() {
 // TrendingBar 骨架屏
 export function TrendingBarSkeleton() {
     return (
-        <div className="w-full bg-slate-900/50 border-b border-slate-800 h-10 overflow-hidden box-border">
+        <div className="w-full bg-slate-900/50 border-b border-slate-800 h-10 overflow-hidden" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
             <div className="flex items-center h-full w-full px-3 gap-6">
                 {/* Trending icon placeholder */}
                 <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -136,7 +136,7 @@ export function TrendingBarSkeleton() {
 // SuggestedQuestion 骨架屏
 export function SuggestedQuestionSkeleton() {
     return (
-        <div className="flex items-center justify-center py-3 w-full box-border">
+        <div className="flex items-center justify-center py-3 w-full" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
             <div className="relative w-full max-w-[600px]">
                 {/* 模拟内容区域 - 匹配实际组件的 px-6 py-4 */}
                 <div className="relative flex items-center gap-4 px-6 py-4">

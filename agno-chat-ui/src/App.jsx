@@ -1304,7 +1304,7 @@ function AppContent() {
       </aside>
 
       {/* Main Content Area - includes chat and workspace */}
-      <div className="flex-1 flex h-full min-w-0">
+      <div className="flex-1 flex h-full min-w-0 overflow-hidden">
         {/* Daily Report */}
         {showDailyReport ? (
           <DailyReport onBack={() => setShowDailyReport(false)} />
@@ -1412,11 +1412,11 @@ function AppContent() {
                   </div>
 
                   {/* Dashboard Components - Full Width */}
-                  <div className="w-full px-8 lg:px-20">
-                    <div className="flex flex-col gap-4">
+                  <div className="w-full px-8 lg:px-20 overflow-hidden">
+                    <div className="flex flex-col gap-4 min-w-0">
 
                       {/* Row 1: Quick Prompts (50%) + Latest News (50%) */}
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
                         {/* Top Left: Inspiration Prompts */}
                         <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
                           <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
@@ -1445,7 +1445,9 @@ function AppContent() {
 
                         {/* Top Right: Latest News */}
                         {dashboardLoading ? (
-                          <LatestNewsSkeleton />
+                          <div className="min-w-0 w-full overflow-hidden">
+                            <LatestNewsSkeleton />
+                          </div>
                         ) : (
                           <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
                             <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
@@ -1503,10 +1505,12 @@ function AppContent() {
                       </div>
 
                       {/* Row 2: Popular Tokens (50%) + Key Indicators (50%) */}
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
                         {/* Bottom Left: Popular Tokens */}
                         {dashboardLoading ? (
-                          <PopularTokensSkeleton />
+                          <div className="min-w-0 w-full overflow-hidden">
+                            <PopularTokensSkeleton />
+                          </div>
                         ) : (
                           <PopularTokens
                             tokens={dashboardTokens}
@@ -1516,7 +1520,9 @@ function AppContent() {
 
                         {/* Bottom Right: Key Indicators + Fear & Greed */}
                         {dashboardLoading ? (
-                          <KeyIndicatorsSkeleton />
+                          <div className="min-w-0 w-full overflow-hidden">
+                            <KeyIndicatorsSkeleton />
+                          </div>
                         ) : (
                           <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
                             <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
