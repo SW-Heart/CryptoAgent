@@ -132,7 +132,7 @@ export default function SuggestedQuestion({ userId, onFillInput }) {
                     transition-all duration-300 ease-out
                     ${isHovered ? '-translate-y-1' : 'translate-y-0'}
                 `}
-                style={{ maxWidth: '600px' }}
+                style={{ maxWidth: '768px' }}
             >
                 {/* 毛玻璃背景层 */}
                 <div

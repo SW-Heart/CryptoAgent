@@ -185,6 +185,14 @@ function AppContent() {
   const inputRef = useRef(null);
   const userMenuRef = useRef(null);
 
+  // Auto-resize input when content changes (handles programmatic updates)
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = '48px';
+      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + 'px';
+    }
+  }, [input]);
+
   // 点击外部关闭用户菜单
   useEffect(() => {
     const handleClickOutside = (event) => {

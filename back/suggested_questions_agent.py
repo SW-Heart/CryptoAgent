@@ -51,7 +51,8 @@ suggested_questions_agent_zh = Agent(
 
 ## 5. 语言风格
 - 专业但不晦涩，像资深玩家之间的交流
-- 问题长度控制在15-25个字之间
+- 专业但不晦涩，像资深玩家之间的交流
+- 问题长度严格控制在25个字以内，确保在手机端两行内显示完
 - 可以带情绪词（如"还来得及吗"、"是否意味着"）增加代入感
 
 # 错误示范 ❌
@@ -112,7 +113,8 @@ These questions will be displayed prominently on the product homepage - they rep
 
 ## 5. Language Style
 - Professional but accessible
-- 30-60 characters per question
+- Professional but accessible
+- Max 60 characters per question. Must fit in 2 lines on mobile.
 - Include emotional hooks ("Is it too late?", "Should we...")
 
 # Bad Examples ❌
