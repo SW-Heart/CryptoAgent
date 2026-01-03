@@ -55,7 +55,7 @@ export function TrendingBarSkeleton() {
 // KeyIndicators 骨架屏
 export function KeyIndicatorsSkeleton() {
     return (
-        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
+        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden w-full min-w-0">
             {/* Header */}
             <div className="flex items-center gap-2 mb-3">
                 <SkeletonCircle size="w-4 h-4" />
@@ -90,7 +90,7 @@ export function KeyIndicatorsSkeleton() {
 // PopularTokens 骨架屏
 export function PopularTokensSkeleton() {
     return (
-        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden flex flex-col">
+        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden flex flex-col w-full min-w-0">
             {/* Header */}
             <div className="flex items-center justify-between mb-3 flex-shrink-0">
                 <div className="flex items-center gap-2">
@@ -129,7 +129,7 @@ export function PopularTokensSkeleton() {
 // LatestNews 骨架屏
 export function LatestNewsSkeleton() {
     return (
-        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
+        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden w-full min-w-0">
             {/* Header - 与实际组件匹配 */}
             <div className="flex items-center gap-2 mb-3">
                 <SkeletonCircle size="w-4 h-4" />
