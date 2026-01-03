@@ -1000,8 +1000,8 @@ function AppContent() {
             className={`w-full flex items-center gap-3 py-3 rounded-lg text-slate-300 hover:bg-slate-800/50 hover:text-white transition-colors ${isSidebarOpen ? 'px-4' : 'lg:justify-center lg:px-0 px-4'}`}
             title={t('common.newChat')}
           >
-            <Plus className="w-5 h-5" />
-            <span className={`font-medium ${!isSidebarOpen && 'lg:hidden'}`}>{t('common.newChat')}</span>
+            <Plus className="w-5 h-5 flex-shrink-0" />
+            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('common.newChat')}</span>
           </button>
         </div>
 
@@ -1012,8 +1012,8 @@ function AppContent() {
             className={`w-full flex items-center gap-3 py-3 rounded-lg transition-colors ${isSidebarOpen ? 'px-4' : 'lg:justify-center lg:px-0 px-4'} ${showStrategyNexus ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'}`}
             title={t('sidebar.strategyNexus')}
           >
-            <Activity className={`w-5 h-5 ${showStrategyNexus ? 'text-indigo-400' : ''}`} />
-            <span className={`font-medium ${!isSidebarOpen && 'lg:hidden'}`}>{t('sidebar.strategyNexus')}</span>
+            <Activity className={`w-5 h-5 flex-shrink-0 ${showStrategyNexus ? 'text-indigo-400' : ''}`} />
+            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('sidebar.strategyNexus')}</span>
           </button>
         </div>
 
@@ -1024,8 +1024,8 @@ function AppContent() {
             className={`w-full flex items-center gap-3 py-3 rounded-lg transition-colors ${isSidebarOpen ? 'px-4' : 'lg:justify-center lg:px-0 px-4'} ${showDailyReport ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'}`}
             title={t('sidebar.dailyReport')}
           >
-            <Newspaper className={`w-5 h-5 ${showDailyReport ? 'text-indigo-400' : ''}`} />
-            <span className={`font-medium ${!isSidebarOpen && 'lg:hidden'}`}>{t('sidebar.dailyReport')}</span>
+            <Newspaper className={`w-5 h-5 flex-shrink-0 ${showDailyReport ? 'text-indigo-400' : ''}`} />
+            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('sidebar.dailyReport')}</span>
           </button>
         </div>
 
@@ -1186,7 +1186,7 @@ function AppContent() {
                   )}
                 </div>
                 {/* Credits badge - capsule style */}
-                <div className={`flex items-center gap-2 ${!isSidebarOpen && 'lg:hidden'}`}>
+                <div className={`flex items-center gap-2 overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>
                   {/* Check-in button */}
                   <button
                     onClick={async (e) => {
@@ -1296,8 +1296,8 @@ function AppContent() {
               className={`flex items-center justify-center gap-2 py-3 bg-[#131722] hover:bg-slate-700 text-white rounded-lg transition-colors ${isSidebarOpen ? 'w-full px-4' : 'lg:p-2 w-full px-4'}`}
               title={t('common.signInSignUp')}
             >
-              <LogIn className="w-4 h-4" />
-              <span className={`${!isSidebarOpen && 'lg:hidden'}`}>{t('auth.signIn')}</span>
+              <LogIn className="w-4 h-4 flex-shrink-0" />
+              <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('auth.signIn')}</span>
             </button>
           )}
         </div>
