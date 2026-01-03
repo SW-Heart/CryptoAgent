@@ -74,9 +74,9 @@ export function KeyIndicatorsSkeleton() {
                 </div>
             </div>
 
-            {/* Indicators grid */}
+            {/* Indicators grid - 6 个指标匹配实际组件 */}
             <div className="grid grid-cols-2 gap-2">
-                {[...Array(4)].map((_, i) => (
+                {[...Array(6)].map((_, i) => (
                     <div key={i} className="flex flex-col p-2.5 bg-slate-800/50 rounded-lg">
                         <SkeletonLine width="w-16" height="h-3" className="mb-1" />
                         <SkeletonLine width="w-12" height="h-4" />
@@ -130,19 +130,19 @@ export function PopularTokensSkeleton() {
 export function LatestNewsSkeleton() {
     return (
         <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-            {/* Header */}
+            {/* Header - 与实际组件匹配 */}
             <div className="flex items-center gap-2 mb-3">
                 <SkeletonCircle size="w-4 h-4" />
                 <SkeletonLine width="w-20" height="h-4" />
             </div>
 
-            {/* News items */}
-            <div className="space-y-1">
-                {[...Array(6)].map((_, i) => (
+            {/* News items - 使用 flex 布局匹配实际组件 */}
+            <div className="flex flex-col justify-between h-[calc(100%-32px)]">
+                {[...Array(5)].map((_, i) => (
                     <div key={i} className="flex items-start gap-2 px-2 py-1">
-                        <SkeletonLine width="w-4" height="h-4" className="flex-shrink-0" />
+                        <SkeletonLine width="w-4" height="h-4" className="flex-shrink-0 mt-0.5" />
                         <div className="flex-1">
-                            <SkeletonLine width={`w-${['full', '5/6', '4/5', 'full', '5/6', '3/4'][i]}`} height="h-4" />
+                            <SkeletonLine width="w-full" height="h-4" />
                             <SkeletonLine width="w-2/3" height="h-3" className="mt-1" />
                         </div>
                     </div>
@@ -157,8 +157,10 @@ export function SuggestedQuestionSkeleton() {
     return (
         <div className="flex items-center justify-center py-3">
             <div className="relative" style={{ maxWidth: '600px' }}>
+                {/* 模拟内容区域 - 匹配实际组件的 px-6 py-4 */}
                 <div className="relative flex items-center gap-4 px-6 py-4">
-                    <SkeletonLine width="w-96" height="h-10" className="rounded-lg" />
+                    {/* 模拟标题文本 - 使用和实际组件相同的文本大小 */}
+                    <SkeletonLine width="w-80" height="h-9" className="rounded-lg md:w-96" />
                 </div>
             </div>
         </div>
