@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Flame, Star, TrendingUp, Pause, Play, Download, ExternalLink } from 'lucide-react';
+import { TrendingBarSkeleton } from './Skeleton';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -48,8 +49,14 @@ export default function TrendingBar({ onTokenClick }) {
         return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} `;
     };
 
-    if (loading || tokens.length === 0) {
-        return null; // Don't render if no data
+    // Show skeleton while loading
+    if (loading) {
+        return <TrendingBarSkeleton />;
+    }
+
+    // Don't render if no data after loading
+    if (tokens.length === 0) {
+        return null;
     }
 
     // Duplicate tokens for seamless loop

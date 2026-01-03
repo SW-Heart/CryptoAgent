@@ -1,7 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { SuggestedQuestionSkeleton } from './Skeleton';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+// 模块级缓存：避免页面切换时重复请求
+// 格式: { [language]: { questions: [], timestamp: number, index: number } }
+const questionsCache = {};
+const CACHE_DURATION = 10 * 60 * 1000; // 10 分钟缓存
 
 /**
  * SuggestedQuestion - 动态推荐问题组件
@@ -18,9 +24,24 @@ export default function SuggestedQuestion({ userId, onFillInput }) {
     // 获取当前语言
     const language = i18n.language?.startsWith('zh') ? 'zh' : 'en';
 
-    // 加载推荐问题
+    // 加载推荐问题（带缓存）
     useEffect(() => {
         const fetchQuestions = async () => {
+            // 检查缓存是否有效
+            const cached = questionsCache[language];
+            const now = Date.now();
+
+            if (cached && (now - cached.timestamp < CACHE_DURATION) && cached.questions.length > 0) {
+                // 使用缓存数据
+                console.log('[SuggestedQuestion] Using cached questions');
+                setAllQuestions(cached.questions);
+                setCurrentIndex(cached.index);
+                setQuestion(cached.questions[cached.index] || cached.questions[0]);
+                setIsLoading(false);
+                return;
+            }
+
+            // 无缓存或已过期，请求新数据
             try {
                 const url = new URL(`${BASE_URL}/api/suggested-questions`);
                 url.searchParams.set('language', language);
@@ -31,9 +52,20 @@ export default function SuggestedQuestion({ userId, onFillInput }) {
                 const res = await fetch(url);
                 const data = await res.json();
 
-                setQuestion(data.question || '');
-                setCurrentIndex(data.current_index || 0);
-                setAllQuestions(data.all_questions || []);
+                const questions = data.all_questions || [];
+                const index = data.current_index || 0;
+                const currentQuestion = data.question || questions[0] || '';
+
+                // 更新缓存
+                questionsCache[language] = {
+                    questions,
+                    timestamp: now,
+                    index
+                };
+
+                setQuestion(currentQuestion);
+                setCurrentIndex(index);
+                setAllQuestions(questions);
             } catch (err) {
                 console.error('[SuggestedQuestion] Error fetching:', err);
                 // 加载失败时使用默认问题
@@ -62,6 +94,11 @@ export default function SuggestedQuestion({ userId, onFillInput }) {
         setCurrentIndex(nextIndex);
         setQuestion(allQuestions[nextIndex] || question);
 
+        // 同步更新缓存中的 index
+        if (questionsCache[language]) {
+            questionsCache[language].index = nextIndex;
+        }
+
         // 记录点击
         if (userId) {
             try {
@@ -80,11 +117,7 @@ export default function SuggestedQuestion({ userId, onFillInput }) {
     };
 
     if (isLoading) {
-        return (
-            <div className="flex items-center justify-center py-3">
-                <div className="w-6 h-6 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
-            </div>
-        );
+        return <SuggestedQuestionSkeleton />;
     }
 
     return (

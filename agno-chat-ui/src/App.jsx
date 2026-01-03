@@ -28,7 +28,7 @@ import HomePage from './components/HomePage';
 // Import from new modular structure
 import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
-import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
+import { QuickPrompts, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion, KeyIndicatorsSkeleton, PopularTokensSkeleton, LatestNewsSkeleton } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
 
 
@@ -86,6 +86,7 @@ function AppContent() {
   const [dashboardTokens, setDashboardTokens] = useState([]);
   const [dashboardFearGreed, setDashboardFearGreed] = useState({ value: 50, classification: 'Neutral' });
   const [dashboardIndicators, setDashboardIndicators] = useState([]);
+  const [dashboardLoading, setDashboardLoading] = useState(true); // Loading state for skeleton
 
   // Fetch credits and check-in status when user logs in
   useEffect(() => {
@@ -153,6 +154,7 @@ function AppContent() {
       setDashboardTokens(tokensRes.tokens || []);
       setDashboardFearGreed(fearGreedRes);
       setDashboardIndicators(indicatorsRes.indicators || []);
+      setDashboardLoading(false); // Data loaded, hide skeleton
     };
 
     fetchDashboardData();
@@ -1442,127 +1444,138 @@ function AppContent() {
                         </div>
 
                         {/* Top Right: Latest News */}
-                        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                            <Newspaper className="w-4 h-4 text-blue-400" />
-                            {t('home.latestNews')}
-                          </h3>
-                          <div className="flex flex-col justify-between h-[calc(100%-32px)]">
-                            {dashboardNews.length > 0 ? dashboardNews.slice(0, 5).map((news, i) => {
-                              // Support both old format (title) and new format (title_en/title_zh)
-                              const isZh = i18n.language?.startsWith('zh');
-                              const displayTitle = isZh ? (news.title_zh || news.title || news.title_en) : (news.title_en || news.title);
-                              const displaySummary = isZh ? (news.summary_zh || '') : (news.summary_en || '');
-                              return (
-                                <button
-                                  key={i}
-                                  onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
-                                  className="w-full flex items-start gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition-colors text-left"
-                                >
-                                  <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
-                                  <div className="flex-1">
-                                    <span className="text-sm text-slate-300 line-clamp-1">{displayTitle}</span>
-                                    {displaySummary && (
-                                      <span className="text-xs text-slate-500 line-clamp-1 block mt-0.5">{displaySummary}</span>
-                                    )}
-                                  </div>
-                                </button>
-                              )
-                            }) : (() => {
-                              // Default news when no dashboardNews
-                              const DEFAULT_NEWS = [
-                                { title_en: "Bitcoin holds steady as market awaits Fed decision", title_zh: "比特币保持稳定，市场等待美联储决议" },
-                                { title_en: "Ethereum Layer 2 solutions see record TVL growth", title_zh: "以太坊二层解决方案TVL创历史新高" },
-                                { title_en: "Institutional crypto adoption accelerates in Asia", title_zh: "亚洲机构加密货币采用加速" },
-                                { title_en: "DeFi protocols show renewed growth momentum", title_zh: "DeFi协议增长势头强劲" },
-                                { title_en: "NFT market sees signs of recovery in Q4", title_zh: "NFT市场第四季度复苏迹象显现" }
-                              ];
-                              const isZh = i18n.language?.startsWith('zh');
-                              return DEFAULT_NEWS.map((news, i) => {
-                                const displayTitle = isZh ? news.title_zh : news.title_en;
+                        {dashboardLoading ? (
+                          <LatestNewsSkeleton />
+                        ) : (
+                          <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
+                            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+                              <Newspaper className="w-4 h-4 text-blue-400" />
+                              {t('home.latestNews')}
+                            </h3>
+                            <div className="flex flex-col justify-between h-[calc(100%-32px)]">
+                              {dashboardNews.length > 0 ? dashboardNews.slice(0, 5).map((news, i) => {
+                                // Support both old format (title) and new format (title_en/title_zh)
+                                const isZh = i18n.language?.startsWith('zh');
+                                const displayTitle = isZh ? (news.title_zh || news.title || news.title_en) : (news.title_en || news.title);
+                                const displaySummary = isZh ? (news.summary_zh || '') : (news.summary_en || '');
                                 return (
                                   <button
                                     key={i}
                                     onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
-                                    className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
+                                    className="w-full flex items-start gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition-colors text-left"
                                   >
-                                    <span className="text-xs text-slate-500">{i + 1}.</span>
-                                    <span className="text-sm text-slate-300">{displayTitle}</span>
+                                    <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
+                                    <div className="flex-1">
+                                      <span className="text-sm text-slate-300 line-clamp-1">{displayTitle}</span>
+                                      {displaySummary && (
+                                        <span className="text-xs text-slate-500 line-clamp-1 block mt-0.5">{displaySummary}</span>
+                                      )}
+                                    </div>
                                   </button>
-                                );
-                              });
-                            })()}
+                                )
+                              }) : (() => {
+                                // Default news when no dashboardNews
+                                const DEFAULT_NEWS = [
+                                  { title_en: "Bitcoin holds steady as market awaits Fed decision", title_zh: "比特币保持稳定，市场等待美联储决议" },
+                                  { title_en: "Ethereum Layer 2 solutions see record TVL growth", title_zh: "以太坊二层解决方案TVL创历史新高" },
+                                  { title_en: "Institutional crypto adoption accelerates in Asia", title_zh: "亚洲机构加密货币采用加速" },
+                                  { title_en: "DeFi protocols show renewed growth momentum", title_zh: "DeFi协议增长势头强劲" },
+                                  { title_en: "NFT market sees signs of recovery in Q4", title_zh: "NFT市场第四季度复苏迹象显现" }
+                                ];
+                                const isZh = i18n.language?.startsWith('zh');
+                                return DEFAULT_NEWS.map((news, i) => {
+                                  const displayTitle = isZh ? news.title_zh : news.title_en;
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
+                                      className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
+                                    >
+                                      <span className="text-xs text-slate-500">{i + 1}.</span>
+                                      <span className="text-sm text-slate-300">{displayTitle}</span>
+                                    </button>
+                                  );
+                                });
+                              })()}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
 
                       {/* Row 2: Popular Tokens (50%) + Key Indicators (50%) */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         {/* Bottom Left: Popular Tokens */}
-                        {/* Bottom Left: Popular Tokens */}
-                        <PopularTokens
-                          tokens={dashboardTokens}
-                          onAnalyzeToken={(prompt) => setInput(prompt)}
-                        />
+                        {dashboardLoading ? (
+                          <PopularTokensSkeleton />
+                        ) : (
+                          <PopularTokens
+                            tokens={dashboardTokens}
+                            onAnalyzeToken={(prompt) => setInput(prompt)}
+                          />
+                        )}
 
                         {/* Bottom Right: Key Indicators + Fear & Greed */}
-                        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                            <BarChart2 className="w-4 h-4 text-cyan-400" />
-                            {t('home.keyIndicators.title')}
-                          </h3>
+                        {dashboardLoading ? (
+                          <KeyIndicatorsSkeleton />
+                        ) : (
+                          <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
+                            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+                              <BarChart2 className="w-4 h-4 text-cyan-400" />
+                              {t('home.keyIndicators.title')}
+                            </h3>
 
-                          {/* Fear & Greed at top */}
-                          <button
-                            onClick={() => {
-                              const translatedClassification = t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification);
-                              setInput(`${t('dashboard.analyzeFearGreed', 'Analyze Fear & Greed Index')}: ${dashboardFearGreed.value} (${translatedClassification})`);
-                            }}
-                            className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700 rounded-lg mb-3 transition-colors"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Activity className="w-4 h-4 text-yellow-400" />
-                              <span className="text-xs text-slate-400">{t('home.keyIndicators.fearGreed')}</span>
+                            {/* Fear & Greed at top */}
+                            <button
+                              onClick={() => {
+                                const translatedClassification = t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification);
+                                setInput(`${t('dashboard.analyzeFearGreed', 'Analyze Fear & Greed Index')}: ${dashboardFearGreed.value} (${translatedClassification})`);
+                              }}
+                              className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700 rounded-lg mb-3 transition-colors"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Activity className="w-4 h-4 text-yellow-400" />
+                                <span className="text-xs text-slate-400">{t('home.keyIndicators.fearGreed')}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-lg font-bold ${dashboardFearGreed.value <= 25 ? 'text-red-400' :
+                                  dashboardFearGreed.value <= 45 ? 'text-orange-400' :
+                                    dashboardFearGreed.value <= 55 ? 'text-yellow-400' :
+                                      dashboardFearGreed.value <= 75 ? 'text-lime-400' : 'text-green-400'
+                                  }`}>{dashboardFearGreed.value}</span>
+                                <span className="text-xs text-slate-500">{t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification)}</span>
+                              </div>
+                            </button>
+
+                            {/* Other indicators */}
+                            <div className="grid grid-cols-2 gap-2">
+                              {dashboardIndicators.map((indicator, i) => {
+                                // Map indicator names to translation keys
+                                const nameKeyMap = {
+                                  'Total Market Cap': 'totalMarketCap',
+                                  'Bitcoin Market Cap': 'bitcoinMarketCap',
+                                  'Bitcoin Dominance': 'bitcoinDominance',
+                                  'ETH/BTC Ratio': 'ethBtcRatio',
+                                  'Ethereum Gas': 'ethereumGas',
+                                  'DeFi TVL': 'defiTvl'
+                                };
+                                const translatedName = nameKeyMap[indicator.name]
+                                  ? t(`home.keyIndicators.${nameKeyMap[indicator.name]}`)
+                                  : indicator.name;
+
+                                return (
+                                  <button
+                                    key={i}
+                                    onClick={() => setInput(`${t('dashboard.analyzeIndicator', 'Analyze')}: ${translatedName} ${indicator.value}`)}
+                                    className="flex flex-col p-2.5 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors text-left"
+                                  >
+                                    <span className="text-xs text-slate-500 truncate">{translatedName}</span>
+                                    <span className="text-sm font-medium text-white mt-0.5">{indicator.value}</span>
+                                  </button>
+                                );
+                              })}
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span className={`text-lg font-bold ${dashboardFearGreed.value <= 25 ? 'text-red-400' :
-                                dashboardFearGreed.value <= 45 ? 'text-orange-400' :
-                                  dashboardFearGreed.value <= 55 ? 'text-yellow-400' :
-                                    dashboardFearGreed.value <= 75 ? 'text-lime-400' : 'text-green-400'
-                                }`}>{dashboardFearGreed.value}</span>
-                              <span className="text-xs text-slate-500">{t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification)}</span>
-                            </div>
-                          </button>
-
-                          {/* Other indicators */}
-                          <div className="grid grid-cols-2 gap-2">
-                            {dashboardIndicators.map((indicator, i) => {
-                              // Map indicator names to translation keys
-                              const nameKeyMap = {
-                                'Total Market Cap': 'totalMarketCap',
-                                'Bitcoin Market Cap': 'bitcoinMarketCap',
-                                'Bitcoin Dominance': 'bitcoinDominance',
-                                'ETH/BTC Ratio': 'ethBtcRatio',
-                                'Ethereum Gas': 'ethereumGas',
-                                'DeFi TVL': 'defiTvl'
-                              };
-                              const translatedName = nameKeyMap[indicator.name]
-                                ? t(`home.keyIndicators.${nameKeyMap[indicator.name]}`)
-                                : indicator.name;
-
-                              return (
-                                <button
-                                  key={i}
-                                  onClick={() => setInput(`${t('dashboard.analyzeIndicator', 'Analyze')}: ${translatedName} ${indicator.value}`)}
-                                  className="flex flex-col p-2.5 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors text-left"
-                                >
-                                  <span className="text-xs text-slate-500 truncate">{translatedName}</span>
-                                  <span className="text-sm font-medium text-white mt-0.5">{indicator.value}</span>
-                                </button>
-                              );
-                            })}
                           </div>
-                        </div>
+                        )}
                       </div>
 
                     </div>

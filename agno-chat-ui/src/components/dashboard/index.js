@@ -6,3 +6,12 @@ export { default as KeyIndicators } from './KeyIndicators';
 export { default as TrendingBar } from './TrendingBar';
 export { default as SuggestedQuestion } from './SuggestedQuestion';
 
+// Skeleton loading components
+export {
+    TrendingBarSkeleton,
+    KeyIndicatorsSkeleton,
+    PopularTokensSkeleton,
+    LatestNewsSkeleton,
+    SuggestedQuestionSkeleton,
+    DashboardSkeleton
+} from './Skeleton';

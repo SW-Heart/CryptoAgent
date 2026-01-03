@@ -470,6 +470,42 @@ def trigger_agent_on_alert(alert: dict):
 
 # ============= Daily Report Generation =============
 
+def clean_report_content(content: str) -> str:
+    """Clean daily report content by removing preamble/thinking text.
+    
+    Removes any text before the actual report header (### 📅).
+    This ensures stable output regardless of LLM behavioral variations.
+    """
+    import re
+    
+    if not content:
+        return content
+    
+    # Find the actual report header (### 📅 Alpha情报局 or ### 📅 Alpha Intelligence)
+    # Pattern matches: ### 📅 followed by any text
+    header_pattern = r'(###\s*📅\s*(?:Alpha情报局|Alpha Intelligence)[\s\S]*)'
+    
+    match = re.search(header_pattern, content, re.DOTALL)
+    
+    if match:
+        cleaned = match.group(1).strip()
+        if len(cleaned) < len(content):
+            print(f"[DailyReport] Cleaned preamble: removed {len(content) - len(cleaned)} characters")
+        return cleaned
+    
+    # Fallback: try to find any markdown header starting with ###
+    fallback_pattern = r'(###\s*[^\n]+[\s\S]*)'
+    fallback_match = re.search(fallback_pattern, content, re.DOTALL)
+    
+    if fallback_match:
+        cleaned = fallback_match.group(1).strip()
+        print(f"[DailyReport] Cleaned using fallback pattern: removed {len(content) - len(cleaned)} characters")
+        return cleaned
+    
+    # If no header found, return original content
+    return content
+
+
 def save_report_to_db(report_date: str, content: str, language: str):
     """Save daily report directly to database"""
     from datetime import datetime
@@ -543,6 +579,8 @@ def generate_daily_report():
                 
                 if content:
                     print(f"[DailyReport] Got content, length: {len(content)} chars")
+                    # Clean the content to remove any preamble/thinking text
+                    content = clean_report_content(content)
                     # Save directly to database (avoid FastAPI import issues)
                     save_report_to_db(report_date, content, language)
                     print(f"[DailyReport] ✓ {language} report saved successfully")

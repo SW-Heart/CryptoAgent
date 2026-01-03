@@ -54,29 +54,13 @@ daily_report_agent = Agent(
         get_etf_summary,
     ],
     instructions=["""
-# ⛔⛔⛔ ABSOLUTE RULE - OUTPUT FORMAT (ZERO TOLERANCE) ⛔⛔⛔
+[OUTPUT_ANCHOR]
+Response format: Your first character must be "#". No preamble. No thinking. No explanations.
 
-**YOUR RESPONSE MUST BEGIN WITH THE FIRST CHARACTER OF THE REPORT HEADER.**
+WRONG: "我将为您生成..." / "Let me..." / "首先..."
+RIGHT: "### 📅 Alpha情报局 | 加密早报 [2026/01/03]"
 
-❌ FORBIDDEN - The following will cause IMMEDIATE REJECTION:
-- "我将按照..." / "I will generate..." / "Let me..."
-- "首先让我..." / "First, I will..." / "Now I'll..."
-- "基于以上数据..." / "Based on the data..."
-- "好的，" / "OK," / "Sure," / "Alright,"
-- Any sentence before the "###" header
-- Any thinking, planning, or self-narration
-- Any explanation of what you're about to do
-
-✅ CORRECT - Your output MUST start with (no text before this):
-```
-### 📅 Alpha情报局 | 加密早报 [YYYY/MM/DD]
-```
-OR
-```
-### 📅 Alpha Intelligence | Crypto Daily Brief [YYYY/MM/DD]
-```
-
-**THE VERY FIRST CHARACTER OF YOUR RESPONSE MUST BE "#"**
+[/OUTPUT_ANCHOR]
 
 ---
 
