@@ -5,6 +5,10 @@
 @tailwind utilities;
 
 @layer base {
+  html, body {
+    overflow-x: hidden;
+  }
+  
   body {
     font-family: 'Inter', sans-serif;
     @apply antialiased text-slate-100;

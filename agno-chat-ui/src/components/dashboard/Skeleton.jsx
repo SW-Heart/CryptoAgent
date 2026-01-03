@@ -112,7 +112,7 @@ export function LatestNewsSkeleton() {
 // TrendingBar 骨架屏
 export function TrendingBarSkeleton() {
     return (
-        <div className="w-full bg-slate-900/50 border-b border-slate-800 h-10 overflow-hidden" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
+        <div className="w-full bg-slate-900/50 border-b border-slate-800 h-10 overflow-hidden box-border">
             <div className="flex items-center h-full w-full px-3 gap-6">
                 {/* Trending icon placeholder */}
                 <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -136,7 +136,7 @@ export function TrendingBarSkeleton() {
 // SuggestedQuestion 骨架屏
 export function SuggestedQuestionSkeleton() {
     return (
-        <div className="flex items-center justify-center py-3 w-full" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
+        <div className="flex items-center justify-center py-3 w-full box-border">
             <div className="relative w-full max-w-[600px]">
                 {/* 模拟内容区域 - 匹配实际组件的 px-6 py-4 */}
                 <div className="relative flex items-center gap-4 px-6 py-4">
