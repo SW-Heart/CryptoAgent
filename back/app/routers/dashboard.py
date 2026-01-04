@@ -384,8 +384,23 @@ async def get_dashboard_onchain_hot(limit: int = 6):
         tokens = []
         all_addresses = set()
         
-        def process_token(address: str) -> dict:
-            """Fetch token data and check quality criteria"""
+        def format_usd(value):
+            """Format USD values with K/M/B suffix"""
+            if value >= 1e9:
+                return f"${value/1e9:.1f}B"
+            elif value >= 1e6:
+                return f"${value/1e6:.1f}M"
+            elif value >= 1e3:
+                return f"${value/1e3:.0f}K"
+            return f"${value:.0f}"
+        
+        def process_token(address: str, min_change: float = 10) -> dict:
+            """Fetch token data and check quality criteria
+            
+            Args:
+                address: Token contract address
+                min_change: Minimum 24h price change percentage (default 10%)
+            """
             try:
                 token_url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
                 resp = requests.get(token_url, timeout=5)
@@ -406,8 +421,11 @@ async def get_dashboard_onchain_hot(limit: int = 6):
                 price_change_24h = float(best_pair.get('priceChange', {}).get('h24', 0) or 0)
                 price_usd = float(best_pair.get('priceUsd', 0) or 0)
                 
-                # Quality filters
-                if liquidity < 50000 or volume_24h < 100000 or market_cap < 100000 or price_change_24h < 10:
+                # Quality filters - liquidity, volume, market cap are fixed
+                # price_change threshold is configurable
+                if liquidity < 50000 or volume_24h < 100000 or market_cap < 100000:
+                    return None
+                if price_change_24h < min_change:
                     return None
                 
                 # Extract social info
@@ -425,16 +443,6 @@ async def get_dashboard_onchain_hot(limit: int = 6):
                 
                 # Get website URL
                 website_url = websites[0].get('url') if websites else None
-                
-                # Format market cap
-                def format_usd(value):
-                    if value >= 1e9:
-                        return f"${value/1e9:.1f}B"
-                    elif value >= 1e6:
-                        return f"${value/1e6:.1f}M"
-                    elif value >= 1e3:
-                        return f"${value/1e3:.0f}K"
-                    return f"${value:.0f}"
                 
                 return {
                     'symbol': best_pair.get('baseToken', {}).get('symbol', 'Unknown'),
@@ -477,32 +485,78 @@ async def get_dashboard_onchain_hot(limit: int = 6):
             except Exception as e:
                 print(f"[Onchain Hot] Boosts top error: {e}")
         
+        # If still not enough candidates, try Token Profiles from major chains
+        if len(candidate_addresses) < limit * 3:
+            chains = ['solana', 'ethereum', 'bsc', 'base', 'arbitrum']
+            for chain in chains:
+                if len(candidate_addresses) >= limit * 4:  # Stop when we have enough
+                    break
+                try:
+                    profiles_resp = requests.get(
+                        f"https://api.dexscreener.com/token-profiles/latest/v1?chainId={chain}",
+                        timeout=8
+                    )
+                    if profiles_resp.status_code == 200:
+                        for token in profiles_resp.json()[:15]:
+                            addr = token.get('tokenAddress', '')
+                            if addr and addr not in all_addresses:
+                                all_addresses.add(addr)
+                                candidate_addresses.append(addr)
+                except Exception as e:
+                    print(f"[Onchain Hot] Profiles {chain} error: {e}")
+        
         # Step 2: Process tokens in PARALLEL using ThreadPoolExecutor
-        if candidate_addresses:
+        # Two-pass strategy: first with strict criteria (10% gain), then relaxed (0%) if needed
+        processed_addresses = set()
+        
+        def batch_process(addresses, min_change):
+            """Process tokens with given min_change threshold"""
+            results = []
+            remaining_addrs = [a for a in addresses if a not in processed_addresses]
+            
+            if not remaining_addrs:
+                return results
+            
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                # Submit all token processing tasks
                 future_to_addr = {
-                    executor.submit(process_token, addr): addr 
-                    for addr in candidate_addresses[:limit * 3]  # Process more to ensure we get enough valid ones
+                    executor.submit(process_token, addr, min_change): addr 
+                    for addr in remaining_addrs[:limit * 4]
                 }
                 
-                # Collect results as they complete
                 for future in concurrent.futures.as_completed(future_to_addr, timeout=15):
+                    addr = future_to_addr[future]
+                    processed_addresses.add(addr)
                     try:
                         result = future.result(timeout=6)
                         if result:
-                            tokens.append(result)
-                            if len(tokens) >= limit:
-                                break
+                            results.append(result)
                     except Exception:
                         pass
+            
+            return results
         
-        # Sort by 24h change
+        if candidate_addresses:
+            # Pass 1: Strict criteria (24h change >= 10%)
+            tokens = batch_process(candidate_addresses, min_change=10)
+            print(f"[Onchain Hot] Pass 1 (strict, >=10%): found {len(tokens)} tokens")
+            
+            # Pass 2: If not enough, relax to 0% change (just needs positive liquidity/volume/mcap)
+            if len(tokens) < limit:
+                relaxed_tokens = batch_process(candidate_addresses, min_change=0)
+                print(f"[Onchain Hot] Pass 2 (relaxed, >=0%): found {len(relaxed_tokens)} additional tokens")
+                
+                # Add relaxed tokens that aren't duplicates
+                existing_addrs = {t['address'] for t in tokens}
+                for t in relaxed_tokens:
+                    if t['address'] not in existing_addrs and len(tokens) < limit:
+                        tokens.append(t)
+        
+        # Sort by 24h change (highest first)
         tokens.sort(key=lambda x: x['change_24h'], reverse=True)
         tokens = tokens[:limit]  # Ensure we only return requested limit
         
         set_cache(cache_key, tokens)
-        print(f"[Onchain Hot] Returned {len(tokens)} tokens (parallel processing)")
+        print(f"[Onchain Hot] Final: Returned {len(tokens)} tokens")
         return {"tokens": tokens}
     except Exception as e:
         print(f"[Dashboard Onchain Hot] Error: {e}")
