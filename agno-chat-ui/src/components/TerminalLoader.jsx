@@ -9,7 +9,7 @@ import React, { useState, useEffect, useCallback } from 'react';
  * - isReady: 外部数据是否准备好，只有当 isReady=true 且动画完成才会结束
  * - fullScreen: 是否全屏显示，默认 true
  */
-const TerminalLoader = ({ onComplete, minDuration = 2500, isReady = false, fullScreen = true }) => {
+const TerminalLoader = ({ onComplete, minDuration = 1500, isReady = false, fullScreen = true }) => {
     const [phase, setPhase] = useState(0); // 0: 唤醒, 1: 握手, 2: 数据注入, 3: 就绪
     const [progress, setProgress] = useState(0);
     const [showCursor, setShowCursor] = useState(true);

@@ -236,21 +236,86 @@ async def get_dashboard_fear_greed():
 
 @router.get("/indicators")
 async def get_dashboard_indicators():
-    """Get key industry indicators (10min cache)"""
+    """Get key industry indicators (10min cache) - OPTIMIZED with parallel requests"""
     try:
         if is_cache_valid("indicators", 600):
             return {"indicators": get_cache("indicators")}
         
+        import concurrent.futures
+        
         indicators = []
         headers = {"User-Agent": "Mozilla/5.0"}
         
-        # CoinGecko global data
-        global_data = fetch_with_retry(
-            "https://api.coingecko.com/api/v3/global",
-            headers=headers,
-            timeout=10,
-            retries=3
-        )
+        # Define fetch functions for parallel execution
+        def fetch_coingecko():
+            return fetch_with_retry(
+                "https://api.coingecko.com/api/v3/global",
+                headers=headers,
+                timeout=8,
+                retries=2
+            )
+        
+        def fetch_ethbtc():
+            return fetch_with_retry(
+                f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol=ETHBTC",
+                timeout=5,
+                retries=2
+            )
+        
+        def fetch_gas():
+            try:
+                from crypto_tools import ETHERSCAN_API_KEY
+                if ETHERSCAN_API_KEY:
+                    return fetch_with_retry(
+                        f"https://api.etherscan.io/v2/api?chainid=1&module=gastracker&action=gasoracle&apikey={ETHERSCAN_API_KEY}",
+                        timeout=5,
+                        retries=2
+                    )
+            except Exception:
+                pass
+            return None
+        
+        def fetch_tvl():
+            return fetch_with_retry(
+                "https://api.llama.fi/v2/chains",
+                timeout=5,
+                retries=2
+            )
+        
+        # Execute all API calls in parallel using ThreadPoolExecutor
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            future_coingecko = executor.submit(fetch_coingecko)
+            future_ethbtc = executor.submit(fetch_ethbtc)
+            future_gas = executor.submit(fetch_gas)
+            future_tvl = executor.submit(fetch_tvl)
+            
+            # Wait for all with timeout
+            global_data = None
+            ethbtc_data = None
+            gas_data = None
+            tvl_data = None
+            
+            try:
+                global_data = future_coingecko.result(timeout=10)
+            except Exception as e:
+                print(f"[Indicators] CoinGecko timeout: {e}")
+            
+            try:
+                ethbtc_data = future_ethbtc.result(timeout=6)
+            except Exception as e:
+                print(f"[Indicators] Binance timeout: {e}")
+            
+            try:
+                gas_data = future_gas.result(timeout=6)
+            except Exception as e:
+                print(f"[Indicators] Etherscan timeout: {e}")
+            
+            try:
+                tvl_data = future_tvl.result(timeout=6)
+            except Exception as e:
+                print(f"[Indicators] DefiLlama timeout: {e}")
+        
+        # Process CoinGecko global data
         if global_data:
             global_resp = global_data.get("data", {})
             total_mcap = global_resp.get("total_market_cap", {}).get("usd", 0)
@@ -264,45 +329,25 @@ async def get_dashboard_indicators():
             if btc_dom > 0:
                 indicators.append({"name": "Bitcoin Dominance", "value": f"{btc_dom:.1f}%"})
         
-        # ETH/BTC Ratio from Binance
-        ethbtc_data = fetch_with_retry(
-            f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol=ETHBTC",
-            timeout=5,
-            retries=3
-        )
+        # Process ETH/BTC Ratio
         if ethbtc_data:
             ratio = float(ethbtc_data.get("price", 0))
             if ratio > 0:
                 indicators.append({"name": "ETH/BTC Ratio", "value": f"{ratio:.5f}"})
         
-        # Ethereum Gas from Etherscan
-        try:
-            from crypto_tools import ETHERSCAN_API_KEY
-            if ETHERSCAN_API_KEY:
-                gas_data = fetch_with_retry(
-                    f"https://api.etherscan.io/v2/api?chainid=1&module=gastracker&action=gasoracle&apikey={ETHERSCAN_API_KEY}",
-                    timeout=5,
-                    retries=3
-                )
-                if gas_data and gas_data.get("status") == "1":
-                    gas = gas_data.get("result", {}).get("ProposeGasPrice", "0")
-                    if gas and gas != "0":
-                        indicators.append({"name": "Ethereum Gas", "value": f"{gas} Gwei"})
-        except Exception as e:
-            print(f"Gas import error: {e}")
+        # Process Ethereum Gas
+        if gas_data and gas_data.get("status") == "1":
+            gas = gas_data.get("result", {}).get("ProposeGasPrice", "0")
+            if gas and gas != "0":
+                indicators.append({"name": "Ethereum Gas", "value": f"{gas} Gwei"})
         
-        # DeFi TVL from DefiLlama
-        tvl_data = fetch_with_retry(
-            "https://api.llama.fi/v2/chains",
-            timeout=5,
-            retries=3
-        )
+        # Process DeFi TVL
         if tvl_data and isinstance(tvl_data, list):
             total_tvl = sum(chain.get("tvl", 0) for chain in tvl_data if isinstance(chain.get("tvl"), (int, float)))
             if total_tvl > 0:
                 indicators.append({"name": "DeFi TVL", "value": f"${total_tvl/1e9:.1f}B"})
         
-        # Ensure defaults
+        # Ensure defaults for missing data
         indicator_names = [ind["name"] for ind in indicators]
         defaults = [
             {"name": "Total Market Cap", "value": "$3.0T"},
@@ -328,11 +373,13 @@ async def get_dashboard_indicators():
 
 @router.get("/onchain-hot")
 async def get_dashboard_onchain_hot(limit: int = 6):
-    """Get on-chain hot tokens from DexScreener (10min cache)"""
+    """Get on-chain hot tokens from DexScreener (10min cache) - OPTIMIZED with parallel requests"""
     try:
         cache_key = f"onchain_hot_{limit}"
         if is_cache_valid(cache_key, 600):  # 10min cache
             return {"tokens": get_cache(cache_key)}
+        
+        import concurrent.futures
         
         tokens = []
         all_addresses = set()
@@ -395,51 +442,67 @@ async def get_dashboard_onchain_hot(limit: int = 6):
                     'price': price_usd,
                     'change_24h': price_change_24h,
                     'market_cap': format_usd(market_cap),
-                    'socials': social_links,  # List of {type, url}
+                    'socials': social_links,
                     'website': website_url,
-                    'dex_url': best_pair.get('url', ''),  # DexScreener page URL
+                    'dex_url': best_pair.get('url', ''),
                     'address': address
                 }
             except Exception:
                 return None
         
-        # Fetch from Token Boosts (latest)
+        # Step 1: Collect all candidate addresses first (fast)
+        candidate_addresses = []
+        
         try:
-            boosts_resp = requests.get("https://api.dexscreener.com/token-boosts/latest/v1", timeout=10)
+            boosts_resp = requests.get("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8)
             if boosts_resp.status_code == 200:
-                for token in boosts_resp.json():
+                for token in boosts_resp.json()[:20]:  # Get more candidates for filtering
                     addr = token.get('tokenAddress', '')
                     if addr and addr not in all_addresses:
                         all_addresses.add(addr)
-                        result = process_token(addr)
+                        candidate_addresses.append(addr)
+        except Exception as e:
+            print(f"[Onchain Hot] Boosts latest error: {e}")
+        
+        # If not enough candidates, try top boosts
+        if len(candidate_addresses) < limit * 2:
+            try:
+                top_resp = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=8)
+                if top_resp.status_code == 200:
+                    for token in top_resp.json()[:20]:
+                        addr = token.get('tokenAddress', '')
+                        if addr and addr not in all_addresses:
+                            all_addresses.add(addr)
+                            candidate_addresses.append(addr)
+            except Exception as e:
+                print(f"[Onchain Hot] Boosts top error: {e}")
+        
+        # Step 2: Process tokens in PARALLEL using ThreadPoolExecutor
+        if candidate_addresses:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                # Submit all token processing tasks
+                future_to_addr = {
+                    executor.submit(process_token, addr): addr 
+                    for addr in candidate_addresses[:limit * 3]  # Process more to ensure we get enough valid ones
+                }
+                
+                # Collect results as they complete
+                for future in concurrent.futures.as_completed(future_to_addr, timeout=15):
+                    try:
+                        result = future.result(timeout=6)
                         if result:
                             tokens.append(result)
                             if len(tokens) >= limit:
                                 break
-        except Exception:
-            pass
-        
-        # If not enough, try Token Boosts (top)
-        if len(tokens) < limit:
-            try:
-                top_resp = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=10)
-                if top_resp.status_code == 200:
-                    for token in top_resp.json():
-                        addr = token.get('tokenAddress', '')
-                        if addr and addr not in all_addresses:
-                            all_addresses.add(addr)
-                            result = process_token(addr)
-                            if result:
-                                tokens.append(result)
-                                if len(tokens) >= limit:
-                                    break
-            except Exception:
-                pass
+                    except Exception:
+                        pass
         
         # Sort by 24h change
         tokens.sort(key=lambda x: x['change_24h'], reverse=True)
+        tokens = tokens[:limit]  # Ensure we only return requested limit
         
         set_cache(cache_key, tokens)
+        print(f"[Onchain Hot] Returned {len(tokens)} tokens (parallel processing)")
         return {"tokens": tokens}
     except Exception as e:
         print(f"[Dashboard Onchain Hot] Error: {e}")

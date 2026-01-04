@@ -24,15 +24,17 @@ def _get_binance_data(symbol: str):
 
     
     try:
-        # 1. 查实时价格
-        ticker_url = f"{base_url}/api/v3/ticker/price?symbol={pair}"
+        # 1. 查实时价格 & 24h变动
+        ticker_url = f"{base_url}/api/v3/ticker/24hr?symbol={pair}"
         # 设置极短超时，如果Binance没这个币(400 error)，马上切备用源
         ticker_resp = requests.get(ticker_url, timeout=2) 
         
         if ticker_resp.status_code != 200:
             return None # 币安没有这个币
             
-        current_price = float(ticker_resp.json()['price'])
+        ticker_data = ticker_resp.json()
+        current_price = float(ticker_data['lastPrice'])
+        change_24h = float(ticker_data['priceChangePercent'])
         
         # 2. 查 K 线 (用于算 RSI) - 4小时级别，取最近100根
         klines_url = f"{base_url}/api/v3/klines?symbol={pair}&interval=4h&limit=100"
@@ -48,6 +50,7 @@ def _get_binance_data(symbol: str):
         return {
             "source": "Binance (CEX)",
             "price": current_price,
+            "change_24h": change_24h,
             "history_df": df
         }
     except Exception as e:
@@ -131,6 +134,12 @@ def get_token_analysis(symbol: str) -> str:
     else:
         report += f"Price: ${price:,.4f}\n"
 
+    # Add 24h Change
+    if 'change_24h' in data:
+        change = data['change_24h']
+        change_emoji = "📈" if change >= 0 else "📉"
+        report += f"24h Change: {change_emoji} {change:+.2f}%\n"
+
     # K-line data available (from Binance) - deep technical analysis
     if data.get('history_df') is not None:
         df = data['history_df']
@@ -169,10 +178,10 @@ def get_token_analysis(symbol: str) -> str:
 
     # On-chain data (DexScreener) - show liquidity and price change
     else:
-        change = data.get('change_24h', 0)
+        # change = data.get('change_24h', 0) # Already added above
         liq = data.get('liquidity', 0)
         
-        report += f"24h Change: {change}%\n"
+        # report += f"24h Change: {change}%\n"
         report += f"Pool Liquidity: ${liq:,.0f}\n"
         report += "Note: This is an on-chain token with high volatility. Check contract safety."
 

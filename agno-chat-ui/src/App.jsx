@@ -26,7 +26,7 @@ import TerminalLoader from './components/TerminalLoader';
 import HomePage from './components/HomePage';
 
 // Import from new modular structure
-import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi } from './services';
+import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi, dashboardCache } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
 import { QuickPrompts, QuickPromptsPills, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
@@ -150,8 +150,10 @@ function AppContent() {
     }
   }, [showSettingsModal, userId, user]);
 
-  // Fetch dashboard data on mount and with intervals
+  // Fetch dashboard data on mount with cache-first strategy
   useEffect(() => {
+    const startTime = performance.now();
+
     // Helper: fetch with timeout
     const fetchWithTimeout = async (url, timeout = 5000, fallback = {}) => {
       const controller = new AbortController();
@@ -167,65 +169,143 @@ function AppContent() {
       }
     };
 
-    const fetchDashboardData = async () => {
-      // Use Promise.allSettled to not block on slow APIs
+    // Phase 1: Load from cache immediately (instant render)
+    const loadFromCache = () => {
+      const cachedNews = dashboardCache.getCache('news');
+      const cachedTokens = dashboardCache.getCache('tokens');
+      const cachedFearGreed = dashboardCache.getCache('fearGreed');
+      const cachedIndicators = dashboardCache.getCache('indicators');
+      const cachedTrending = dashboardCache.getCache('trending');
+
+      let hasAnyCache = false;
+
+      if (cachedNews?.data?.length > 0) {
+        setDashboardNews(cachedNews.data);
+        hasAnyCache = true;
+      }
+      if (cachedTokens?.data?.length > 0) {
+        setDashboardTokens(cachedTokens.data);
+        hasAnyCache = true;
+      }
+      if (cachedFearGreed?.data) {
+        setDashboardFearGreed(cachedFearGreed.data);
+        hasAnyCache = true;
+      }
+      if (cachedIndicators?.data?.length > 0) {
+        setDashboardIndicators(cachedIndicators.data);
+        hasAnyCache = true;
+      }
+      if (cachedTrending?.data?.length > 0) {
+        setTrendingTokens(cachedTrending.data);
+        setTrendingLoading(false);
+        hasAnyCache = true;
+      }
+
+      // If we have any cache, hide skeleton immediately
+      if (hasAnyCache) {
+        setDashboardLoading(false);
+        console.log(`[Dashboard] Cache loaded in ${(performance.now() - startTime).toFixed(0)}ms`);
+      }
+
+      return hasAnyCache;
+    };
+
+    // Phase 2: Background refresh (silent update)
+    const refreshFromAPI = async () => {
       const [newsRes, tokensRes, fearGreedRes, indicatorsRes, trendingRes] = await Promise.all([
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/news`, 5000, { news: [] }),
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/news`, 8000, { news: [] }),
         fetchWithTimeout(`${BASE_URL}/api/dashboard/tokens`, 5000, { tokens: [] }),
         fetchWithTimeout(`${BASE_URL}/api/dashboard/fear-greed`, 5000, { value: 50, classification: 'Neutral' }),
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/indicators`, 5000, { indicators: [] }),
+        fetchWithTimeout(`${BASE_URL}/api/dashboard/indicators`, 8000, { indicators: [] }),
         fetchWithTimeout(`${BASE_URL}/api/dashboard/trending?limit=10`, 5000, { tokens: [] })
       ]);
 
-      setDashboardNews(newsRes.news || []);
-      setDashboardTokens(tokensRes.tokens || []);
-      setDashboardFearGreed(fearGreedRes);
-      setDashboardIndicators(indicatorsRes.indicators || []);
-      setDashboardLoading(false); // Data loaded, hide skeleton
+      // Update state and cache
+      if (newsRes.news?.length > 0) {
+        setDashboardNews(newsRes.news);
+        dashboardCache.setCache('news', newsRes.news);
+      }
+      if (tokensRes.tokens?.length > 0) {
+        setDashboardTokens(tokensRes.tokens);
+        dashboardCache.setCache('tokens', tokensRes.tokens);
+      }
+      if (fearGreedRes.value !== undefined) {
+        setDashboardFearGreed(fearGreedRes);
+        dashboardCache.setCache('fearGreed', fearGreedRes);
+      }
+      if (indicatorsRes.indicators?.length > 0) {
+        setDashboardIndicators(indicatorsRes.indicators);
+        dashboardCache.setCache('indicators', indicatorsRes.indicators);
+      }
 
-      // Update trending and cache to localStorage
+      setDashboardLoading(false);
+
+      // Update trending
       const trendingData = trendingRes.tokens || [];
       if (trendingData.length > 0) {
         setTrendingTokens(trendingData);
         setTrendingLoading(false);
-        try {
-          localStorage.setItem('trendingTokens', JSON.stringify({ data: trendingData, timestamp: Date.now() }));
-        } catch (e) { }
+        dashboardCache.setCache('trending', trendingData);
       } else {
         setTrendingLoading(false);
       }
+
+      console.log(`[Dashboard] API refresh completed in ${(performance.now() - startTime).toFixed(0)}ms`);
     };
 
-    fetchDashboardData();
+    // Execute: cache first, then refresh
+    const hasCache = loadFromCache();
 
-    // Token refresh every 1 minute
-    const tokenInterval = setInterval(() => {
-      fetch(`${BASE_URL}/api/dashboard/tokens`)
-        .then(r => r.json())
-        .then(data => setDashboardTokens(data.tokens || []))
-        .catch(console.error);
+    // Always refresh in background, but with slight delay if we have cache
+    if (hasCache) {
+      // Delay refresh slightly to not compete with initial render
+      setTimeout(refreshFromAPI, 100);
+    } else {
+      // No cache, refresh immediately
+      refreshFromAPI();
+    }
+
+    // Token refresh every 1 minute (priority data)
+    const tokenInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/dashboard/tokens`);
+        const data = await res.json();
+        if (data.tokens?.length > 0) {
+          setDashboardTokens(data.tokens);
+          dashboardCache.setCache('tokens', data.tokens);
+        }
+      } catch (e) { console.error('[Dashboard] Token refresh error:', e); }
     }, 60000);
 
     // News and indicators refresh every 10 minutes
-    const otherInterval = setInterval(() => {
-      fetch(`${BASE_URL}/api/dashboard/news`).then(r => r.json()).then(data => setDashboardNews(data.news || [])).catch(() => { });
-      fetch(`${BASE_URL}/api/dashboard/indicators`).then(r => r.json()).then(data => setDashboardIndicators(data.indicators || [])).catch(() => { });
+    const otherInterval = setInterval(async () => {
+      try {
+        const [newsRes, indicatorsRes] = await Promise.all([
+          fetch(`${BASE_URL}/api/dashboard/news`).then(r => r.json()),
+          fetch(`${BASE_URL}/api/dashboard/indicators`).then(r => r.json())
+        ]);
+        if (newsRes.news?.length > 0) {
+          setDashboardNews(newsRes.news);
+          dashboardCache.setCache('news', newsRes.news);
+        }
+        if (indicatorsRes.indicators?.length > 0) {
+          setDashboardIndicators(indicatorsRes.indicators);
+          dashboardCache.setCache('indicators', indicatorsRes.indicators);
+        }
+      } catch (e) { console.error('[Dashboard] Other refresh error:', e); }
     }, 600000);
 
     // Trending refresh every 5 minutes
-    const trendingInterval = setInterval(() => {
-      fetch(`${BASE_URL}/api/dashboard/trending?limit=10`)
-        .then(r => r.json())
-        .then(data => {
-          const tokens = data.tokens || [];
-          if (tokens.length > 0) {
-            setTrendingTokens(tokens);
-            try {
-              localStorage.setItem('trendingTokens', JSON.stringify({ data: tokens, timestamp: Date.now() }));
-            } catch (e) { }
-          }
-        })
-        .catch(console.error);
+    const trendingInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/dashboard/trending?limit=10`);
+        const data = await res.json();
+        const tokens = data.tokens || [];
+        if (tokens.length > 0) {
+          setTrendingTokens(tokens);
+          dashboardCache.setCache('trending', tokens);
+        }
+      } catch (e) { console.error('[Dashboard] Trending refresh error:', e); }
     }, 300000);
 
     return () => {
