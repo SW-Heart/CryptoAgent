@@ -42,41 +42,26 @@ async def get_dashboard_news():
         news_data = []
         raw_news = []
         
-        # Use Serper API (Google News) - free tier available
+        # Use self-hosted PANews API
         try:
-            import os
-            api_key = os.getenv("SERPER_API_KEY", "")
-            if api_key:
-                headers = {
-                    "X-API-KEY": api_key,
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "q": "cryptocurrency bitcoin ethereum",
-                    "num": 6,
-                    "type": "news"
-                }
-                
-                resp = requests.post(
-                    "https://google.serper.dev/news",
-                    json=payload,
-                    headers=headers,
-                    timeout=5
-                )
-                
-                if resp.status_code == 200:
-                    results = resp.json().get("news", [])[:6]
-                    raw_news = [
-                        {
-                            "title": r.get("title", ""), 
-                            "source": r.get("source", "Google News"),
-                            "snippet": r.get("snippet", "")
-                        }
-                        for r in results if r.get("title")
-                    ]
-                    print(f"[Dashboard News] Serper returned {len(raw_news)} items")
+            NEWS_API_URL = "http://142.171.245.211:8080/api/news?limit=10&sort=desc"
+            resp = requests.get(NEWS_API_URL, timeout=8)
+            
+            if resp.status_code == 200:
+                news_list = resp.json().get("data", [])
+                raw_news = [
+                    {
+                        "title": item.get("title", ""),
+                        "source": item.get("source", "PANews"),
+                        "snippet": (item.get("content", "")[:150] + "..." 
+                                   if len(item.get("content", "")) > 150 
+                                   else item.get("content", ""))
+                    }
+                    for item in news_list if item.get("title")
+                ]
+                print(f"[Dashboard News] PANews API returned {len(raw_news)} items")
         except Exception as e:
-            print(f"[Dashboard News] Serper error: {e}")
+            print(f"[Dashboard News] PANews API error: {e}")
         
         # Use AI to summarize news in both languages
         if raw_news and len(raw_news) >= 3:
