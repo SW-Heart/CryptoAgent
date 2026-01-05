@@ -936,62 +936,58 @@ def batch_funding_rate(symbols: str = "BTC,ETH,SOL") -> str:
 # 📰 [V2适配版] 工具：专业媒体情报
 # ==========================================
 
-def get_pro_crypto_news(filter_type: str = "hot") -> str:
+def get_pro_crypto_news(limit: int = 8) -> str:
     """
-    Get curated crypto news from CryptoPanic with community sentiment (bullish/bearish votes).
+    Get latest crypto news from self-hosted PANews API.
+    Returns curated and important crypto news sorted by time (newest first).
     
     Args:
-        filter_type: 'hot', 'rising', or 'important'. Default: 'hot'
+        limit: Number of news items to return (default: 8, max: 20)
     """
-    if "你的" in CRYPTOPANIC_API_KEY or not CRYPTOPANIC_API_KEY:
-        return "❌ 配置错误: 请在 crypto_tools.py 中填入 Key"
-
-    params = {
-        "auth_token": CRYPTOPANIC_API_KEY,
-        "public": "true",   # V2文档推荐：公共模式
-        "filter": filter_type,
-        "kind": "news",     # 只看新闻，不看博客
-        "regions": "en"     # 默认英语，防止混杂其他语言不好解析
-    }
+    limit = min(max(1, limit), 20)  # Clamp between 1-20
     
     try:
-        # Use V2 URL
-        resp = requests.get(CRYPTOPANIC_BASE_URL, params=params, timeout=10)
+        NEWS_API_URL = f"http://142.171.245.211:8080/api/news?limit={limit}&sort=desc"
+        resp = requests.get(NEWS_API_URL, timeout=10)
         
         if resp.status_code != 200:
-            return f"CryptoPanic API error ({resp.status_code}): {resp.text}"
-            
+            return f"News API error ({resp.status_code}): Unable to fetch news"
+        
         data = resp.json()
+        news_list = data.get("data", [])
         
-        if "results" not in data:
-            return f"API data error: {data}"
+        if not news_list:
+            return "No news available at the moment"
         
-        report = f"[Crypto News Radar ({filter_type.upper()})]\n"
+        report = "📰 加密货币快讯 (PANews)\n"
+        report += "=" * 40 + "\n\n"
         
-        for post in data['results'][:5]: 
-            title = post.get('title', 'No title')
+        for i, item in enumerate(news_list, 1):
+            title = item.get("title", "No title")
+            content = item.get("content", "")
+            publish_time = item.get("publish_time", "")
+            source = item.get("source", "PANews")
+            link = item.get("link", "")
             
-            # Get domain (Source Object)
-            domain = "Unknown"
-            if post.get('source'):
-                domain = post['source'].get('domain', 'Unknown')
+            # Time display
+            time_str = f"[{publish_time}]" if publish_time else ""
             
-            # Get votes (Votes Object)
-            votes = post.get('votes', {})
-            bullish = votes.get('positive', 0)
-            bearish = votes.get('negative', 0)
-            important = votes.get('important', 0)
+            report += f"{i}. {time_str} {title}\n"
             
-            sentiment = "Neutral"
-            if bullish > bearish: sentiment = f"Bullish ({bullish} votes)"
-            elif bearish > bullish: sentiment = f"Bearish ({bearish} votes)"
-            if important > 5: sentiment += " [HOT]"
+            # Show snippet of content (max 150 chars)
+            if content:
+                snippet = content[:150] + "..." if len(content) > 150 else content
+                report += f"   {snippet}\n"
             
-            report += f"- [{domain}] {title}\n  Sentiment: {sentiment}\n"
+            if link:
+                report += f"   🔗 {link}\n"
             
-        return report
+            report += "\n"
+        
+        return report.strip()
+        
     except Exception as e:
-        return f"News scan failed: {str(e)}"
+        return f"News fetch failed: {str(e)}"
 
 # ==========================================
 # 📊 [V2适配版] 工具：叙事强度分析
