@@ -55,6 +55,9 @@ from indicator_memory import get_indicator_reliability, get_indicator_reliabilit
 # ETF 资金流工具 (Farside)
 from etf_tools import get_etf_flows, get_etf_daily, get_etf_summary, get_etf_ticker
 
+# K 线图视觉分析工具
+from kline_analysis import analyze_kline
+
 # 初始化ETF MCP工具 (提供BTC ETF流入流出数据) - 暂时禁用
 # etf_mcp_tools = MCPTools(
 #     transport="streamable-http",
@@ -105,6 +108,7 @@ crypto_agent = Agent(
         get_etf_daily,                 # 单日ETF资金流
         get_etf_summary,               # ETF汇总统计
         get_etf_ticker,                # 按机构查询(如IBIT, FBTC)
+        analyze_kline,                 # K 线图视觉分析 (CHART-IMG + GPT-4o-mini)
         search_news,  # 自定义新闻搜索（无 imageUrl）
         search_google,  # 自定义 Google 搜索（无 imageUrl）
         DuckDuckGoTools(all=True),
