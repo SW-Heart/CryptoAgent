@@ -191,7 +191,10 @@
             "pnl": "PnL (ROE%)",
             "long": "LONG",
             "short": "SHORT",
-            "noPositions": "No open positions"
+            "noPositions": "No open positions",
+            "partialClosed": "Partial Closed",
+            "remaining": "Rem",
+            "realized": "Realized"
         },
         "history": {
             "closedAt": "Closed At",
@@ -206,10 +209,20 @@
             "time": "Time",
             "action": "Action",
             "symbol": "Symbol",
+            "direction": "Side",
+            "quantity": "Qty",
             "price": "Price",
+            "pnl": "P&L",
             "margin": "Margin",
             "fee": "Fee",
-            "noOrders": "No orders"
+            "noOrders": "No orders",
+            "openLong": "Open Long",
+            "openShort": "Open Short",
+            "partialTakeProfit": "Partial TP",
+            "close": "Close",
+            "modifySlTp": "Modify SL/TP",
+            "long": "L",
+            "short": "S"
         },
         "logs": {
             "title": "Strategy Logs",

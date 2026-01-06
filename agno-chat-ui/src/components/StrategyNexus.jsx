@@ -383,7 +383,7 @@ function PositionsTable({ positions, isClosed, t }) {
                                         </span>
                                         {hasPartialClose && !isClosed && (
                                             <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 text-[10px] rounded font-medium">
-                                                部分平仓
+                                                {t('strategy.positions.partialClosed')}
                                             </span>
                                         )}
                                     </div>
@@ -402,7 +402,7 @@ function PositionsTable({ positions, isClosed, t }) {
                                         {t('strategy.positions.margin')} ${margin.toFixed(0)}
                                         {hasPartialClose && !isClosed && (
                                             <span className="text-cyan-400 ml-1">
-                                                (剩 {((remainingQty / pos.quantity) * 100).toFixed(0)}%)
+                                                ({t('strategy.positions.remaining')} {((remainingQty / pos.quantity) * 100).toFixed(0)}%)
                                             </span>
                                         )}
                                     </div>
@@ -423,7 +423,7 @@ function PositionsTable({ positions, isClosed, t }) {
                                     </div>
                                     {hasPartialClose && !isClosed && realizedPnl !== 0 && (
                                         <div className={`text-[10px] ${realizedPnl >= 0 ? 'text-cyan-400' : 'text-red-400/60'}`}>
-                                            已实现: {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(2)}
+                                            {t('strategy.positions.realized')}: {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(2)}
                                         </div>
                                     )}
                                 </td>
@@ -455,16 +455,16 @@ function OrdersTable({ orders, t }) {
     // Format action display with professional labels
     const formatAction = (action, direction) => {
         if (action?.includes('OPEN')) {
-            return direction === 'LONG' ? '开多' : '开空';
+            return direction === 'LONG' ? t('strategy.orders.openLong') : t('strategy.orders.openShort');
         } else if (action?.includes('PARTIAL_CLOSE')) {
             // Extract percentage from action like "PARTIAL_CLOSE_50%"
             const match = action.match(/PARTIAL_CLOSE_(\d+)%/);
             const pct = match ? match[1] : '';
-            return `部分止盈 ${pct}%`;
+            return `${t('strategy.orders.partialTakeProfit')} ${pct}%`;
         } else if (action === 'CLOSE') {
-            return '平仓';
+            return t('strategy.orders.close');
         } else if (action?.includes('MODIFY')) {
-            return '调整止盈止损';
+            return t('strategy.orders.modifySlTp');
         }
         return action;
     };
@@ -476,11 +476,11 @@ function OrdersTable({ orders, t }) {
                     <tr className="text-left text-slate-400 text-xs border-b border-slate-700/50">
                         <th className="p-2 sticky left-0 bg-[#131722]">{t('strategy.orders.time')}</th>
                         <th className="p-2">{t('strategy.orders.symbol')}</th>
-                        <th className="p-2">方向</th>
+                        <th className="p-2">{t('strategy.orders.direction')}</th>
                         <th className="p-2">{t('strategy.orders.action')}</th>
-                        <th className="p-2">数量</th>
+                        <th className="p-2">{t('strategy.orders.quantity')}</th>
                         <th className="p-2">{t('strategy.orders.price')}</th>
-                        <th className="p-2">盈亏</th>
+                        <th className="p-2">{t('strategy.orders.pnl')}</th>
                         <th className="p-2">{t('strategy.orders.fee')}</th>
                         <th className="p-2">{t('strategy.history.status')}</th>
                     </tr>
@@ -511,7 +511,7 @@ function OrdersTable({ orders, t }) {
                                 <td className="p-2">
                                     {order.direction && (
                                         <span className={`font-medium ${isLong ? 'text-green-400' : 'text-red-400'}`}>
-                                            {isLong ? '多' : '空'}
+                                            {isLong ? t('strategy.orders.long') : t('strategy.orders.short')}
                                         </span>
                                     )}
                                 </td>

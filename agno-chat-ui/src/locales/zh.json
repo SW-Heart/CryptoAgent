@@ -191,7 +191,10 @@
             "pnl": "盈亏 (ROE%)",
             "long": "做多",
             "short": "做空",
-            "noPositions": "暂无持仓"
+            "noPositions": "暂无持仓",
+            "partialClosed": "部分平仓",
+            "remaining": "剩",
+            "realized": "已实现"
         },
         "history": {
             "closedAt": "平仓时间",
@@ -206,10 +209,20 @@
             "time": "时间",
             "action": "操作",
             "symbol": "币种",
+            "direction": "方向",
+            "quantity": "数量",
             "price": "价格",
+            "pnl": "盈亏",
             "margin": "保证金",
             "fee": "手续费",
-            "noOrders": "暂无订单"
+            "noOrders": "暂无订单",
+            "openLong": "开多",
+            "openShort": "开空",
+            "partialTakeProfit": "部分止盈",
+            "close": "平仓",
+            "modifySlTp": "调整止盈止损",
+            "long": "多",
+            "short": "空"
         },
         "logs": {
             "title": "策略日志",
