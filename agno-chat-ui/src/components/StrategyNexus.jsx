@@ -197,9 +197,10 @@ export default function StrategyNexus({ userId, onBack }) {
                 />
                 <StatCard
                     icon={<DollarSign className="w-5 h-5" />}
-                    label={t('strategy.available')}
-                    value={`$${wallet?.current_balance?.toFixed(2) || '0.00'}`}
-                    color="blue"
+                    label={t('strategy.realizedPnL')}
+                    value={`${(wallet?.total_pnl || 0) >= 0 ? '+' : ''}$${(wallet?.total_pnl || 0).toFixed(2)}`}
+                    subtext={`${((wallet?.total_pnl || 0) / (wallet?.initial_balance || 10000) * 100).toFixed(1)}% ${t('strategy.roi')}`}
+                    color={(wallet?.total_pnl || 0) >= 0 ? "green" : "red"}
                 />
                 <StatCard
                     icon={totalUnrealizedPnL >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}

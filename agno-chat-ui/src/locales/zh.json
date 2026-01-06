@@ -174,6 +174,8 @@
         "equity": "总权益",
         "available": "可用余额",
         "unrealizedPnL": "未实现盈亏",
+        "realizedPnL": "已实现盈亏",
+        "roi": "收益率",
         "winRate": "胜率",
         "trades": "笔交易",
         "tabs": {

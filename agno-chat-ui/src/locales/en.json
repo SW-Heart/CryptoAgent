@@ -174,6 +174,8 @@
         "equity": "Equity",
         "available": "Available",
         "unrealizedPnL": "Unrealized P&L",
+        "realizedPnL": "Realized P&L",
+        "roi": "ROI",
         "winRate": "Win Rate",
         "trades": "trades",
         "tabs": {
