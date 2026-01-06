@@ -358,22 +358,34 @@ function PositionsTable({ positions, isClosed, t }) {
                 </thead>
                 <tbody>
                     {positions.map((pos, idx) => {
-                        const pnl = isClosed ? (pos.realized_pnl || 0) : (pos.unrealized_pnl || 0);
+                        const unrealizedPnl = pos.unrealized_pnl || 0;
+                        const realizedPnl = pos.realized_pnl || 0;
+                        const pnl = isClosed ? realizedPnl : unrealizedPnl;
                         const leverage = pos.leverage || 10;
                         const margin = pos.margin || 0;
                         const notional = pos.notional_value || margin * leverage;
                         // ROE = (PnL / Margin) * 100% - this is the leveraged return
                         const roe = margin > 0 ? (pnl / margin * 100) : 0;
 
+                        // 阶段性平仓状态
+                        const hasPartialClose = (pos.closed_quantity || 0) > 0;
+                        const closedQty = pos.closed_quantity || 0;
+                        const remainingQty = pos.remaining_quantity || pos.quantity;
+
                         return (
                             <tr key={idx} className="border-b border-slate-700/30 hover:bg-slate-800/30">
-                                {/* Symbol + Leverage badge */}
+                                {/* Symbol + Leverage badge + Partial close indicator */}
                                 <td className="p-2">
                                     <div className="flex items-center gap-1">
                                         <span className="font-semibold text-white">{pos.symbol}</span>
                                         <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] rounded font-medium">
                                             {leverage}x
                                         </span>
+                                        {hasPartialClose && !isClosed && (
+                                            <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-400 text-[10px] rounded font-medium">
+                                                部分平仓
+                                            </span>
+                                        )}
                                     </div>
                                 </td>
                                 {/* Direction */}
@@ -383,10 +395,17 @@ function PositionsTable({ positions, isClosed, t }) {
                                         {pos.direction === 'LONG' ? t('strategy.positions.long') : t('strategy.positions.short')}
                                     </span>
                                 </td>
-                                {/* Size: Margin + Notional */}
+                                {/* Size: 显示剩余仓位信息 */}
                                 <td className="p-2">
                                     <div className="text-white">${notional.toFixed(0)}</div>
-                                    <div className="text-[10px] text-slate-500">{t('strategy.positions.margin')} ${margin.toFixed(0)}</div>
+                                    <div className="text-[10px] text-slate-500">
+                                        {t('strategy.positions.margin')} ${margin.toFixed(0)}
+                                        {hasPartialClose && !isClosed && (
+                                            <span className="text-cyan-400 ml-1">
+                                                (剩 {((remainingQty / pos.quantity) * 100).toFixed(0)}%)
+                                            </span>
+                                        )}
+                                    </div>
                                 </td>
                                 {/* Entry Price */}
                                 <td className="p-2 text-slate-300">
@@ -396,12 +415,17 @@ function PositionsTable({ positions, isClosed, t }) {
                                 <td className="p-2 text-slate-300">
                                     ${(isClosed ? pos.close_price : pos.current_price)?.toFixed(2)}
                                 </td>
-                                {/* PnL with ROE */}
+                                {/* PnL with ROE + 已实现盈亏 */}
                                 <td className={`p-2 text-right font-semibold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                     <div>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} USDT</div>
                                     <div className={`text-xs ${roe >= 0 ? 'text-green-400/70' : 'text-red-400/70'}`}>
                                         {roe >= 0 ? '+' : ''}{roe.toFixed(2)}%
                                     </div>
+                                    {hasPartialClose && !isClosed && realizedPnl !== 0 && (
+                                        <div className={`text-[10px] ${realizedPnl >= 0 ? 'text-cyan-400' : 'text-red-400/60'}`}>
+                                            已实现: {realizedPnl >= 0 ? '+' : ''}{realizedPnl.toFixed(2)}
+                                        </div>
+                                    )}
                                 </td>
                             </tr>
                         );
@@ -428,6 +452,23 @@ function OrdersTable({ orders, t }) {
         return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
     };
 
+    // Format action display with professional labels
+    const formatAction = (action, direction) => {
+        if (action?.includes('OPEN')) {
+            return direction === 'LONG' ? '开多' : '开空';
+        } else if (action?.includes('PARTIAL_CLOSE')) {
+            // Extract percentage from action like "PARTIAL_CLOSE_50%"
+            const match = action.match(/PARTIAL_CLOSE_(\d+)%/);
+            const pct = match ? match[1] : '';
+            return `部分止盈 ${pct}%`;
+        } else if (action === 'CLOSE') {
+            return '平仓';
+        } else if (action?.includes('MODIFY')) {
+            return '调整止盈止损';
+        }
+        return action;
+    };
+
     return (
         <div className="overflow-x-auto h-full">
             <table className="w-max min-w-full text-sm">
@@ -435,11 +476,11 @@ function OrdersTable({ orders, t }) {
                     <tr className="text-left text-slate-400 text-xs border-b border-slate-700/50">
                         <th className="p-2 sticky left-0 bg-[#131722]">{t('strategy.orders.time')}</th>
                         <th className="p-2">{t('strategy.orders.symbol')}</th>
+                        <th className="p-2">方向</th>
                         <th className="p-2">{t('strategy.orders.action')}</th>
+                        <th className="p-2">数量</th>
                         <th className="p-2">{t('strategy.orders.price')}</th>
-                        <th className="p-2">{t('strategy.orders.margin')}</th>
-                        <th className="p-2">SL</th>
-                        <th className="p-2">TP</th>
+                        <th className="p-2">盈亏</th>
                         <th className="p-2">{t('strategy.orders.fee')}</th>
                         <th className="p-2">{t('strategy.history.status')}</th>
                     </tr>
@@ -447,15 +488,17 @@ function OrdersTable({ orders, t }) {
                 <tbody>
                     {orders.map((order, idx) => {
                         const isOpen = order.action?.includes('OPEN');
-                        const isLong = order.action?.includes('LONG');
-                        const isShort = order.action?.includes('SHORT');
-                        const isClose = order.action?.includes('CLOSE');
+                        const isLong = order.direction === 'LONG';
+                        const isPartialClose = order.action?.includes('PARTIAL_CLOSE');
+                        const isClose = order.action === 'CLOSE';
                         const isModify = order.action?.includes('MODIFY');
+                        const pnl = order.realized_pnl || 0;
 
                         // Color based on action
                         let actionColor = 'text-slate-300';
-                        if (isLong) actionColor = 'text-green-400';
-                        else if (isShort) actionColor = 'text-red-400';
+                        if (isOpen && isLong) actionColor = 'text-green-400';
+                        else if (isOpen && !isLong) actionColor = 'text-red-400';
+                        else if (isPartialClose) actionColor = 'text-cyan-400';
                         else if (isClose) actionColor = 'text-amber-400';
                         else if (isModify) actionColor = 'text-blue-400';
 
@@ -465,20 +508,24 @@ function OrdersTable({ orders, t }) {
                                     {formatTime(order.created_at)}
                                 </td>
                                 <td className="p-2 font-medium text-white">{order.symbol}</td>
+                                <td className="p-2">
+                                    {order.direction && (
+                                        <span className={`font-medium ${isLong ? 'text-green-400' : 'text-red-400'}`}>
+                                            {isLong ? '多' : '空'}
+                                        </span>
+                                    )}
+                                </td>
                                 <td className={`p-2 font-medium ${actionColor}`}>
-                                    {order.action}
+                                    {formatAction(order.action, order.direction)}
+                                </td>
+                                <td className="p-2 text-slate-300">
+                                    {order.quantity ? order.quantity.toFixed(4) : '-'}
                                 </td>
                                 <td className="p-2 text-slate-300">
                                     {order.entry_price ? `$${order.entry_price.toFixed(2)}` : '-'}
                                 </td>
-                                <td className="p-2 text-slate-300">
-                                    {order.margin ? `$${order.margin.toFixed(0)}` : '-'}
-                                </td>
-                                <td className="p-2 text-red-400/80">
-                                    {order.stop_loss ? `$${order.stop_loss.toFixed(2)}` : '-'}
-                                </td>
-                                <td className="p-2 text-green-400/80">
-                                    {order.take_profit ? `$${order.take_profit.toFixed(2)}` : '-'}
+                                <td className={`p-2 font-medium ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-'}
                                 </td>
                                 <td className="p-2 text-slate-500">
                                     {order.fee ? `$${order.fee.toFixed(2)}` : '-'}

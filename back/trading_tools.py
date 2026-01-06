@@ -259,11 +259,11 @@ def open_position(
     
     position_id = cursor.lastrowid
     
-    # Insert order record
+    # Insert order record - 开仓订单
     conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, margin, entry_price, stop_loss, take_profit, fee)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (position_id, symbol, f"OPEN_{direction}", margin, entry_price, stop_loss, tp1_price, fee))
+        INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, stop_loss, take_profit, fee)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (position_id, symbol, f"OPEN_{direction}", direction, quantity, margin, entry_price, stop_loss, tp1_price, fee))
     
     # Deduct margin and fee from user's wallet (使用原子操作防止并发问题)
     conn.execute("""
@@ -351,11 +351,11 @@ def close_position(position_id: int, reason: str = "manual", user_id: str = None
         WHERE id = ?
     """, (status, close_price, realized_pnl, position_id))
     
-    # Insert close order
+    # Insert close order - 完整记录平仓信息
     conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, entry_price, fee)
-        VALUES (?, ?, ?, ?, ?)
-    """, (position_id, pos["symbol"], "CLOSE", close_price, fee))
+        INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, realized_pnl, close_reason, fee)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (position_id, pos["symbol"], "CLOSE", pos["direction"], pos["quantity"], pos["margin"], close_price, realized_pnl, reason, fee))
     
     # Update wallet for the position's owner (使用原子操作防止并发问题)
     position_user_id = pos["user_id"]
@@ -487,19 +487,22 @@ def partial_close_position(
             WHERE id = ?
         """, (close_price, realized_pnl, position_id))
     else:
-        # Update position with new closed_quantity and SL/TP
+        # Update position with new closed_quantity, reduced margin, and SL/TP
+        # 关键修复：同步减少仓位的 margin，避免 equity 计算时保证金被重复计算
+        new_margin = pos["margin"] - margin_to_release
         conn.execute("""
             UPDATE positions 
-            SET closed_quantity = ?, stop_loss = ?, take_profit = ?,
+            SET closed_quantity = ?, margin = ?, stop_loss = ?, take_profit = ?,
                 realized_pnl = COALESCE(realized_pnl, 0) + ?
             WHERE id = ?
-        """, (new_closed_qty, final_sl, final_tp, realized_pnl, position_id))
+        """, (new_closed_qty, new_margin, final_sl, final_tp, realized_pnl, position_id))
     
-    # Insert partial close order record
+    # Insert partial close order record - 完整记录阶段性平仓信息
     conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, margin, entry_price, fee)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (position_id, pos["symbol"], f"PARTIAL_CLOSE_{int(close_percent)}%", margin_to_release, close_price, fee))
+        INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, realized_pnl, fee)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (position_id, pos["symbol"], f"PARTIAL_CLOSE_{int(close_percent)}%", 
+          pos["direction"], close_qty, margin_to_release, close_price, realized_pnl, fee))
     
     # Update wallet - release proportional margin + add realized PnL
     position_user_id = pos["user_id"]
@@ -591,10 +594,15 @@ def get_positions_summary(user_id: str = None) -> dict:
         current_price = get_current_price(pos["symbol"])
         total_margin_in_use += pos["margin"]
         
+        # 计算剩余数量（考虑阶段性平仓）
+        closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
+        remaining_qty = pos["quantity"] - closed_qty
+        
+        # 基于剩余数量计算未实现盈亏
         if pos["direction"] == "LONG":
-            unrealized_pnl = pos["quantity"] * (current_price - pos["entry_price"])
+            unrealized_pnl = remaining_qty * (current_price - pos["entry_price"])
         else:
-            unrealized_pnl = pos["quantity"] * (pos["entry_price"] - current_price)
+            unrealized_pnl = remaining_qty * (pos["entry_price"] - current_price)
         
         roi = unrealized_pnl / pos["margin"] * 100 if pos["margin"] > 0 else 0
         total_unrealized_pnl += unrealized_pnl

@@ -66,17 +66,22 @@ def init_strategy_tables():
         )
     """)
     
-    # Orders history
+    # Orders history - 完整的订单记录（含阶段性平仓）
     conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             position_id INTEGER,
             symbol TEXT NOT NULL,
             action TEXT NOT NULL,
+            direction TEXT,
+            quantity REAL,
             margin REAL,
             entry_price REAL,
             stop_loss REAL,
             take_profit REAL,
+            realized_pnl REAL,
+            tp_level INTEGER,
+            close_reason TEXT,
             fee REAL DEFAULT 0,
             status TEXT DEFAULT 'FILLED',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -132,6 +137,9 @@ async def get_wallet():
         
         for pos in positions:
             total_margin_in_use += pos["margin"]
+            # 计算剩余数量（原始数量 - 已平仓数量）
+            closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
+            remaining_qty = pos["quantity"] - closed_qty
             try:
                 resp = requests.get(
                     f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol={pos['symbol']}USDT",
@@ -140,10 +148,11 @@ async def get_wallet():
                 )
                 if resp.status_code == 200:
                     current_price = float(resp.json().get("price", 0))
+                    # 使用剩余数量计算未实现盈亏
                     if pos["direction"] == "LONG":
-                        total_unrealized_pnl += pos["quantity"] * (current_price - pos["entry_price"])
+                        total_unrealized_pnl += remaining_qty * (current_price - pos["entry_price"])
                     else:
-                        total_unrealized_pnl += pos["quantity"] * (pos["entry_price"] - current_price)
+                        total_unrealized_pnl += remaining_qty * (pos["entry_price"] - current_price)
             except:
                 total_unrealized_pnl += pos["unrealized_pnl"] or 0
         
@@ -190,6 +199,10 @@ async def get_positions(status: str = "OPEN"):
             leverage = row["leverage"] if "leverage" in row.keys() else 10
             notional_value = row["notional_value"] if "notional_value" in row.keys() else row["margin"] * leverage
             
+            # 计算阶段性平仓相关数据
+            closed_qty = row["closed_quantity"] if "closed_quantity" in row.keys() and row["closed_quantity"] else 0
+            remaining_qty = row["quantity"] - closed_qty
+            
             pos_data = {
                 "id": row["id"],
                 "symbol": row["symbol"],
@@ -199,15 +212,17 @@ async def get_positions(status: str = "OPEN"):
                 "notional_value": notional_value,
                 "entry_price": row["entry_price"],
                 "quantity": row["quantity"],
+                "closed_quantity": closed_qty,
+                "remaining_quantity": remaining_qty,
                 "stop_loss": row["stop_loss"],
                 "take_profit": row["take_profit"],
                 "current_price": row["current_price"],
                 "unrealized_pnl": row["unrealized_pnl"],
+                "realized_pnl": row["realized_pnl"],
                 "status": row["status"],
                 "opened_at": row["opened_at"],
                 "closed_at": row["closed_at"],
-                "close_price": row["close_price"],
-                "realized_pnl": row["realized_pnl"]
+                "close_price": row["close_price"]
             }
             
             # For OPEN positions, get real-time price and calculate PnL
@@ -222,11 +237,15 @@ async def get_positions(status: str = "OPEN"):
                         current_price = float(resp.json().get("price", 0))
                         pos_data["current_price"] = current_price
                         
-                        # Calculate unrealized PnL
+                        # 计算剩余数量（考虑阶段性平仓）
+                        closed_qty = row["closed_quantity"] if row["closed_quantity"] else 0
+                        remaining_qty = row["quantity"] - closed_qty
+                        
+                        # Calculate unrealized PnL (基于剩余数量)
                         if row["direction"] == "LONG":
-                            unrealized_pnl = row["quantity"] * (current_price - row["entry_price"])
+                            unrealized_pnl = remaining_qty * (current_price - row["entry_price"])
                         else:
-                            unrealized_pnl = row["quantity"] * (row["entry_price"] - current_price)
+                            unrealized_pnl = remaining_qty * (row["entry_price"] - current_price)
                         
                         pos_data["unrealized_pnl"] = round(unrealized_pnl, 2)
                 except:

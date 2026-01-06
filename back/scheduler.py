@@ -209,11 +209,15 @@ def update_positions_prices():
             if current_price <= 0:
                 continue
             
-            # Calculate unrealized PnL
+            # 计算剩余数量（考虑阶段性平仓）
+            closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
+            remaining_qty = pos["quantity"] - closed_qty
+            
+            # Calculate unrealized PnL (基于剩余数量)
             if pos["direction"] == "LONG":
-                unrealized_pnl = pos["quantity"] * (current_price - pos["entry_price"])
+                unrealized_pnl = remaining_qty * (current_price - pos["entry_price"])
             else:
-                unrealized_pnl = pos["quantity"] * (pos["entry_price"] - current_price)
+                unrealized_pnl = remaining_qty * (pos["entry_price"] - current_price)
             
             # Update position price
             conn.execute("""
