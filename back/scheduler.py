@@ -648,7 +648,8 @@ def send_daily_report_emails():
                     to_email=sub["email"],
                     report_date=report_date,
                     content=row["content"],
-                    unsubscribe_token=sub["token"]
+                    unsubscribe_token=sub["token"],
+                    language=lang
                 )
                 if success:
                     print(f"[DailyReport] Email sent to {sub['email']}")

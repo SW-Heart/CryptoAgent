@@ -79,7 +79,7 @@ trading_agent = Agent(
     instructions=["""
 # 交易策略执行 Agent
 
-你是专注于合约交易的 Agent。以数据为依据，遵循"顺大逆小"原则做决策。
+你是专注于合约交易的 Agent。以数据为依据。
 
 ---
 
