@@ -519,14 +519,26 @@ function OrdersTable({ orders, t }) {
                                 <td className={`p-2 font-medium ${actionColor}`}>
                                     {formatAction(order.action, order.direction)}
                                 </td>
+                                {/* 数量：MODIFY 订单不显示 */}
                                 <td className="p-2 text-slate-300">
-                                    {order.quantity ? order.quantity.toFixed(4) : '-'}
+                                    {isModify ? '-' : (order.quantity ? order.quantity.toFixed(4) : '-')}
                                 </td>
+                                {/* 价格：MODIFY 订单显示 SL/TP，其他显示成交价 */}
                                 <td className="p-2 text-slate-300">
-                                    {order.entry_price ? `$${order.entry_price.toFixed(2)}` : '-'}
+                                    {isModify ? (
+                                        <div className="text-xs">
+                                            {order.stop_loss && <span className="text-red-400/80">SL: ${order.stop_loss.toFixed(0)}</span>}
+                                            {order.stop_loss && order.take_profit && ' / '}
+                                            {order.take_profit && <span className="text-green-400/80">TP: ${order.take_profit.toFixed(0)}</span>}
+                                            {!order.stop_loss && !order.take_profit && '-'}
+                                        </div>
+                                    ) : (
+                                        order.entry_price ? `$${order.entry_price.toFixed(2)}` : '-'
+                                    )}
                                 </td>
+                                {/* 盈亏：MODIFY 订单不显示 */}
                                 <td className={`p-2 font-medium ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                    {pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-'}
+                                    {isModify ? '-' : (pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-')}
                                 </td>
                                 <td className="p-2 text-slate-500">
                                     {order.fee ? `$${order.fee.toFixed(2)}` : '-'}
