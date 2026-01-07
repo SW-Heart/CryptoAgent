@@ -176,7 +176,7 @@ export default function PopularTokens({ tokens = [], onAnalyzeToken }) {
                                             {/* 24h Change */}
                                             <span className={`col-span-2 text-right text-xs font-medium ${(token.change_24h || 0) >= 0 ? 'text-green-400' : 'text-red-400'
                                                 }`}>
-                                                +{token.change_24h?.toFixed(0)}%
+                                                {(token.change_24h || 0) >= 0 ? '+' : ''}{token.change_24h?.toFixed(0)}%
                                             </span>
 
                                             {/* Market Cap */}
