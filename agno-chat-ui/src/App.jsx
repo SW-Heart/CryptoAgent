@@ -1369,9 +1369,12 @@ function AppContent() {
                 </div>
               </div>
 
-              {/* User Dropdown Menu */}
+              {/* User Dropdown Menu - positioned outside sidebar when collapsed */}
               {showUserMenu && (
-                <div className="absolute bottom-full left-0 right-0 mb-2 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden">
+                <div className={`mb-2 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-[100] ${isSidebarOpen
+                    ? 'absolute bottom-full left-0 right-0'
+                    : 'fixed bottom-20 left-2 lg:left-16 w-56'
+                  }`}>
                   {/* User info header */}
                   <div className="px-4 py-3 border-b border-slate-700">
                     <div className="flex items-center gap-3">
