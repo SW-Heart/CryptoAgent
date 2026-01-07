@@ -260,16 +260,41 @@ async def get_positions(status: str = "OPEN"):
 
 @router.get("/orders")
 async def get_orders(limit: int = 20):
-    """Get order history"""
+    """Get order history with backward compatibility for old records"""
     try:
         conn = get_db_connection()
         rows = conn.execute(
             "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?",
             (limit,)
         ).fetchall()
-        conn.close()
         
-        orders = [dict(row) for row in rows]
+        orders = []
+        for row in rows:
+            order = dict(row)
+            
+            # 兼容旧订单：如果没有 direction，尝试从关联的 position 获取
+            if not order.get("direction") and order.get("position_id"):
+                pos = conn.execute(
+                    "SELECT direction, quantity FROM positions WHERE id = ?",
+                    (order["position_id"],)
+                ).fetchone()
+                if pos:
+                    order["direction"] = pos["direction"]
+                    # 对于开仓订单，补充 quantity
+                    if order.get("action", "").startswith("OPEN") and not order.get("quantity"):
+                        order["quantity"] = pos["quantity"]
+            
+            # 兼容旧订单：从 action 推断 direction
+            if not order.get("direction"):
+                action = order.get("action", "")
+                if "LONG" in action:
+                    order["direction"] = "LONG"
+                elif "SHORT" in action:
+                    order["direction"] = "SHORT"
+            
+            orders.append(order)
+        
+        conn.close()
         return {"orders": orders}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
