@@ -475,15 +475,18 @@ function OrdersTable({ orders, t }) {
             <table className="w-max min-w-full text-sm">
                 <thead className="sticky top-0 bg-[#131722]">
                     <tr className="text-left text-slate-400 text-xs border-b border-slate-700/50">
-                        <th className="p-2 sticky left-0 bg-[#131722]">{t('strategy.orders.time')}</th>
-                        <th className="p-2">{t('strategy.orders.symbol')}</th>
-                        <th className="p-2">{t('strategy.orders.direction')}</th>
-                        <th className="p-2">{t('strategy.orders.action')}</th>
-                        <th className="p-2">{t('strategy.orders.quantity')}</th>
-                        <th className="p-2">{t('strategy.orders.price')}</th>
-                        <th className="p-2">{t('strategy.orders.pnl')}</th>
-                        <th className="p-2">{t('strategy.orders.fee')}</th>
-                        <th className="p-2">{t('strategy.history.status')}</th>
+                        <th className="p-2 sticky left-0 bg-[#131722] min-w-[80px]">{t('strategy.orders.time')}</th>
+                        <th className="p-2 min-w-[60px]">{t('strategy.orders.symbol')}</th>
+                        <th className="p-2 min-w-[40px]">{t('strategy.orders.direction')}</th>
+                        <th className="p-2 min-w-[40px]">Lev</th>
+                        <th className="p-2 min-w-[100px]">{t('strategy.orders.action')}</th>
+                        <th className="p-2 min-w-[80px]">{t('strategy.orders.quantity')}</th>
+                        <th className="p-2 min-w-[80px]">{t('strategy.orders.price')}</th>
+                        <th className="p-2 min-w-[70px]">SL</th>
+                        <th className="p-2 min-w-[70px]">TP</th>
+                        <th className="p-2 min-w-[80px]">{t('strategy.orders.pnl')}</th>
+                        <th className="p-2 min-w-[60px]">{t('strategy.orders.fee')}</th>
+                        <th className="p-2 min-w-[60px]">{t('strategy.history.status')}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -494,6 +497,7 @@ function OrdersTable({ orders, t }) {
                         const isClose = order.action === 'CLOSE';
                         const isModify = order.action?.includes('MODIFY');
                         const pnl = order.realized_pnl || 0;
+                        const leverage = order.leverage || 10;
 
                         // Color based on action
                         let actionColor = 'text-slate-300';
@@ -505,44 +509,55 @@ function OrdersTable({ orders, t }) {
 
                         return (
                             <tr key={idx} className="border-b border-slate-700/30 hover:bg-slate-800/30">
+                                {/* 时间 */}
                                 <td className="p-2 text-slate-400 whitespace-nowrap sticky left-0 bg-[#131722]">
                                     {formatTime(order.created_at)}
                                 </td>
+                                {/* 币种 */}
                                 <td className="p-2 font-medium text-white">{order.symbol}</td>
+                                {/* 方向 */}
                                 <td className="p-2">
-                                    {order.direction && (
+                                    {order.direction ? (
                                         <span className={`font-medium ${isLong ? 'text-green-400' : 'text-red-400'}`}>
                                             {isLong ? t('strategy.orders.long') : t('strategy.orders.short')}
                                         </span>
-                                    )}
+                                    ) : '-'}
                                 </td>
+                                {/* 杠杆 */}
+                                <td className="p-2">
+                                    <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] rounded font-medium">
+                                        {leverage}x
+                                    </span>
+                                </td>
+                                {/* 操作 */}
                                 <td className={`p-2 font-medium ${actionColor}`}>
                                     {formatAction(order.action, order.direction)}
                                 </td>
-                                {/* 数量：MODIFY 订单不显示 */}
+                                {/* 数量 */}
                                 <td className="p-2 text-slate-300">
-                                    {isModify ? '-' : (order.quantity ? order.quantity.toFixed(4) : '-')}
+                                    {order.quantity ? order.quantity.toFixed(4) : '-'}
                                 </td>
-                                {/* 价格：MODIFY 订单显示 SL/TP，其他显示成交价 */}
+                                {/* 成交价 */}
                                 <td className="p-2 text-slate-300">
-                                    {isModify ? (
-                                        <div className="text-xs">
-                                            {order.stop_loss && <span className="text-red-400/80">SL: ${order.stop_loss.toFixed(0)}</span>}
-                                            {order.stop_loss && order.take_profit && ' / '}
-                                            {order.take_profit && <span className="text-green-400/80">TP: ${order.take_profit.toFixed(0)}</span>}
-                                            {!order.stop_loss && !order.take_profit && '-'}
-                                        </div>
-                                    ) : (
-                                        order.entry_price ? `$${order.entry_price.toFixed(2)}` : '-'
-                                    )}
+                                    {order.entry_price ? `$${order.entry_price.toFixed(2)}` : '-'}
                                 </td>
-                                {/* 盈亏：MODIFY 订单不显示 */}
+                                {/* 止损 */}
+                                <td className="p-2 text-red-400/80">
+                                    {order.stop_loss ? `$${order.stop_loss.toFixed(0)}` : '-'}
+                                </td>
+                                {/* 止盈 */}
+                                <td className="p-2 text-green-400/80">
+                                    {order.take_profit ? `$${order.take_profit.toFixed(0)}` : '-'}
+                                </td>
+                                {/* 盈亏 */}
                                 <td className={`p-2 font-medium ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                    {isModify ? '-' : (pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-')}
+                                    {pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}` : '-'}
                                 </td>
+                                {/* 手续费 */}
                                 <td className="p-2 text-slate-500">
                                     {order.fee ? `$${order.fee.toFixed(2)}` : '-'}
                                 </td>
+                                {/* 状态 */}
                                 <td className="p-2">
                                     <span className={`px-1.5 py-0.5 rounded text-[10px] ${order.status === 'FILLED' ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-400'
                                         }`}>
