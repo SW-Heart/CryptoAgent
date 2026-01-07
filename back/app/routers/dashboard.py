@@ -34,7 +34,7 @@ def fetch_with_retry(url, params=None, headers=None, timeout=5, retries=1):
 async def get_dashboard_news():
     """Get latest crypto news headlines with AI summary (10min cache)"""
     try:
-        if is_cache_valid("news", 3600):
+        if is_cache_valid("news", 600):  # 10min cache (was 1hr)
             cached = get_cache("news")
             if cached and len(cached) > 0:
                 return {"news": cached}
