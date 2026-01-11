@@ -24,9 +24,7 @@ services:
       - "8000:8000"
     environment:
       - DB_URL=postgresql://postgres:password@db:5432/cryptoagent
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      # 让 env_file 处理所有 API Keys，避免宿主机环境变量为空覆盖了 .env 文件
     env_file:
       - back/.env
     depends_on:
