@@ -4,7 +4,7 @@ import {
     TrendingUp, TrendingDown, DollarSign, Target,
     ChevronDown, ChevronRight, Activity, Wallet,
     ArrowUpCircle, ArrowDownCircle, Clock, Percent,
-    Award, Power
+    Award, Power, Key, Play, Square, AlertCircle, Settings
 } from 'lucide-react';
 import TerminalLoader from './TerminalLoader';
 
@@ -36,12 +36,36 @@ export default function StrategyNexus({ userId, onBack }) {
     const [schedulerLoading, setSchedulerLoading] = useState(false);
     const isAdmin = userId === ADMIN_USER_ID;
 
+    // Binance trading status - 初始 loading 为 true 避免闪烁
+    const [binanceStatus, setBinanceStatus] = useState(null);
+    const [binanceLoading, setBinanceLoading] = useState(true);  // 初始为 true，避免闪烁
+
     useEffect(() => {
-        fetchData();
+        fetchBinanceStatus();
         fetchSchedulerStatus();
-        const interval = setInterval(fetchData, 10000); // Refresh every 10s
-        return () => clearInterval(interval);
+    }, [userId]);
+
+    // 监听 binanceStatusChanged 事件（从 SettingsModal 触发）
+    useEffect(() => {
+        const handleStatusChanged = () => {
+            console.log('[StrategyNexus] Binance status changed, refreshing...');
+            fetchBinanceStatus();
+        };
+
+        window.addEventListener('binanceStatusChanged', handleStatusChanged);
+        return () => {
+            window.removeEventListener('binanceStatusChanged', handleStatusChanged);
+        };
     }, []);
+
+    useEffect(() => {
+        // Only fetch trading data if user has configured and enabled trading
+        if (binanceStatus?.is_configured && binanceStatus?.is_trading_enabled) {
+            fetchData();
+            const interval = setInterval(fetchData, 10000); // Refresh every 10s
+            return () => clearInterval(interval);
+        }
+    }, [binanceStatus?.is_configured, binanceStatus?.is_trading_enabled]);
 
     // Fetch scheduler status
     const fetchSchedulerStatus = async () => {
@@ -77,12 +101,54 @@ export default function StrategyNexus({ userId, onBack }) {
         }
     };
 
+    // Fetch Binance trading status for current user
+    const fetchBinanceStatus = async () => {
+        if (!userId) return;
+        setBinanceLoading(true);
+        try {
+            const res = await fetch(`${BASE_URL}/api/strategy/binance/status?user_id=${userId}`);
+            const data = await res.json();
+            setBinanceStatus(data);
+        } catch (e) {
+            console.error('Binance status fetch error:', e);
+        } finally {
+            setBinanceLoading(false);
+        }
+    };
+
+    // Toggle trading on/off for current user
+    const toggleTrading = async () => {
+        if (binanceLoading || !binanceStatus?.is_configured) return;
+
+        setBinanceLoading(true);
+        try {
+            const endpoint = binanceStatus.is_trading_enabled ? 'disable' : 'enable';
+            const res = await fetch(`${BASE_URL}/api/strategy/binance/trading/${endpoint}?user_id=${userId}`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            if (data.success) {
+                await fetchBinanceStatus();
+            } else {
+                console.error('Trading toggle failed:', data.message || data.error);
+            }
+        } catch (e) {
+            console.error('Trading toggle error:', e);
+        } finally {
+            setBinanceLoading(false);
+        }
+    };
+
     const fetchData = async () => {
         try {
+            // 如果用户启用了 Binance 交易，传递 user_id 获取真实数据
+            const userParam = userId ? `?user_id=${userId}` : '';
+            const userParamWithStatus = userId ? `&user_id=${userId}` : '';
+
             const [walletRes, posRes, closedRes, ordersRes, logsRes, curveRes] = await Promise.all([
-                fetch(`${BASE_URL}/api/strategy/wallet`).then(r => r.json()),
-                fetch(`${BASE_URL}/api/strategy/positions?status=OPEN`).then(r => r.json()),
-                fetch(`${BASE_URL}/api/strategy/positions?status=CLOSED`).then(r => r.json()),
+                fetch(`${BASE_URL}/api/strategy/wallet${userParam}`).then(r => r.json()),
+                fetch(`${BASE_URL}/api/strategy/positions?status=OPEN${userParamWithStatus}`).then(r => r.json()),
+                fetch(`${BASE_URL}/api/strategy/positions?status=CLOSED${userParamWithStatus}`).then(r => r.json()),
                 fetch(`${BASE_URL}/api/strategy/orders?limit=50`).then(r => r.json()),
                 fetch(`${BASE_URL}/api/strategy/logs?limit=20&offset=0`).then(r => r.json()),
                 fetch(`${BASE_URL}/api/strategy/equity-curve`).then(r => r.json())
@@ -139,13 +205,89 @@ export default function StrategyNexus({ userId, onBack }) {
     const equity = wallet?.equity || 0;
 
     // 显示加载器直到数据加载完成并完成动画
-    if (showLoader) {
+    if (showLoader && binanceStatus?.is_configured && binanceStatus?.is_trading_enabled) {
         return (
             <TerminalLoader
                 fullScreen={false}
                 isReady={!loading}
                 onComplete={() => setShowLoader(false)}
             />
+        );
+    }
+
+    // 加载 Binance 状态时显示 loading，避免闪烁
+    if (binanceLoading && !binanceStatus) {
+        return (
+            <TerminalLoader
+                fullScreen={false}
+                isReady={false}
+                onComplete={() => { }}
+            />
+        );
+    }
+
+    // Show setup prompt if not configured
+    if (!binanceStatus?.is_configured) {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center bg-[#0d1117] p-8">
+                <div className="bg-[#131722] rounded-2xl p-8 max-w-md w-full border border-slate-700/50 text-center">
+                    <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center mx-auto mb-6">
+                        <Key className="w-8 h-8 text-indigo-400" />
+                    </div>
+                    <h2 className="text-xl font-semibold text-white mb-2">
+                        {t('strategy.binance.setupTitle')}
+                    </h2>
+                    <p className="text-slate-400 text-sm mb-6">
+                        {t('strategy.binance.setupDesc')}
+                    </p>
+                    <button
+                        onClick={() => window.dispatchEvent(new CustomEvent('openSettings', { detail: 'exchange' }))}
+                        className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-medium transition-colors flex items-center justify-center gap-2"
+                    >
+                        <Settings className="w-5 h-5" />
+                        {t('strategy.binance.goToSettings')}
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // Show trading not started prompt
+    if (binanceStatus?.is_configured && !binanceStatus?.is_trading_enabled) {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center bg-[#0d1117] p-8">
+                <div className="bg-[#131722] rounded-2xl p-8 max-w-md w-full border border-slate-700/50 text-center">
+                    <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-6">
+                        <Play className="w-8 h-8 text-green-400" />
+                    </div>
+                    <h2 className="text-xl font-semibold text-white mb-2">
+                        {t('strategy.binance.readyToTrade')}
+                    </h2>
+                    <p className="text-slate-400 text-sm mb-2">
+                        {t('strategy.binance.readyDesc')}
+                    </p>
+                    {binanceStatus?.balance && (
+                        <div className="text-sm mb-6">
+                            <p className="text-green-400">
+                                {t('settings.exchange.balance')}: ${binanceStatus.balance.available_balance?.toFixed(2)}
+                            </p>
+                            {binanceStatus.balance.assets && binanceStatus.balance.assets.length > 1 && (
+                                <p className="text-slate-500 text-xs mt-1">
+                                    ({binanceStatus.balance.assets.map(a => `${a.available_balance?.toFixed(0)} ${a.asset}`).join(' + ')})
+                                </p>
+                            )}
+                        </div>
+                    )}
+                    <button
+                        onClick={toggleTrading}
+                        disabled={binanceLoading}
+                        className="w-full py-3 rounded-xl bg-green-600 hover:bg-green-700 text-white font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                        <Play className="w-5 h-5" />
+                        {binanceLoading ? t('common.loading') : t('strategy.binance.startTrading')}
+                    </button>
+                </div>
+            </div>
         );
     }
 
@@ -167,6 +309,24 @@ export default function StrategyNexus({ userId, onBack }) {
                     </span>
                 </div>
                 <div className="flex items-center gap-3">
+                    {/* Trading Toggle (for users with configured API keys) */}
+                    {binanceStatus?.is_configured && (
+                        <button
+                            onClick={toggleTrading}
+                            disabled={binanceLoading}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${binanceStatus.is_trading_enabled
+                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                } ${binanceLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            title={binanceStatus.is_trading_enabled ? t('strategy.binance.stopTrading') : t('strategy.binance.startTrading')}
+                        >
+                            {binanceStatus.is_trading_enabled ? (
+                                <><Square className="w-4 h-4" /> {t('strategy.binance.stopTrading')}</>
+                            ) : (
+                                <><Play className="w-4 h-4" /> {t('strategy.binance.startTrading')}</>
+                            )}
+                        </button>
+                    )}
                     {/* Scheduler Toggle (Admin Only) */}
                     {isAdmin && (
                         <button
@@ -466,6 +626,14 @@ function OrdersTable({ orders, t }) {
             return t('strategy.orders.close');
         } else if (action?.includes('MODIFY')) {
             return t('strategy.orders.modifySlTp');
+        } else if (action === 'STOP_LOSS' || action === 'STOP_MARKET') {
+            return t('strategy.orders.stopLoss') || '止损';
+        } else if (action === 'TAKE_PROFIT' || action === 'TAKE_PROFIT_MARKET') {
+            return t('strategy.orders.takeProfit') || '止盈';
+        } else if (action?.includes('LIMIT')) {
+            return t('strategy.orders.limitOrder') || '限价单';
+        } else if (action === 'MARKET') {
+            return t('strategy.orders.marketOrder') || '市价单';
         }
         return action;
     };

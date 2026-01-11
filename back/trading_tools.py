@@ -13,17 +13,21 @@ DB_PATH = "tmp/test.db"
 # ==========================================
 STRATEGY_ADMIN_USER_ID = "ee20fa53-5ac2-44bc-9237-41b308e291d8"
 
-# Thread-local storage for current request context
-import threading
-_context = threading.local()
+# Context variable for current request (works correctly in async environments)
+# threading.local() doesn't work well with async/await, use contextvars instead
+from contextvars import ContextVar
+_current_user_id: ContextVar[str] = ContextVar('current_user_id', default=None)
 
 def set_current_user(user_id: str):
-    """Set the current user ID for this request/thread"""
-    _context.user_id = user_id
+    """Set the current user ID for this request (async-safe)"""
+    _current_user_id.set(user_id)
+    print(f"[TradingTools] Context set user_id: {user_id[:8] if user_id else 'None'}...")
 
 def get_current_user() -> str:
-    """Get the current user ID for this request/thread"""
-    return getattr(_context, 'user_id', None)
+    """Get the current user ID for this request (async-safe)"""
+    user_id = _current_user_id.get()
+    print(f"[TradingTools] Context get user_id: {user_id[:8] if user_id else 'None'}...")
+    return user_id
 
 def is_admin(user_id: str = None) -> bool:
     """Check if user is the strategy admin. Uses context user if not provided."""

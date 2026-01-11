@@ -41,6 +41,7 @@ function AppContent() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsDefaultTab, setSettingsDefaultTab] = useState('general');
   const [creditsHistory, setCreditsHistory] = useState([]);
   const [showStrategyNexus, setShowStrategyNexus] = useState(false);
   const [showDailyReport, setShowDailyReport] = useState(false);
@@ -367,6 +368,22 @@ function AppContent() {
       };
     }
   }, [sessionMenuOpen]);
+
+  // 监听 openSettings 事件（从 StrategyNexus 触发）
+  useEffect(() => {
+    const handleOpenSettings = (event) => {
+      // event.detail 可能是 'exchange' 等 tab 名称
+      if (event.detail) {
+        setSettingsDefaultTab(event.detail);
+      }
+      setShowSettingsModal(true);
+    };
+
+    window.addEventListener('openSettings', handleOpenSettings);
+    return () => {
+      window.removeEventListener('openSettings', handleOpenSettings);
+    };
+  }, []);
 
   // --- Effects ---
   const scrollToBottom = () => {
@@ -1372,8 +1389,8 @@ function AppContent() {
               {/* User Dropdown Menu - positioned outside sidebar when collapsed */}
               {showUserMenu && (
                 <div className={`mb-2 bg-slate-800 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-[100] ${isSidebarOpen
-                    ? 'absolute bottom-full left-0 right-0'
-                    : 'fixed bottom-20 left-2 lg:left-16 w-56'
+                  ? 'absolute bottom-full left-0 right-0'
+                  : 'fixed bottom-20 left-2 lg:left-16 w-56'
                   }`}>
                   {/* User info header */}
                   <div className="px-4 py-3 border-b border-slate-700">
@@ -2022,8 +2039,12 @@ function AppContent() {
       {/* Settings Modal */}
       <SettingsModal
         isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
+        onClose={() => {
+          setShowSettingsModal(false);
+          setSettingsDefaultTab('general'); // Reset to default when closing
+        }}
         user={{
+          id: user?.id,
           displayName: user?.user_metadata?.full_name || user?.user_metadata?.name || (user?.email?.split('@')[0]),
           email: user?.email,
           avatarUrl: user?.user_metadata?.picture || user?.user_metadata?.avatar_url
@@ -2034,6 +2055,7 @@ function AppContent() {
           startNewChat();
         }}
         creditsHistory={creditsHistory}
+        defaultTab={settingsDefaultTab}
       />
     </div>
   );

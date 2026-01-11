@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     X, User, BarChart2, LogOut, Zap, Settings, Globe,
-    ChevronLeft, ChevronRight
+    ChevronLeft, ChevronRight, Key, Eye, EyeOff, RefreshCw,
+    CheckCircle, XCircle, AlertCircle
 } from 'lucide-react';
 
 export default function SettingsModal({
@@ -11,12 +12,20 @@ export default function SettingsModal({
     user,
     credits,
     onSignOut,
-    creditsHistory = []
+    creditsHistory = [],
+    defaultTab = 'general'
 }) {
     const { t, i18n } = useTranslation();
-    const [activeTab, setActiveTab] = useState('general');
+    const [activeTab, setActiveTab] = useState(defaultTab);
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 10;
+
+    // Update activeTab when defaultTab changes or modal opens
+    useEffect(() => {
+        if (isOpen && defaultTab) {
+            setActiveTab(defaultTab);
+        }
+    }, [isOpen, defaultTab]);
 
     if (!isOpen) return null;
 
@@ -54,6 +63,7 @@ export default function SettingsModal({
             case 'general': return t('settings.tabs.general');
             case 'account': return t('settings.tabs.account');
             case 'usage': return t('settings.tabs.usage');
+            case 'exchange': return t('settings.tabs.exchange');
             default: return '';
         }
     };
@@ -108,6 +118,16 @@ export default function SettingsModal({
                             <BarChart2 className="w-4 h-4" />
                             {t('settings.tabs.usage')}
                         </button>
+                        <button
+                            onClick={() => setActiveTab('exchange')}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${activeTab === 'exchange'
+                                ? 'bg-slate-700/50 text-white'
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                                }`}
+                        >
+                            <Key className="w-4 h-4" />
+                            {t('settings.tabs.exchange')}
+                        </button>
                     </nav>
                 </div>
 
@@ -141,6 +161,11 @@ export default function SettingsModal({
                                 getInitials={getInitials}
                                 onSignOut={onSignOut}
                                 onClose={onClose}
+                                t={t}
+                            />
+                        ) : activeTab === 'exchange' ? (
+                            <ExchangeContent
+                                userId={user?.id}
                                 t={t}
                             />
                         ) : (
@@ -376,6 +401,267 @@ function UsageContent({ credits, history, currentPage, totalPages, onPageChange,
                         </button>
                     </div>
                 )}
+            </div>
+        </div>
+    );
+}
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+function ExchangeContent({ userId, t }) {
+    const [apiKey, setApiKey] = useState('');
+    const [apiSecret, setApiSecret] = useState('');
+    const [isTestnet, setIsTestnet] = useState(true);
+    const [showSecret, setShowSecret] = useState(false);
+    const [status, setStatus] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+
+    // Fetch status on mount
+    useEffect(() => {
+        if (userId) {
+            fetchStatus();
+        }
+    }, [userId]);
+
+    const fetchStatus = async () => {
+        setLoading(true);
+        try {
+            const response = await fetch(`${BASE_URL}/api/strategy/binance/status?user_id=${userId}`);
+            const data = await response.json();
+            setStatus(data);
+            setError('');
+        } catch (err) {
+            setError(t('settings.exchange.fetchError'));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSave = async () => {
+        if (!apiKey || !apiSecret) {
+            setError(t('settings.exchange.keysRequired'));
+            return;
+        }
+
+        setSaving(true);
+        setError('');
+        try {
+            const response = await fetch(`${BASE_URL}/api/strategy/binance/keys?user_id=${userId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    api_key: apiKey,
+                    api_secret: apiSecret,
+                    is_testnet: isTestnet
+                })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                setApiKey('');
+                setApiSecret('');
+                await fetchStatus();
+                // 通知 StrategyNexus 刷新状态
+                window.dispatchEvent(new CustomEvent('binanceStatusChanged'));
+            } else {
+                setError(data.detail || t('settings.exchange.saveError'));
+            }
+        } catch (err) {
+            setError(t('settings.exchange.saveError'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!window.confirm(t('settings.exchange.deleteConfirm'))) return;
+
+        setLoading(true);
+        try {
+            const response = await fetch(`${BASE_URL}/api/strategy/binance/keys?user_id=${userId}`, {
+                method: 'DELETE'
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                await fetchStatus();
+                // 通知 StrategyNexus 刷新状态
+                window.dispatchEvent(new CustomEvent('binanceStatusChanged'));
+            }
+        } catch (err) {
+            setError(t('settings.exchange.deleteError'));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const getStatusIcon = () => {
+        if (loading) return <RefreshCw className="w-5 h-5 text-slate-400 animate-spin" />;
+        if (!status?.is_configured) return <AlertCircle className="w-5 h-5 text-yellow-500" />;
+        if (status?.connection_ok) return <CheckCircle className="w-5 h-5 text-green-500" />;
+        return <XCircle className="w-5 h-5 text-red-500" />;
+    };
+
+    const getStatusText = () => {
+        if (loading) return t('settings.exchange.checking');
+        if (!status?.is_configured) return t('settings.exchange.notConfigured');
+        if (status?.connection_ok) return t('settings.exchange.connected');
+        return status?.connection_error || t('settings.exchange.connectionFailed');
+    };
+
+    return (
+        <div className="space-y-6">
+            {/* Connection Status */}
+            <div className="bg-[#131722] rounded-xl p-4 border border-slate-700/50">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        {getStatusIcon()}
+                        <div>
+                            <h3 className="text-white font-medium">Binance Futures</h3>
+                            <p className="text-slate-400 text-sm">{getStatusText()}</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={fetchStatus}
+                        disabled={loading}
+                        className="p-2 rounded-lg hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors disabled:opacity-50"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                </div>
+
+                {/* Balance display if connected */}
+                {status?.connection_ok && status?.balance && (
+                    <div className="mt-4 pt-4 border-t border-slate-700/50">
+                        <div className="flex items-center justify-between text-sm">
+                            <span className="text-slate-400">{t('settings.exchange.balance')}</span>
+                            <span className="text-white font-medium">
+                                ${status.balance.available_balance?.toFixed(2)}
+                            </span>
+                            {status.balance.assets && status.balance.assets.length > 1 && (
+                                <span className="text-slate-500 text-xs ml-2">
+                                    ({status.balance.assets.map(a => `${a.available_balance?.toFixed(0)} ${a.asset}`).join(' + ')})
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* API Key Configuration */}
+            {!status?.is_configured ? (
+                <div className="bg-[#131722] rounded-xl p-4 border border-slate-700/50 space-y-4">
+                    <h3 className="text-white font-medium">{t('settings.exchange.configureKeys')}</h3>
+
+                    {/* Network Toggle */}
+                    <div className="flex items-center justify-between">
+                        <span className="text-slate-400 text-sm">{t('settings.exchange.network')}</span>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setIsTestnet(true)}
+                                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${isTestnet
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-slate-800/50 text-slate-400 hover:text-white'
+                                    }`}
+                            >
+                                {t('settings.exchange.testnet')}
+                            </button>
+                            <button
+                                onClick={() => setIsTestnet(false)}
+                                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${!isTestnet
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-slate-800/50 text-slate-400 hover:text-white'
+                                    }`}
+                            >
+                                {t('settings.exchange.mainnet')}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* API Key Input */}
+                    <div>
+                        <label className="block text-sm text-slate-500 mb-1.5">API Key</label>
+                        <input
+                            type="text"
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            placeholder={t('settings.exchange.apiKeyPlaceholder')}
+                            className="w-full bg-slate-800/50 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                        />
+                    </div>
+
+                    {/* API Secret Input */}
+                    <div>
+                        <label className="block text-sm text-slate-500 mb-1.5">API Secret</label>
+                        <div className="relative">
+                            <input
+                                type={showSecret ? 'text' : 'password'}
+                                value={apiSecret}
+                                onChange={(e) => setApiSecret(e.target.value)}
+                                placeholder={t('settings.exchange.apiSecretPlaceholder')}
+                                className="w-full bg-slate-800/50 border border-slate-600 rounded-lg px-3 py-2.5 pr-10 text-white text-sm placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowSecret(!showSecret)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                            >
+                                {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Error Message */}
+                    {error && (
+                        <p className="text-red-400 text-sm">{error}</p>
+                    )}
+
+                    {/* Save Button */}
+                    <button
+                        onClick={handleSave}
+                        disabled={saving || !apiKey || !apiSecret}
+                        className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {saving ? t('settings.exchange.saving') : t('settings.exchange.save')}
+                    </button>
+
+                    {/* Testnet Instructions */}
+                    {isTestnet && (
+                        <p className="text-slate-500 text-xs">
+                            {t('settings.exchange.testnetHint')}
+                        </p>
+                    )}
+                </div>
+            ) : (
+                /* Keys Configured - Show Delete Option */
+                <div className="bg-[#131722] rounded-xl p-4 border border-slate-700/50 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="text-white font-medium">{t('settings.exchange.keysConfigured')}</h3>
+                            <p className="text-slate-400 text-sm">
+                                {status?.is_trading_enabled
+                                    ? t('settings.exchange.tradingEnabled')
+                                    : t('settings.exchange.tradingDisabled')
+                                }
+                            </p>
+                        </div>
+                        <button
+                            onClick={handleDelete}
+                            className="px-4 py-2 rounded-lg border border-red-500/50 text-red-400 text-sm hover:bg-red-500/10 transition-colors"
+                        >
+                            {t('settings.exchange.delete')}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Security Notice */}
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4">
+                <p className="text-yellow-500 text-sm">
+                    ⚠️ {t('settings.exchange.securityNotice')}
+                </p>
             </div>
         </div>
     );

@@ -97,7 +97,8 @@
         "tabs": {
             "general": "通用",
             "account": "账户",
-            "usage": "使用记录"
+            "usage": "使用记录",
+            "exchange": "交易所"
         },
         "general": {
             "title": "通用设置",
@@ -119,6 +120,32 @@
             "action": "操作",
             "creditsChange": "积分变化",
             "noHistory": "暂无使用记录"
+        },
+        "exchange": {
+            "configureKeys": "配置 API 密钥",
+            "network": "网络",
+            "testnet": "测试网",
+            "mainnet": "主网",
+            "apiKeyPlaceholder": "输入您的 API Key",
+            "apiSecretPlaceholder": "输入您的 API Secret",
+            "save": "保存",
+            "saving": "保存中...",
+            "delete": "删除密钥",
+            "deleteConfirm": "确定要删除 API 密钥吗？交易功能将被禁用。",
+            "keysRequired": "请填写 API Key 和 Secret",
+            "saveError": "保存失败，请重试",
+            "deleteError": "删除失败，请重试",
+            "fetchError": "获取状态失败",
+            "checking": "检查中...",
+            "notConfigured": "未配置",
+            "connected": "已连接",
+            "connectionFailed": "连接失败",
+            "balance": "可用余额",
+            "keysConfigured": "API 密钥已配置",
+            "tradingEnabled": "交易已开启",
+            "tradingDisabled": "交易已停止",
+            "testnetHint": "测试网使用模拟资金，适合测试策略。访问 https://demo.binance.com/ 获取测试网 API Key。",
+            "securityNotice": "您的 API 密钥将被加密存储。请确保只授予必要的权限，建议仅开启交易权限。"
         }
     },
     "auth": {
@@ -224,7 +251,14 @@
             "close": "平仓",
             "modifySlTp": "调整止盈止损",
             "long": "多",
-            "short": "空"
+            "short": "空",
+            "stopLoss": "止损",
+            "takeProfit": "止盈",
+            "limitOrder": "限价单",
+            "marketOrder": "市价单",
+            "pending": "待成交",
+            "triggered": "已触发",
+            "cancelled": "已取消"
         },
         "logs": {
             "title": "策略日志",
@@ -240,6 +274,15 @@
             "stopped": "已停止",
             "start": "启动",
             "stop": "停止"
+        },
+        "binance": {
+            "setupTitle": "配置交易账户",
+            "setupDesc": "请先在设置中配置您的 Binance API Key，即可开始交易。",
+            "goToSettings": "前往设置",
+            "readyToTrade": "已准备就绪",
+            "readyDesc": "API Key 已配置完成，点击下方按钮开始交易。",
+            "startTrading": "开始交易",
+            "stopTrading": "停止交易"
         }
     },
     "dailyReport": {
@@ -317,7 +360,19 @@
             "getEtfDaily": "查看单日 ETF 数据",
             "getEtfSummary": "获取 ETF 汇总统计",
             "getEtfTicker": "查看 ETF 机构数据",
-            "searching": "搜索中..."
+            "searching": "搜索中...",
+            "binanceOpenPosition": "开仓",
+            "binanceClosePosition": "平仓",
+            "binanceGetPositionsSummary": "查看交易持仓",
+            "binanceUpdateStopLoss": "更新止损",
+            "binanceGetCurrentPrice": "获取实时价格",
+            "getMacroOverview": "宏观市场概览",
+            "getBatchTechnicalAnalysis": "批量技术分析",
+            "getKeyLevels": "关键价位分析",
+            "getTrendingTokens": "热门代币排行",
+            "setPriceAlert": "设置价格警报",
+            "getPriceAlerts": "查看价格警报",
+            "cancelPriceAlert": "取消价格警报"
         }
     },
     "landing": {

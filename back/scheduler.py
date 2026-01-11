@@ -71,6 +71,7 @@ def _run_scheduler_loop():
     print("[Scheduler] Starting Strategy Nexus Scheduler...")
     print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
     print("[Scheduler] Position monitor runs every 10 seconds")
+    print("[Scheduler] Binance position sync runs every 30 seconds")
     print("[Scheduler] Price alert check runs every 60 seconds")
     print("[Scheduler] Note: Daily Report runs independently (not controlled here)")
     print()
@@ -80,8 +81,11 @@ def _run_scheduler_loop():
         time_str = f"{hour:02d}:30"
         schedule.every().day.at(time_str).do(trigger_strategy)
     
-    # Schedule position price updates every 10 seconds
+    # Schedule position price updates every 10 seconds (for virtual trading)
     schedule.every(10).seconds.do(update_positions_prices)
+    
+    # Schedule Binance position sync every 30 seconds (for real trading users)
+    schedule.every(30).seconds.do(sync_binance_users_positions)
     
     # Schedule price alert checks every 60 seconds
     schedule.every(60).seconds.do(check_price_alerts)
@@ -99,6 +103,60 @@ def _run_scheduler_loop():
         time.sleep(1)
     
     print("[Scheduler] Scheduler loop exited")
+
+
+# ============= Binance Multi-User Position Sync =============
+
+def sync_binance_users_positions():
+    """
+    Sync positions for all users who have enabled Binance trading.
+    
+    This function:
+    1. Gets all users with trading enabled
+    2. For each user, syncs their Binance positions
+    3. Logs any position changes or errors
+    
+    Note: SL/TP orders are handled by Binance server-side,
+    so we only need to sync position status changes.
+    """
+    try:
+        from binance_client import get_all_active_trading_users, get_user_binance_client
+        from binance_trading_tools import binance_get_positions_summary
+        
+        # Get all users with trading enabled
+        users = get_all_active_trading_users()
+        
+        if not users:
+            return
+        
+        print(f"[Scheduler] Syncing Binance positions for {len(users)} user(s)...")
+        
+        for user_id in users:
+            try:
+                # Get positions summary from Binance
+                summary = binance_get_positions_summary(user_id)
+                
+                if "error" in summary:
+                    print(f"[Scheduler] Error syncing user {user_id[:8]}: {summary['error']}")
+                    continue
+                
+                position_count = summary.get("position_count", 0)
+                equity = summary.get("equity", 0)
+                unrealized_pnl = summary.get("unrealized_pnl", 0)
+                
+                # Log if there are open positions
+                if position_count > 0:
+                    print(f"[Scheduler] User {user_id[:8]}: {position_count} positions, "
+                          f"equity: ${equity:.2f}, unrealized: ${unrealized_pnl:.2f}")
+                    
+            except Exception as e:
+                print(f"[Scheduler] Error syncing user {user_id[:8]}: {e}")
+        
+    except ImportError as e:
+        # Module not available, skip silently
+        pass
+    except Exception as e:
+        print(f"[Scheduler] Error in Binance sync: {e}")
 
 
 def get_db():

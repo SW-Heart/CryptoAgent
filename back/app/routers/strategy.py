@@ -115,10 +115,41 @@ def init_strategy_tables():
 # GET endpoints for UI
 
 @router.get("/wallet")
-async def get_wallet():
-    """Get virtual wallet status with real-time equity"""
+async def get_wallet(user_id: str = None):
+    """Get wallet status with real-time equity.
+    
+    If user has Binance trading enabled, returns real Binance data.
+    Otherwise returns virtual trading data (demo mode).
+    """
     import requests
     
+    # 如果用户启用了 Binance 交易，使用 Binance 数据
+    if user_id:
+        try:
+            from binance_trading_tools import binance_get_positions_summary
+            from binance_client import get_user_trading_status
+            
+            status = get_user_trading_status(user_id)
+            if status.get("is_configured") and status.get("is_trading_enabled"):
+                result = binance_get_positions_summary(user_id)
+                if "error" not in result:
+                    return {
+                        "source": "binance",
+                        "initial_balance": None,  # Binance 不跟踪初始余额
+                        "current_balance": result.get("available_balance", 0),
+                        "margin_in_use": result.get("margin_in_use", 0),
+                        "unrealized_pnl": result.get("unrealized_pnl", 0),
+                        "equity": result.get("equity", 0),
+                        "total_pnl": None,  # 需要单独跟踪
+                        "total_trades": None,
+                        "win_trades": None,
+                        "win_rate": None,
+                        "balance_breakdown": result.get("balance_breakdown", [])
+                    }
+        except Exception as e:
+            print(f"[Strategy] Binance wallet error: {e}")
+    
+    # 虚拟交易模式（Demo）
     try:
         conn = get_db_connection()
         # Use user_id to match trading_tools.py logic
@@ -160,6 +191,7 @@ async def get_wallet():
         equity = row["current_balance"] + total_margin_in_use + total_unrealized_pnl
         
         return {
+            "source": "virtual",
             "initial_balance": row["initial_balance"],
             "current_balance": row["current_balance"],
             "margin_in_use": round(total_margin_in_use, 2),
@@ -175,10 +207,55 @@ async def get_wallet():
 
 
 @router.get("/positions")
-async def get_positions(status: str = "OPEN"):
-    """Get positions (OPEN / CLOSED / ALL) with real-time PnL for open positions"""
+async def get_positions(status: str = "OPEN", user_id: str = None):
+    """Get positions (OPEN / CLOSED / ALL) with real-time PnL.
+    
+    If user has Binance trading enabled, returns real Binance positions.
+    Otherwise returns virtual trading positions (demo mode).
+    """
     import requests
     
+    # 如果用户启用了 Binance 交易，使用 Binance 数据
+    if user_id:
+        try:
+            from binance_trading_tools import binance_get_positions_summary
+            from binance_client import get_user_trading_status
+            
+            trading_status = get_user_trading_status(user_id)
+            if trading_status.get("is_configured") and trading_status.get("is_trading_enabled"):
+                result = binance_get_positions_summary(user_id)
+                if "error" not in result:
+                    # 转换为统一格式
+                    positions = []
+                    for pos in result.get("open_positions", []):
+                        positions.append({
+                            "id": None,  # Binance 没有我们的 position ID
+                            "symbol": pos.get("symbol", "").replace("USDT", ""),
+                            "direction": pos.get("direction"),
+                            "leverage": pos.get("leverage", 10),
+                            "margin": pos.get("margin", 0),
+                            "notional_value": pos.get("quantity", 0) * pos.get("entry_price", 0),
+                            "entry_price": pos.get("entry_price", 0),
+                            "quantity": pos.get("quantity", 0),
+                            "closed_quantity": 0,
+                            "remaining_quantity": pos.get("quantity", 0),
+                            "stop_loss": None,
+                            "take_profit": None,
+                            "current_price": pos.get("current_price", 0),
+                            "unrealized_pnl": pos.get("unrealized_pnl", 0),
+                            "realized_pnl": None,
+                            "status": "OPEN",
+                            "opened_at": None,
+                            "closed_at": None,
+                            "close_price": None,
+                            "liquidation_price": pos.get("liquidation_price", 0),
+                            "roi_percent": pos.get("roi_percent", 0)
+                        })
+                    return {"source": "binance", "positions": positions}
+        except Exception as e:
+            print(f"[Strategy] Binance positions error: {e}")
+    
+    # 虚拟交易模式（Demo）
     try:
         conn = get_db_connection()
         
@@ -253,15 +330,67 @@ async def get_positions(status: str = "OPEN"):
             
             positions.append(pos_data)
         
-        return {"positions": positions}
+        return {"source": "virtual", "positions": positions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/orders")
-async def get_orders(limit: int = 20):
-    """Get order history with backward compatibility for old records"""
+async def get_orders(user_id: str = None, limit: int = 20):
+    """Get open orders - from Binance if configured, otherwise from local DB"""
     try:
+        # 如果 user_id 提供且已配置 Binance，获取 Binance 订单
+        if user_id:
+            from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
+            
+            if has_user_api_keys(user_id):
+                status = get_user_trading_status(user_id)
+                if status.get("is_trading_enabled"):
+                    client = get_user_binance_client(user_id)
+                    if client:
+                        binance_orders = client.get_open_orders()
+                        if not isinstance(binance_orders, dict) or "error" not in binance_orders:
+                            formatted_orders = []
+                            for order in binance_orders:
+                                # 格式化 Binance 订单字段
+                                order_type = order.get("type", "")
+                                side = order.get("side", "")
+                                
+                                # 推断方向：对于止损/止盈订单，需要反推
+                                if order_type in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]:
+                                    direction = "SHORT" if side == "BUY" else "LONG"
+                                else:
+                                    direction = "LONG" if side == "BUY" else "SHORT"
+                                
+                                # 确定订单动作
+                                if order_type == "STOP_MARKET":
+                                    action = "STOP_LOSS"
+                                elif order_type == "TAKE_PROFIT_MARKET":
+                                    action = "TAKE_PROFIT"
+                                elif order_type == "LIMIT":
+                                    action = f"LIMIT_{side}"
+                                else:
+                                    action = order_type
+                                
+                                formatted_orders.append({
+                                    "id": order.get("orderId"),
+                                    "order_id": order.get("orderId"),
+                                    "symbol": order.get("symbol", "").replace("USDT", ""),
+                                    "direction": direction,
+                                    "action": action,
+                                    "type": order_type,
+                                    "side": side,
+                                    "quantity": float(order.get("origQty", 0)),
+                                    "price": float(order.get("price", 0)),
+                                    "stop_price": float(order.get("stopPrice", 0)),
+                                    "status": order.get("status"),
+                                    "created_at": order.get("time"),
+                                    "source": "binance"
+                                })
+                            
+                            return {"orders": formatted_orders, "source": "binance"}
+        
+        # 回退到本地数据库
         conn = get_db_connection()
         rows = conn.execute(
             "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?",
@@ -280,7 +409,6 @@ async def get_orders(limit: int = 20):
                 ).fetchone()
                 if pos:
                     order["direction"] = pos["direction"]
-                    # 对于开仓订单，补充 quantity
                     if order.get("action", "").startswith("OPEN") and not order.get("quantity"):
                         order["quantity"] = pos["quantity"]
             
@@ -292,10 +420,11 @@ async def get_orders(limit: int = 20):
                 elif "SHORT" in action:
                     order["direction"] = "SHORT"
             
+            order["source"] = "local"
             orders.append(order)
         
         conn.close()
-        return {"orders": orders}
+        return {"orders": orders, "source": "local"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -467,4 +596,165 @@ async def stop_scheduler(user_id: str = None):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============= Binance API Key Management =============
+
+from pydantic import BaseModel
+
+class BinanceKeysRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    is_testnet: bool = True
+
+
+@router.post("/binance/keys")
+async def save_binance_keys(request: BinanceKeysRequest, user_id: str = None):
+    """
+    Save user's Binance API keys (encrypted).
+    
+    Args:
+        request: API key and secret
+        user_id: User ID (required)
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from binance_client import save_user_api_keys, test_user_connection
+        
+        # First save the keys
+        result = save_user_api_keys(
+            user_id=user_id,
+            api_key=request.api_key,
+            api_secret=request.api_secret,
+            is_testnet=request.is_testnet
+        )
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Failed to save keys"))
+        
+        # Test the connection
+        test_result = test_user_connection(user_id)
+        
+        return {
+            "success": True,
+            "message": "API keys saved successfully",
+            "connection_test": test_result
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/binance/keys")
+async def delete_binance_keys(user_id: str = None):
+    """
+    Delete user's Binance API keys.
+    
+    Args:
+        user_id: User ID (required)
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from binance_client import delete_user_api_keys
+        
+        result = delete_user_api_keys(user_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/binance/status")
+async def get_binance_status(user_id: str = None):
+    """
+    Get Binance connection status for a user.
+    
+    Returns:
+        - is_configured: Whether API keys are configured
+        - is_trading_enabled: Whether trading is enabled
+        - connection_ok: Whether connection test passed (if configured)
+        - balance: USDT balance (if connected)
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from binance_client import (
+            has_user_api_keys,
+            get_user_trading_status,
+            test_user_connection
+        )
+        
+        is_configured = has_user_api_keys(user_id)
+        trading_status = get_user_trading_status(user_id)
+        
+        result = {
+            "is_configured": is_configured,
+            "is_trading_enabled": trading_status.get("is_trading_enabled", False),
+            "enabled_at": trading_status.get("enabled_at"),
+            "disabled_at": trading_status.get("disabled_at")
+        }
+        
+        # If configured, test connection
+        if is_configured:
+            connection_test = test_user_connection(user_id)
+            result["connection_ok"] = connection_test.get("success", False)
+            if connection_test.get("success"):
+                result["balance"] = connection_test.get("balance")
+            else:
+                result["connection_error"] = connection_test.get("error")
+        else:
+            result["connection_ok"] = False
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/binance/trading/enable")
+async def enable_trading(user_id: str = None):
+    """
+    Enable trading for a user.
+    Requires API keys to be configured first.
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from binance_client import enable_user_trading, has_user_api_keys
+        
+        if not has_user_api_keys(user_id):
+            raise HTTPException(
+                status_code=400, 
+                detail="Please configure Binance API keys first"
+            )
+        
+        result = enable_user_trading(user_id)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/binance/trading/disable")
+async def disable_trading(user_id: str = None):
+    """
+    Disable trading for a user.
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from binance_client import disable_user_trading
+        
+        result = disable_user_trading(user_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 

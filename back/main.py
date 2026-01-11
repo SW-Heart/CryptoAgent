@@ -30,26 +30,49 @@ class UserContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Extract user_id from request for agent runs
         if "/v1/runs" in str(request.url) or "/agent" in str(request.url):
+            user_id = None
             try:
                 # Try to get user_id from query params first
                 user_id = request.query_params.get("user_id")
+                print(f"[UserContext] Query param user_id: {user_id}")
                 
                 # If not in query, try to read from body (for POST requests)
                 if not user_id and request.method == "POST":
                     body = await request.body()
                     if body:
-                        try:
-                            data = json.loads(body)
-                            user_id = data.get("user_id")
-                        except:
-                            pass
+                        content_type = request.headers.get("content-type", "")
+                        print(f"[UserContext] Content-Type: {content_type}")
+                        print(f"[UserContext] Body preview: {body[:200]}")
+                        
+                        # Handle JSON format
+                        if "application/json" in content_type:
+                            try:
+                                data = json.loads(body)
+                                user_id = data.get("user_id")
+                            except:
+                                pass
+                        
+                        # Handle form-data format (multipart or urlencoded)
+                        elif "form" in content_type or "urlencoded" in content_type:
+                            try:
+                                # Parse as form data
+                                from urllib.parse import parse_qs
+                                form_data = parse_qs(body.decode("utf-8"))
+                                user_id = form_data.get("user_id", [None])[0]
+                                print(f"[UserContext] Parsed form user_id: {user_id}")
+                            except Exception as pe:
+                                print(f"[UserContext] Parse error: {pe}")
+                        
                         # Reset body for downstream handlers
                         request._body = body
                 
                 if user_id:
                     set_current_user(user_id)
-            except:
-                pass
+                    print(f"[UserContext] Set user: {user_id[:8]}...")
+                else:
+                    print(f"[UserContext] No user_id found in request")
+            except Exception as e:
+                print(f"[UserContext] Error: {e}")
         
         response = await call_next(request)
         return response

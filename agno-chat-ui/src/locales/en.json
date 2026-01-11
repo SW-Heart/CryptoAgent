@@ -97,7 +97,8 @@
         "tabs": {
             "general": "General",
             "account": "Account",
-            "usage": "Usage"
+            "usage": "Usage",
+            "exchange": "Exchange"
         },
         "general": {
             "title": "General Settings",
@@ -119,6 +120,32 @@
             "action": "Action",
             "creditsChange": "Credits change",
             "noHistory": "No usage history"
+        },
+        "exchange": {
+            "configureKeys": "Configure API Keys",
+            "network": "Network",
+            "testnet": "Testnet",
+            "mainnet": "Mainnet",
+            "apiKeyPlaceholder": "Enter your API Key",
+            "apiSecretPlaceholder": "Enter your API Secret",
+            "save": "Save",
+            "saving": "Saving...",
+            "delete": "Delete Keys",
+            "deleteConfirm": "Are you sure you want to delete your API keys? Trading will be disabled.",
+            "keysRequired": "Please enter API Key and Secret",
+            "saveError": "Save failed, please try again",
+            "deleteError": "Delete failed, please try again",
+            "fetchError": "Failed to fetch status",
+            "checking": "Checking...",
+            "notConfigured": "Not configured",
+            "connected": "Connected",
+            "connectionFailed": "Connection failed",
+            "balance": "Available Balance",
+            "keysConfigured": "API Keys Configured",
+            "tradingEnabled": "Trading enabled",
+            "tradingDisabled": "Trading disabled",
+            "testnetHint": "Testnet uses simulated funds, suitable for testing strategies. Get testnet API keys at https://demo.binance.com/",
+            "securityNotice": "Your API keys are encrypted before storage. Only grant necessary permissions, trading permission is recommended."
         }
     },
     "auth": {
@@ -224,7 +251,14 @@
             "close": "Close",
             "modifySlTp": "Modify SL/TP",
             "long": "L",
-            "short": "S"
+            "short": "S",
+            "stopLoss": "Stop Loss",
+            "takeProfit": "Take Profit",
+            "limitOrder": "Limit Order",
+            "marketOrder": "Market Order",
+            "pending": "Pending",
+            "triggered": "Triggered",
+            "cancelled": "Cancelled"
         },
         "logs": {
             "title": "Strategy Logs",
@@ -240,6 +274,15 @@
             "stopped": "Stopped",
             "start": "Start",
             "stop": "Stop"
+        },
+        "binance": {
+            "setupTitle": "Configure Trading Account",
+            "setupDesc": "Please configure your Binance API Key in settings to start trading.",
+            "goToSettings": "Go to Settings",
+            "readyToTrade": "Ready to Trade",
+            "readyDesc": "API Key configured. Click the button below to start trading.",
+            "startTrading": "Start Trading",
+            "stopTrading": "Stop Trading"
         }
     },
     "dailyReport": {
@@ -317,7 +360,19 @@
             "getEtfDaily": "Checking Daily ETF Data",
             "getEtfSummary": "Getting ETF Summary",
             "getEtfTicker": "Checking ETF Issuer Data",
-            "searching": "Searching..."
+            "searching": "Searching...",
+            "binanceOpenPosition": "Opening Position",
+            "binanceClosePosition": "Closing Position",
+            "binanceGetPositionsSummary": "Checking Positions",
+            "binanceUpdateStopLoss": "Updating Stop Loss",
+            "binanceGetCurrentPrice": "Fetching Current Price",
+            "getMacroOverview": "Macro Market Overview",
+            "getBatchTechnicalAnalysis": "Batch Technical Analysis",
+            "getKeyLevels": "Key Levels Analysis",
+            "getTrendingTokens": "Trending Tokens",
+            "setPriceAlert": "Setting Price Alert",
+            "getPriceAlerts": "Checking Price Alerts",
+            "cancelPriceAlert": "Canceling Price Alert"
         }
     },
     "landing": {
