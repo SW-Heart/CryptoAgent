@@ -13,7 +13,9 @@ python-multipart>=0.0.6
 agno[openai]>=2.0.0
 openai>=1.0.0
 exa-py
-duckduckgo-search
+duckduckgo-search>=6.0.0
+nest_asyncio
+google-search-results
 beautifulsoup4
 lxml
 
