@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements first for cache
 COPY back/requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ && \
+    pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --default-timeout=100
 
 # Copy application code
 COPY back /app/back
