@@ -11,6 +11,30 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: crypto_app
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_URL=postgresql://postgres:password@db:5432/cryptoagent
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+    env_file:
+      - back/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./back:/app/back
+    restart: always
 
 volumes:
   postgres_data:
