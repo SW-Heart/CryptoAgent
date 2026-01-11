@@ -1,23 +1,17 @@
 
-FROM python:3.11-slim
+
+FROM python:3.11
 
 WORKDIR /app
 
-# Install system dependencies (for psycopg2, lxml, cryptography, etc.)
+# Install system dependencies
+# Full python image has build utils, but we might still need some specific libs 
+# kept minimal here as the base image is robust.
 RUN apt-get update && apt-get install -y \
-    gcc \
-    build-essential \
-    libpq-dev \
-    libssl-dev \
-    libffi-dev \
     libxml2-dev \
     libxslt1-dev \
-    zlib1g-dev \
-    gfortran \
     libopenblas-dev \
     liblapack-dev \
-    pkg-config \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for cache
