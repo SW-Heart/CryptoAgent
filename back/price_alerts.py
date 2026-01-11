@@ -10,21 +10,13 @@ import json
 import os
 from datetime import datetime
 from typing import List, Dict, Optional
+from app.database import get_db_connection as get_db
 
 
-# 数据库路径
-DB_PATH = os.path.join(os.path.dirname(__file__), "tmp", "price_alerts.db")
+# 数据库路径 (Removed, using main DB)
 
 
-def get_db():
-    """获取数据库连接"""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    # 启用 WAL 模式提高并发性能
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+# get_db function removed (imported)
 
 
 def init_alerts_table():
@@ -34,9 +26,9 @@ def init_alerts_table():
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS price_alerts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             symbol TEXT NOT NULL,
-            trigger_price REAL NOT NULL,
+            trigger_price DOUBLE PRECISION NOT NULL,
             trigger_condition TEXT NOT NULL,
             strategy_context TEXT,
             created_at TEXT NOT NULL,
@@ -83,7 +75,7 @@ def create_alert(
     cursor.execute("""
         INSERT INTO price_alerts 
         (symbol, trigger_price, trigger_condition, strategy_context, created_at, status, created_by)
-        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        VALUES (%s, %s, %s, %s, %s, 'pending', %s)
     """, (
         symbol.upper(),
         trigger_price,
@@ -126,7 +118,7 @@ def get_alerts_by_symbol(symbol: str) -> List[Dict]:
     
     cursor.execute("""
         SELECT * FROM price_alerts 
-        WHERE symbol = ? AND status = 'pending'
+        WHERE symbol = %s AND status = 'pending'
         ORDER BY created_at DESC
     """, (symbol.upper(),))
     
@@ -143,8 +135,8 @@ def mark_alert_triggered(alert_id: int) -> bool:
     
     cursor.execute("""
         UPDATE price_alerts 
-        SET status = 'triggered', triggered_at = ?
-        WHERE id = ?
+        SET status = 'triggered', triggered_at = %s
+        WHERE id = %s
     """, (datetime.now().isoformat(), alert_id))
     
     affected = cursor.rowcount
@@ -162,7 +154,7 @@ def cancel_alert(alert_id: int) -> bool:
     cursor.execute("""
         UPDATE price_alerts 
         SET status = 'cancelled'
-        WHERE id = ? AND status = 'pending'
+        WHERE id = %s AND status = 'pending'
     """, (alert_id,))
     
     affected = cursor.rowcount
@@ -180,7 +172,7 @@ def cancel_alerts_by_symbol(symbol: str) -> int:
     cursor.execute("""
         UPDATE price_alerts 
         SET status = 'cancelled'
-        WHERE symbol = ? AND status = 'pending'
+        WHERE symbol = %s AND status = 'pending'
     """, (symbol.upper(),))
     
     affected = cursor.rowcount

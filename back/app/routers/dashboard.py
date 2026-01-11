@@ -31,7 +31,8 @@ def fetch_with_retry(url, params=None, headers=None, timeout=5, retries=1):
 
 
 @router.get("/news")
-async def get_dashboard_news():
+@router.get("/news")
+def get_dashboard_news():
     """Get latest crypto news headlines with AI summary (10min cache)"""
     try:
         if is_cache_valid("news", 600):  # 10min cache (was 1hr)
@@ -150,7 +151,8 @@ Respond ONLY with valid JSON array, no markdown."""
 
 
 @router.get("/tokens")
-async def get_dashboard_tokens():
+@router.get("/tokens")
+def get_dashboard_tokens():
     """Get popular tokens with price and 24h change (1min cache)"""
     try:
         if is_cache_valid("tokens", 60):
@@ -191,7 +193,8 @@ async def get_dashboard_tokens():
 
 
 @router.get("/fear-greed")
-async def get_dashboard_fear_greed():
+@router.get("/fear-greed")
+def get_dashboard_fear_greed():
     """Get Fear & Greed Index (1hr cache)"""
     try:
         if is_cache_valid("fear_greed", 3600):
@@ -220,7 +223,8 @@ async def get_dashboard_fear_greed():
         return {"value": 50, "classification": "Neutral", "error": str(e)}
 
 @router.get("/indicators")
-async def get_dashboard_indicators():
+@router.get("/indicators")
+def get_dashboard_indicators():
     """Get key industry indicators (10min cache) - OPTIMIZED with parallel requests"""
     try:
         if is_cache_valid("indicators", 600):
@@ -357,7 +361,8 @@ async def get_dashboard_indicators():
 
 
 @router.get("/onchain-hot")
-async def get_dashboard_onchain_hot(limit: int = 6):
+@router.get("/onchain-hot")
+def get_dashboard_onchain_hot(limit: int = 6):
     """Get on-chain hot tokens from DexScreener (10min cache) - OPTIMIZED with parallel requests"""
     try:
         cache_key = f"onchain_hot_{limit}"
@@ -442,52 +447,50 @@ async def get_dashboard_onchain_hot(limit: int = 6):
             except Exception:
                 return None
         
-        # Step 1: Collect all candidate addresses first (fast)
+        # Step 1: Collect candidates (optimized with parallelism)
         candidate_addresses = []
         
-        try:
-            boosts_resp = requests.get("https://api.dexscreener.com/token-boosts/latest/v1", timeout=8)
-            if boosts_resp.status_code == 200:
-                for token in boosts_resp.json()[:20]:  # Get more candidates for filtering
-                    addr = token.get('tokenAddress', '')
-                    if addr and addr not in all_addresses:
-                        all_addresses.add(addr)
-                        candidate_addresses.append(addr)
-        except Exception as e:
-            print(f"[Onchain Hot] Boosts latest error: {e}")
-        
-        # If not enough candidates, try top boosts
-        if len(candidate_addresses) < limit * 2:
+        # Functions to fetch candidates
+        def fetch_boosts_latest():
             try:
-                top_resp = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=8)
-                if top_resp.status_code == 200:
-                    for token in top_resp.json()[:20]:
-                        addr = token.get('tokenAddress', '')
+                resp = requests.get("https://api.dexscreener.com/token-boosts/latest/v1", timeout=5)
+                return [t.get('tokenAddress') for t in resp.json()[:20]] if resp.status_code == 200 else []
+            except: 
+                return []
+
+        def fetch_boosts_top():
+            try:
+                resp = requests.get("https://api.dexscreener.com/token-boosts/top/v1", timeout=5)
+                return [t.get('tokenAddress') for t in resp.json()[:20]] if resp.status_code == 200 else []
+            except: 
+                return []
+                
+        def fetch_profile(chain):
+            try:
+                resp = requests.get(f"https://api.dexscreener.com/token-profiles/latest/v1?chainId={chain}", timeout=5)
+                return [t.get('tokenAddress') for t in resp.json()[:15]] if resp.status_code == 200 else []
+            except: 
+                return []
+
+        # Execute candidate fetching in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [
+                executor.submit(fetch_boosts_latest),
+                executor.submit(fetch_boosts_top)
+            ]
+            chains = ['solana', 'ethereum', 'bsc', 'base', 'arbitrum']
+            for chain in chains:
+                futures.append(executor.submit(fetch_profile, chain))
+            
+            for future in concurrent.futures.as_completed(futures, timeout=8):
+                try:
+                    addrs = future.result(timeout=2)
+                    for addr in addrs:
                         if addr and addr not in all_addresses:
                             all_addresses.add(addr)
                             candidate_addresses.append(addr)
-            except Exception as e:
-                print(f"[Onchain Hot] Boosts top error: {e}")
-        
-        # If still not enough candidates, try Token Profiles from major chains
-        if len(candidate_addresses) < limit * 3:
-            chains = ['solana', 'ethereum', 'bsc', 'base', 'arbitrum']
-            for chain in chains:
-                if len(candidate_addresses) >= limit * 4:  # Stop when we have enough
-                    break
-                try:
-                    profiles_resp = requests.get(
-                        f"https://api.dexscreener.com/token-profiles/latest/v1?chainId={chain}",
-                        timeout=8
-                    )
-                    if profiles_resp.status_code == 200:
-                        for token in profiles_resp.json()[:15]:
-                            addr = token.get('tokenAddress', '')
-                            if addr and addr not in all_addresses:
-                                all_addresses.add(addr)
-                                candidate_addresses.append(addr)
-                except Exception as e:
-                    print(f"[Onchain Hot] Profiles {chain} error: {e}")
+                except Exception:
+                    pass
         
         # Step 2: Process tokens in PARALLEL using ThreadPoolExecutor
         # No price change filter - sort by volume to show "hottest" tokens
@@ -526,7 +529,8 @@ async def get_dashboard_onchain_hot(limit: int = 6):
 
 
 @router.get("/trending")
-async def get_dashboard_trending(limit: int = 10):
+@router.get("/trending")
+def get_dashboard_trending(limit: int = 10):
     """Get CoinGecko trending tokens with real-time Binance prices
     
     CoinGecko trending list is cached for 15min (to respect rate limits).

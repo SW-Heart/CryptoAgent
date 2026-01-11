@@ -35,13 +35,9 @@ def is_admin(user_id: str = None) -> bool:
         user_id = get_current_user()
     return user_id == STRATEGY_ADMIN_USER_ID
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    # Enable WAL mode for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+from app.database import get_db_connection as get_db
+
+# get_db function removed, using imported one
 
 def get_current_price(symbol: str) -> float:
     """Get current price from Binance"""
@@ -49,7 +45,7 @@ def get_current_price(symbol: str) -> float:
     binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
     try:
         resp = requests.get(
-            f"{binance_base}/api/v3/ticker/price?symbol={symbol.upper()}USDT",
+            f"{binance_base}/api/v3/ticker/price%ssymbol={symbol.upper()}USDT",
             timeout=5
         )
         return float(resp.json().get("price", 0))
@@ -85,36 +81,38 @@ def log_strategy_analysis(
         dict with log confirmation
     """
     conn = get_db()
-    round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
-    
-    # Check if a log for the same symbols exists within last 3 minutes (avoid duplicates)
-    existing = conn.execute("""
-        SELECT 1 FROM strategy_logs 
-        WHERE symbols = ? 
-        AND timestamp > datetime('now', '-3 minutes')
-    """, (symbols,)).fetchone()
-    
-    if existing:
-        conn.close()
-        return {
-            "success": True,
-            "round_id": round_id,
-            "message": f"Strategy log for {symbols} already exists (skipped duplicate)"
-        }
-    
-    conn.execute("""
-        INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        round_id,
-        symbols,
-        market_analysis[:2000] if market_analysis else "",
-        position_check[:1000] if position_check else "",
-        strategy_decision[:1000] if strategy_decision else "",
-        f'["{action_taken}"]',
-        f"Strategy analysis at {round_id}: {strategy_decision[:500]}"
-    ))
-    conn.commit()
+    with conn.cursor() as cursor:
+        round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
+        
+        # Check if a log for the same symbols exists within last 3 minutes (avoid duplicates)
+        cursor.execute("""
+            SELECT 1 FROM strategy_logs 
+            WHERE symbols = %s 
+            AND timestamp > NOW() - INTERVAL '3 minutes'
+        """, (symbols,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            conn.close()
+            return {
+                "success": True,
+                "round_id": round_id,
+                "message": f"Strategy log for {symbols} already exists (skipped duplicate)"
+            }
+        
+        cursor.execute("""
+            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            round_id,
+            symbols,
+            market_analysis[:2000] if market_analysis else "",
+            position_check[:1000] if position_check else "",
+            strategy_decision[:1000] if strategy_decision else "",
+            f'["{action_taken}"]',
+            f"Strategy analysis at {round_id}: {strategy_decision[:500]}"
+        ))
+        conn.commit()
     conn.close()
     
     return {
@@ -204,83 +202,88 @@ def open_position(
     # 演示模式：所有操作都使用Admin账户
     effective_user = STRATEGY_ADMIN_USER_ID
     
-    # Check for duplicate position (same symbol and direction)
-    existing = conn.execute(
-        "SELECT id FROM positions WHERE user_id = ? AND symbol = ? AND direction = ? AND status = 'OPEN'",
-        (effective_user, symbol, direction)
-    ).fetchone()
-    
-    if existing:
-        conn.close()
-        return {"error": f"Already have an OPEN {direction} position on {symbol}. Cannot open duplicate."}
-    
-    # Check wallet balance for this user
-    wallet = conn.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = ?", (effective_user,)).fetchone()
-    if not wallet:
-        # Create wallet for new user with 0 balance
-        conn.execute("INSERT INTO virtual_wallet (user_id, initial_balance, current_balance) VALUES (?, 0, 0)", (effective_user,))
-        conn.commit()
-        conn.close()
-        return {"error": "Insufficient balance. Your wallet has 0 USDT."}
-    
-    available = wallet["current_balance"]
-    
-    # Check margin limit (max 20% of balance per position)
-    if margin > available * 0.2:
-        conn.close()
-        return {"error": f"Margin {margin} exceeds 20% limit. Max allowed: {available * 0.2:.2f} USDT"}
-    
-    # Get current price first to calculate fee
-    entry_price = get_current_price(symbol)
-    if entry_price <= 0:
-        conn.close()
-        return {"error": f"Failed to get price for {symbol}"}
-    
-    # Calculate notional value and quantity
-    notional_value = margin * leverage  # Total position value
-    quantity = notional_value / entry_price  # Amount of coins
-    
-    # Calculate fee (0.05% of notional value)
-    fee = notional_value * 0.0005
-    
-    # Check if margin + fee exceeds available (prevent overdraft)
-    if margin + fee > available:
-        conn.close()
-        return {"error": f"Insufficient balance. Need {margin + fee:.2f} USDT (margin + fee), available: {available:.2f} USDT"}
-    
-    # Insert position with user_id and multi-TP fields
-    cursor = conn.execute("""
-        INSERT INTO positions (
-            user_id, symbol, direction, leverage, margin, notional_value, entry_price, quantity, 
-            stop_loss, take_profit, current_price, status,
-            tp1_price, tp2_price, tp3_price, tp1_percent, tp2_percent, tp3_percent,
-            tp1_triggered, tp2_triggered, tp3_triggered
+    with conn.cursor() as cursor:
+        # Check for duplicate position (same symbol and direction)
+        cursor.execute(
+            "SELECT id FROM positions WHERE user_id = %s AND symbol = %s AND direction = %s AND status = 'OPEN'",
+            (effective_user, symbol, direction)
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, 0, 0, 0)
-    """, (effective_user, symbol, direction, leverage, margin, notional_value, entry_price, quantity, 
-          stop_loss, tp1_price, entry_price,
-          tp1_price, tp2_price, tp3_price, tp1_percent, tp2_percent, tp3_percent))
-    
-    position_id = cursor.lastrowid
-    
-    # Insert order record - 开仓订单
-    conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, stop_loss, take_profit, fee)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (position_id, symbol, f"OPEN_{direction}", direction, quantity, margin, entry_price, stop_loss, tp1_price, fee))
-    
-    # Deduct margin and fee from user's wallet (使用原子操作防止并发问题)
-    conn.execute("""
-        UPDATE virtual_wallet 
-        SET current_balance = current_balance - ? - ?, updated_at = CURRENT_TIMESTAMP 
-        WHERE user_id = ?
-    """, (margin, fee, effective_user))
-    
-    # 获取更新后的余额用于返回
-    new_balance_row = conn.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = ?", (effective_user,)).fetchone()
-    new_balance = new_balance_row["current_balance"] if new_balance_row else 0
-    
-    conn.commit()
+        existing = cursor.fetchone()
+        
+        if existing:
+            conn.close()
+            return {"error": f"Already have an OPEN {direction} position on {symbol}. Cannot open duplicate."}
+        
+        # Check wallet balance for this user
+        cursor.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = %s", (effective_user,))
+        wallet = cursor.fetchone()
+        if not wallet:
+            # Create wallet for new user with 0 balance
+            cursor.execute("INSERT INTO virtual_wallet (user_id, initial_balance, current_balance) VALUES (%s, 0, 0)", (effective_user,))
+            conn.commit()
+            conn.close()
+            return {"error": "Insufficient balance. Your wallet has 0 USDT."}
+        
+        available = wallet["current_balance"]
+        
+        # Check margin limit (max 20% of balance per position)
+        if margin > available * 0.2:
+            conn.close()
+            return {"error": f"Margin {margin} exceeds 20% limit. Max allowed: {available * 0.2:.2f} USDT"}
+        
+        # Get current price first to calculate fee
+        entry_price = get_current_price(symbol)
+        if entry_price <= 0:
+            conn.close()
+            return {"error": f"Failed to get price for {symbol}"}
+        
+        # Calculate notional value and quantity
+        notional_value = margin * leverage  # Total position value
+        quantity = notional_value / entry_price  # Amount of coins
+        
+        # Calculate fee (0.05% of notional value)
+        fee = notional_value * 0.0005
+        
+        # Check if margin + fee exceeds available (prevent overdraft)
+        if margin + fee > available:
+            conn.close()
+            return {"error": f"Insufficient balance. Need {margin + fee:.2f} USDT (margin + fee), available: {available:.2f} USDT"}
+        
+        # Insert position with user_id and multi-TP fields
+        cursor.execute("""
+            INSERT INTO positions (
+                user_id, symbol, direction, leverage, margin, notional_value, entry_price, quantity, 
+                stop_loss, take_profit, current_price, status,
+                tp1_price, tp2_price, tp3_price, tp1_percent, tp2_percent, tp3_percent,
+                tp1_triggered, tp2_triggered, tp3_triggered
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, %s, %s, %s, 0, 0, 0)
+            RETURNING id
+        """, (effective_user, symbol, direction, leverage, margin, notional_value, entry_price, quantity, 
+              stop_loss, tp1_price, entry_price,
+              tp1_price, tp2_price, tp3_price, tp1_percent, tp2_percent, tp3_percent))
+        
+        position_id = cursor.fetchone()[0]
+        
+        # Insert order record - 开仓订单
+        cursor.execute("""
+            INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, stop_loss, take_profit, fee)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (position_id, symbol, f"OPEN_{direction}", direction, quantity, margin, entry_price, stop_loss, tp1_price, fee))
+        
+        # Deduct margin and fee from user's wallet (使用原子操作防止并发问题)
+        cursor.execute("""
+            UPDATE virtual_wallet 
+            SET current_balance = current_balance - %s - %s, updated_at = CURRENT_TIMESTAMP 
+            WHERE user_id = %s
+        """, (margin, fee, effective_user))
+        
+        # 获取更新后的余额用于返回
+        cursor.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = %s", (effective_user,))
+        new_balance_row = cursor.fetchone()
+        new_balance = new_balance_row["current_balance"] if new_balance_row else 0
+        
+        conn.commit()
     conn.close()
     
     # Build take profit summary
@@ -322,64 +325,67 @@ def close_position(position_id: int, reason: str = "manual", user_id: str = None
     """
     conn = get_db()
     
-    pos = conn.execute("SELECT * FROM positions WHERE id = ? AND status = 'OPEN'", (position_id,)).fetchone()
-    if not pos:
-        conn.close()
-        return {"error": f"Position {position_id} not found or already closed"}
-    
-    # Get current price
-    close_price = get_current_price(pos["symbol"])
-    if close_price <= 0:
-        conn.close()
-        return {"error": f"Failed to get price for {pos['symbol']}"}
-    
-    # Calculate PnL
-    if pos["direction"] == "LONG":
-        pnl = pos["quantity"] * (close_price - pos["entry_price"])
-    else:
-        pnl = pos["quantity"] * (pos["entry_price"] - close_price)
-    
-    # Close fee (0.05% of notional value, same as open)
-    fee = pos["notional_value"] * 0.0005
-    realized_pnl = pnl - fee
-    
-    # Determine status
-    status = "CLOSED"
-    if reason == "liquidated":
-        status = "LIQUIDATED"
-    
-    # Update position
-    conn.execute("""
-        UPDATE positions 
-        SET status = ?, closed_at = CURRENT_TIMESTAMP, close_price = ?, realized_pnl = ?
-        WHERE id = ?
-    """, (status, close_price, realized_pnl, position_id))
-    
-    # Insert close order - 完整记录平仓信息
-    conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, realized_pnl, close_reason, fee)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (position_id, pos["symbol"], "CLOSE", pos["direction"], pos["quantity"], pos["margin"], close_price, realized_pnl, reason, fee))
-    
-    # Update wallet for the position's owner (使用原子操作防止并发问题)
-    position_user_id = pos["user_id"]
-    
-    # Atomic update: directly use SQL arithmetic instead of read-modify-write
-    conn.execute("""
-        UPDATE virtual_wallet 
-        SET current_balance = current_balance + ? + ?,
-            total_pnl = total_pnl + ?,
-            total_trades = total_trades + 1,
-            win_trades = win_trades + ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    """, (pos["margin"], realized_pnl, realized_pnl, 1 if realized_pnl > 0 else 0, position_user_id))
-    
-    conn.commit()
-    
-    # Get updated balance for return value
-    wallet = conn.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = ?", (position_user_id,)).fetchone()
-    new_balance = wallet["current_balance"] if wallet else 0
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM positions WHERE id = %s AND status = 'OPEN'", (position_id,))
+        pos = cursor.fetchone()
+        if not pos:
+            conn.close()
+            return {"error": f"Position {position_id} not found or already closed"}
+        
+        # Get current price
+        close_price = get_current_price(pos["symbol"])
+        if close_price <= 0:
+            conn.close()
+            return {"error": f"Failed to get price for {pos['symbol']}"}
+        
+        # Calculate PnL
+        if pos["direction"] == "LONG":
+            pnl = pos["quantity"] * (close_price - pos["entry_price"])
+        else:
+            pnl = pos["quantity"] * (pos["entry_price"] - close_price)
+        
+        # Close fee (0.05% of notional value, same as open)
+        fee = pos["notional_value"] * 0.0005
+        realized_pnl = pnl - fee
+        
+        # Determine status
+        status = "CLOSED"
+        if reason == "liquidated":
+            status = "LIQUIDATED"
+        
+        # Update position
+        cursor.execute("""
+            UPDATE positions 
+            SET status = %s, closed_at = CURRENT_TIMESTAMP, close_price = %s, realized_pnl = %s
+            WHERE id = %s
+        """, (status, close_price, realized_pnl, position_id))
+        
+        # Insert close order - 完整记录平仓信息
+        cursor.execute("""
+            INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, realized_pnl, close_reason, fee)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (position_id, pos["symbol"], "CLOSE", pos["direction"], pos["quantity"], pos["margin"], close_price, realized_pnl, reason, fee))
+        
+        # Update wallet for the position's owner (使用原子操作防止并发问题)
+        position_user_id = pos["user_id"]
+        
+        # Atomic update: directly use SQL arithmetic instead of read-modify-write
+        cursor.execute("""
+            UPDATE virtual_wallet 
+            SET current_balance = current_balance + %s + %s,
+                total_pnl = total_pnl + %s,
+                total_trades = total_trades + 1,
+                win_trades = win_trades + %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        """, (pos["margin"], realized_pnl, realized_pnl, 1 if realized_pnl > 0 else 0, position_user_id))
+        
+        conn.commit()
+        
+        # Get updated balance for return value
+        cursor.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = %s", (position_user_id,))
+        wallet = cursor.fetchone()
+        new_balance = wallet["current_balance"] if wallet else 0
     conn.close()
     
     return {
@@ -429,114 +435,116 @@ def partial_close_position(
         return {"error": "close_percent must be between 1 and 100"}
     
     conn = get_db()
-    
-    pos = conn.execute("SELECT * FROM positions WHERE id = ? AND status = 'OPEN'", (position_id,)).fetchone()
-    if not pos:
-        conn.close()
-        return {"error": f"Position {position_id} not found or already closed"}
-    
-    # Calculate remaining quantity (total - already closed)
-    closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
-    remaining_qty = pos["quantity"] - closed_qty
-    
-    if remaining_qty <= 0:
-        conn.close()
-        return {"error": "No remaining quantity to close"}
-    
-    # Calculate quantity to close
-    close_qty = remaining_qty * (close_percent / 100)
-    new_closed_qty = closed_qty + close_qty
-    
-    # Get current price
-    close_price = get_current_price(pos["symbol"])
-    if close_price <= 0:
-        conn.close()
-        return {"error": f"Failed to get price for {pos['symbol']}"}
-    
-    # Calculate PnL for this partial close
-    if pos["direction"] == "LONG":
-        pnl = close_qty * (close_price - pos["entry_price"])
-    else:
-        pnl = close_qty * (pos["entry_price"] - close_price)
-    
-    # Calculate proportional margin to release
-    close_ratio = close_qty / pos["quantity"]
-    margin_to_release = pos["margin"] * close_ratio
-    
-    # Fee (0.05% of closed notional)
-    closed_notional = close_qty * close_price
-    fee = closed_notional * 0.0005
-    realized_pnl = pnl - fee
-    
-    # Determine new SL
-    final_sl = pos["stop_loss"]
-    if new_stop_loss is not None:
-        final_sl = new_stop_loss
-    elif move_sl_to_entry:
-        final_sl = pos["entry_price"]  # Move to breakeven
-    
-    final_tp = new_take_profit if new_take_profit is not None else pos["take_profit"]
-    
-    # Check if position is now fully closed
-    new_remaining = remaining_qty - close_qty
-    is_fully_closed = new_remaining < 0.0001  # Tiny threshold for float precision
-    
-    if is_fully_closed:
-        # Fully close the position
-        conn.execute("""
-            UPDATE positions 
-            SET status = 'CLOSED', closed_at = CURRENT_TIMESTAMP, 
-                close_price = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?,
-                closed_quantity = quantity
-            WHERE id = ?
-        """, (close_price, realized_pnl, position_id))
-    else:
-        # Update position with new closed_quantity, reduced margin, and SL/TP
-        # 关键修复：同步减少仓位的 margin，避免 equity 计算时保证金被重复计算
-        new_margin = pos["margin"] - margin_to_release
-        conn.execute("""
-            UPDATE positions 
-            SET closed_quantity = ?, margin = ?, stop_loss = ?, take_profit = ?,
-                realized_pnl = COALESCE(realized_pnl, 0) + ?
-            WHERE id = ?
-        """, (new_closed_qty, new_margin, final_sl, final_tp, realized_pnl, position_id))
-    
-    # Insert partial close order record - 完整记录阶段性平仓信息
-    conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, realized_pnl, fee)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (position_id, pos["symbol"], f"PARTIAL_CLOSE_{int(close_percent)}%", 
-          pos["direction"], close_qty, margin_to_release, close_price, realized_pnl, fee))
-    
-    # Update wallet - release proportional margin + add realized PnL
-    position_user_id = pos["user_id"]
-    
-    # When fully closed, also update trade statistics
-    if is_fully_closed:
-        # Get total realized PnL for this position (including previous partial closes)
-        total_position_pnl = (pos["realized_pnl"] or 0) + realized_pnl
-        conn.execute("""
-            UPDATE virtual_wallet 
-            SET current_balance = current_balance + ? + ?,
-                total_pnl = total_pnl + ?,
-                total_trades = total_trades + 1,
-                win_trades = win_trades + ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        """, (margin_to_release, realized_pnl, realized_pnl, 1 if total_position_pnl > 0 else 0, position_user_id))
-    else:
-        conn.execute("""
-            UPDATE virtual_wallet 
-            SET current_balance = current_balance + ? + ?,
-                total_pnl = total_pnl + ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        """, (margin_to_release, realized_pnl, realized_pnl, position_user_id))
-    
-    conn.commit()
-    
-    # Get updated balance
-    wallet = conn.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = ?", (position_user_id,)).fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM positions WHERE id = %s AND status = 'OPEN'", (position_id,))
+        pos = cursor.fetchone()
+        if not pos:
+            conn.close()
+            return {"error": f"Position {position_id} not found or already closed"}
+        
+        # Calculate remaining quantity (total - already closed)
+        closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
+        remaining_qty = pos["quantity"] - closed_qty
+        
+        if remaining_qty <= 0:
+            conn.close()
+            return {"error": "No remaining quantity to close"}
+        
+        # Calculate quantity to close
+        close_qty = remaining_qty * (close_percent / 100)
+        new_closed_qty = closed_qty + close_qty
+        
+        # Get current price
+        close_price = get_current_price(pos["symbol"])
+        if close_price <= 0:
+            conn.close()
+            return {"error": f"Failed to get price for {pos['symbol']}"}
+        
+        # Calculate PnL for this partial close
+        if pos["direction"] == "LONG":
+            pnl = close_qty * (close_price - pos["entry_price"])
+        else:
+            pnl = close_qty * (pos["entry_price"] - close_price)
+        
+        # Calculate proportional margin to release
+        close_ratio = close_qty / pos["quantity"]
+        margin_to_release = pos["margin"] * close_ratio
+        
+        # Fee (0.05% of closed notional)
+        closed_notional = close_qty * close_price
+        fee = closed_notional * 0.0005
+        realized_pnl = pnl - fee
+        
+        # Determine new SL
+        final_sl = pos["stop_loss"]
+        if new_stop_loss is not None:
+            final_sl = new_stop_loss
+        elif move_sl_to_entry:
+            final_sl = pos["entry_price"]  # Move to breakeven
+        
+        final_tp = new_take_profit if new_take_profit is not None else pos["take_profit"]
+        
+        # Check if position is now fully closed
+        new_remaining = remaining_qty - close_qty
+        is_fully_closed = new_remaining < 0.0001  # Tiny threshold for float precision
+        
+        if is_fully_closed:
+            # Fully close the position
+            cursor.execute("""
+                UPDATE positions 
+                SET status = 'CLOSED', closed_at = CURRENT_TIMESTAMP, 
+                    close_price = %s, realized_pnl = COALESCE(realized_pnl, 0) + %s,
+                    closed_quantity = quantity
+                WHERE id = %s
+            """, (close_price, realized_pnl, position_id))
+        else:
+            # Update position with new closed_quantity, reduced margin, and SL/TP
+            # 关键修复：同步减少仓位的 margin，避免 equity 计算时保证金被重复计算
+            new_margin = pos["margin"] - margin_to_release
+            cursor.execute("""
+                UPDATE positions 
+                SET closed_quantity = %s, margin = %s, stop_loss = %s, take_profit = %s,
+                    realized_pnl = COALESCE(realized_pnl, 0) + %s
+                WHERE id = %s
+            """, (new_closed_qty, new_margin, final_sl, final_tp, realized_pnl, position_id))
+        
+        # Insert partial close order record - 完整记录阶段性平仓信息
+        cursor.execute("""
+            INSERT INTO orders (position_id, symbol, action, direction, quantity, margin, entry_price, realized_pnl, fee)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (position_id, pos["symbol"], f"PARTIAL_CLOSE_{int(close_percent)}%", 
+              pos["direction"], close_qty, margin_to_release, close_price, realized_pnl, fee))
+        
+        # Update wallet - release proportional margin + add realized PnL
+        position_user_id = pos["user_id"]
+        
+        # When fully closed, also update trade statistics
+        if is_fully_closed:
+            # Get total realized PnL for this position (including previous partial closes)
+            total_position_pnl = (pos["realized_pnl"] or 0) + realized_pnl
+            cursor.execute("""
+                UPDATE virtual_wallet 
+                SET current_balance = current_balance + %s + %s,
+                    total_pnl = total_pnl + %s,
+                    total_trades = total_trades + 1,
+                    win_trades = win_trades + %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s
+            """, (margin_to_release, realized_pnl, realized_pnl, 1 if total_position_pnl > 0 else 0, position_user_id))
+        else:
+            cursor.execute("""
+                UPDATE virtual_wallet 
+                SET current_balance = current_balance + %s + %s,
+                    total_pnl = total_pnl + %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = %s
+            """, (margin_to_release, realized_pnl, realized_pnl, position_user_id))
+        
+        conn.commit()
+        
+        # Get updated balance
+        cursor.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = %s", (position_user_id,))
+        wallet = cursor.fetchone()
     conn.close()
     
     return {
@@ -573,19 +581,23 @@ def get_positions_summary(user_id: str = None) -> dict:
     
     conn = get_db()
     
-    # 查询Admin账户的钱包和持仓
-    wallet = conn.execute("SELECT * FROM virtual_wallet WHERE user_id = ?", (effective_user,)).fetchone()
-    
-    if not wallet:
-        # Create wallet for admin with initial balance
-        conn.execute("INSERT INTO virtual_wallet (user_id, initial_balance, current_balance) VALUES (?, 10000, 10000)", (effective_user,))
-        conn.commit()
-        wallet = conn.execute("SELECT * FROM virtual_wallet WHERE user_id = ?", (effective_user,)).fetchone()
-    
-    positions = conn.execute(
-        "SELECT * FROM positions WHERE user_id = ? AND status = 'OPEN' ORDER BY opened_at DESC",
-        (effective_user,)
-    ).fetchall()
+    with conn.cursor() as cursor:
+        # 查询Admin账户的钱包和持仓
+        cursor.execute("SELECT * FROM virtual_wallet WHERE user_id = %s", (effective_user,))
+        wallet = cursor.fetchone()
+        
+        if not wallet:
+            # Create wallet for admin with initial balance
+            cursor.execute("INSERT INTO virtual_wallet (user_id, initial_balance, current_balance) VALUES (%s, 10000, 10000)", (effective_user,))
+            conn.commit()
+            cursor.execute("SELECT * FROM virtual_wallet WHERE user_id = %s", (effective_user,))
+            wallet = cursor.fetchone()
+        
+        cursor.execute(
+            "SELECT * FROM positions WHERE user_id = %s AND status = 'OPEN' ORDER BY opened_at DESC",
+            (effective_user,)
+        )
+        positions = cursor.fetchall()
     
     conn.close()
     
@@ -670,37 +682,38 @@ def update_stop_loss_take_profit(position_id: int, new_sl: float = None, new_tp:
         dict with update status
     """
     conn = get_db()
-    
-    pos = conn.execute("SELECT * FROM positions WHERE id = ? AND status = 'OPEN'", (position_id,)).fetchone()
-    if not pos:
-        conn.close()
-        return {"error": f"Position {position_id} not found or already closed"}
-    
-    updates = []
-    params = []
-    
-    if new_sl is not None:
-        updates.append("stop_loss = ?")
-        params.append(new_sl)
-    
-    if new_tp is not None:
-        updates.append("take_profit = ?")
-        params.append(new_tp)
-    
-    if not updates:
-        conn.close()
-        return {"error": "No updates provided"}
-    
-    params.append(position_id)
-    conn.execute(f"UPDATE positions SET {', '.join(updates)} WHERE id = ?", params)
-    
-    # Log the modification
-    conn.execute("""
-        INSERT INTO orders (position_id, symbol, action, stop_loss, take_profit)
-        VALUES (?, ?, 'MODIFY_SL_TP', ?, ?)
-    """, (position_id, pos["symbol"], new_sl, new_tp))
-    
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM positions WHERE id = %s AND status = 'OPEN'", (position_id,))
+        pos = cursor.fetchone()
+        if not pos:
+            conn.close()
+            return {"error": f"Position {position_id} not found or already closed"}
+        
+        updates = []
+        params = []
+        
+        if new_sl is not None:
+            updates.append("stop_loss = %s")
+            params.append(new_sl)
+        
+        if new_tp is not None:
+            updates.append("take_profit = %s")
+            params.append(new_tp)
+        
+        if not updates:
+            conn.close()
+            return {"error": "No updates provided"}
+        
+        params.append(position_id)
+        cursor.execute(f"UPDATE positions SET {', '.join(updates)} WHERE id = %s", tuple(params))
+        
+        # Log the modification
+        cursor.execute("""
+            INSERT INTO orders (position_id, symbol, action, stop_loss, take_profit)
+            VALUES (%s, %s, 'MODIFY_SL_TP', %s, %s)
+        """, (position_id, pos["symbol"], new_sl, new_tp))
+        
+        conn.commit()
     conn.close()
     
     return {

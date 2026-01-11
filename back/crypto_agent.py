@@ -4,7 +4,8 @@ from dotenv import load_dotenv
 from textwrap import dedent
 from os import getenv
 from agno.agent import Agent
-from agno.db.sqlite import SqliteDb
+# from agno.db.sqlite import SqliteDb
+from custom_db import WalSqliteDb as SqliteDb
 from agno.models.deepseek import DeepSeek  # LLM 模型
 from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.serper import SerperTools

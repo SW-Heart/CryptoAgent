@@ -3,51 +3,48 @@ Strategy API router.
 Handles virtual trading, positions, and strategy logs.
 """
 from fastapi import APIRouter, HTTPException
-import sqlite3
 import os
 from datetime import datetime
+from app.database import get_db_connection as get_db_connection
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 
-DB_PATH = "tmp/test.db"
+# DB_PATH removed
 
 # Admin user ID for strategy operations (must match trading_tools.py)
 STRATEGY_ADMIN_USER_ID = "ee20fa53-5ac2-44bc-9237-41b308e291d8"
 
 # Binance API base URL (configurable via environment variable)
 BINANCE_API_BASE = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+from app.services.price_service import fetch_prices_batch
 
-def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+# def get_db_connection(): ... removed/imported
 
 def init_strategy_tables():
     """Initialize strategy tables"""
     conn = get_db_connection()
-    
-    # Virtual wallet - system-wide (single wallet for demo)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS virtual_wallet (
-            id INTEGER PRIMARY KEY,
-            initial_balance REAL DEFAULT 10000,
-            current_balance REAL DEFAULT 10000,
-            total_pnl REAL DEFAULT 0,
-            total_trades INTEGER DEFAULT 0,
-            win_trades INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Positions table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS positions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
+    # Use cursor as context manager or just cursor()
+    with conn.cursor() as cursor:
+        # Virtual wallet
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS virtual_wallet (
+                id SERIAL PRIMARY KEY,
+                initial_balance DOUBLE PRECISION DEFAULT 10000,
+                current_balance DOUBLE PRECISION DEFAULT 10000,
+                total_pnl DOUBLE PRECISION DEFAULT 0,
+                total_trades INTEGER DEFAULT 0,
+                win_trades INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Positions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                id SERIAL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+
             direction TEXT NOT NULL,
             leverage INTEGER DEFAULT 10,
             margin REAL NOT NULL,
@@ -66,56 +63,59 @@ def init_strategy_tables():
         )
     """)
     
-    # Orders history - 完整的订单记录（含阶段性平仓）
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            position_id INTEGER,
-            symbol TEXT NOT NULL,
-            action TEXT NOT NULL,
-            direction TEXT,
-            quantity REAL,
-            margin REAL,
-            entry_price REAL,
-            stop_loss REAL,
-            take_profit REAL,
-            realized_pnl REAL,
-            tp_level INTEGER,
-            close_reason TEXT,
-            fee REAL DEFAULT 0,
-            status TEXT DEFAULT 'FILLED',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Strategy logs
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS strategy_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            round_id TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            symbols TEXT,
-            market_analysis TEXT,
-            position_check TEXT,
-            strategy_decision TEXT,
-            actions_taken TEXT,
-            raw_response TEXT
-        )
-    """)
+    with conn.cursor() as cursor:
+        # Orders history
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                position_id INTEGER,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                direction TEXT,
+                quantity DOUBLE PRECISION,
+                margin DOUBLE PRECISION,
+                entry_price DOUBLE PRECISION,
+                stop_loss DOUBLE PRECISION,
+                take_profit DOUBLE PRECISION,
+                realized_pnl DOUBLE PRECISION,
+                tp_level INTEGER,
+                close_reason TEXT,
+                fee DOUBLE PRECISION DEFAULT 0,
+                status TEXT DEFAULT 'FILLED',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Strategy logs
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_logs (
+                id SERIAL PRIMARY KEY,
+                round_id TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                symbols TEXT,
+                market_analysis TEXT,
+                position_check TEXT,
+                strategy_decision TEXT,
+                actions_taken TEXT,
+                raw_response TEXT
+            )
+        """)
+        conn.commit()
     
     # Initialize wallet if not exists
-    conn.execute("""
-        INSERT OR IGNORE INTO virtual_wallet (id, initial_balance, current_balance)
-        VALUES (1, 10000, 10000)
-    """)
-    
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO virtual_wallet (id, initial_balance, current_balance)
+            VALUES (1, 10000, 10000)
+            ON CONFLICT (id) DO NOTHING
+        """)
+        conn.commit()
     conn.close()
 
 # GET endpoints for UI
 
 @router.get("/wallet")
-async def get_wallet(user_id: str = None):
+def get_wallet(user_id: str = None):
     """Get wallet status with real-time equity.
     
     If user has Binance trading enabled, returns real Binance data.
@@ -153,10 +153,13 @@ async def get_wallet(user_id: str = None):
     try:
         conn = get_db_connection()
         # Use user_id to match trading_tools.py logic
-        row = conn.execute("SELECT * FROM virtual_wallet WHERE user_id = ?", (STRATEGY_ADMIN_USER_ID,)).fetchone()
-        
-        # Get open positions for equity calculation (filtered by user_id)
-        positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = ?", (STRATEGY_ADMIN_USER_ID,)).fetchall()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM virtual_wallet WHERE user_id = %s", (STRATEGY_ADMIN_USER_ID,))
+            row = cursor.fetchone()
+            
+            # Get open positions for equity calculation (filtered by user_id)
+            cursor.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = %s", (STRATEGY_ADMIN_USER_ID,))
+            positions = cursor.fetchall()
         conn.close()
         
         if not row:
@@ -166,25 +169,27 @@ async def get_wallet(user_id: str = None):
         total_unrealized_pnl = 0
         total_margin_in_use = 0
         
+        # Batch fetch prices for all positions
+        symbols = [f"{pos['symbol']}USDT" for pos in positions]
+        price_map = fetch_prices_batch(symbols, BINANCE_API_BASE)
+
         for pos in positions:
             total_margin_in_use += pos["margin"]
             # 计算剩余数量（原始数量 - 已平仓数量）
             closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
             remaining_qty = pos["quantity"] - closed_qty
-            try:
-                resp = requests.get(
-                    f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol={pos['symbol']}USDT",
-
-                    timeout=3
-                )
-                if resp.status_code == 200:
-                    current_price = float(resp.json().get("price", 0))
-                    # 使用剩余数量计算未实现盈亏
-                    if pos["direction"] == "LONG":
-                        total_unrealized_pnl += remaining_qty * (current_price - pos["entry_price"])
-                    else:
-                        total_unrealized_pnl += remaining_qty * (pos["entry_price"] - current_price)
-            except:
+            
+            symbol_pair = f"{pos['symbol']}USDT"
+            current_price = price_map.get(symbol_pair)
+            
+            if current_price:
+                # 使用剩余数量计算未实现盈亏
+                if pos["direction"] == "LONG":
+                    total_unrealized_pnl += remaining_qty * (current_price - pos["entry_price"])
+                else:
+                    total_unrealized_pnl += remaining_qty * (pos["entry_price"] - current_price)
+            else:
+                 # Fallback to stored PnL if real-time price unavailable
                 total_unrealized_pnl += pos["unrealized_pnl"] or 0
         
         # Equity = current_balance + margin_in_use + unrealized_pnl
@@ -207,7 +212,7 @@ async def get_wallet(user_id: str = None):
 
 
 @router.get("/positions")
-async def get_positions(status: str = "OPEN", user_id: str = None):
+def get_positions(status: str = "OPEN", user_id: str = None):
     """Get positions (OPEN / CLOSED / ALL) with real-time PnL.
     
     If user has Binance trading enabled, returns real Binance positions.
@@ -260,16 +265,29 @@ async def get_positions(status: str = "OPEN", user_id: str = None):
         conn = get_db_connection()
         
         # Filter by user_id to only show admin's positions
-        if status == "ALL":
-            rows = conn.execute("SELECT * FROM positions WHERE user_id = ? ORDER BY opened_at DESC", (STRATEGY_ADMIN_USER_ID,)).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM positions WHERE status = ? AND user_id = ? ORDER BY opened_at DESC",
-                (status, STRATEGY_ADMIN_USER_ID)
-            ).fetchall()
+        with conn.cursor() as cursor:
+            if status == "ALL":
+                cursor.execute("SELECT * FROM positions WHERE user_id = %s ORDER BY opened_at DESC", (STRATEGY_ADMIN_USER_ID,))
+            else:
+                cursor.execute(
+                    "SELECT * FROM positions WHERE status = %s AND user_id = %s ORDER BY opened_at DESC",
+                    (status, STRATEGY_ADMIN_USER_ID)
+                )
+            rows = cursor.fetchall()
         
         conn.close()
         
+        positions = []
+        for row in rows:
+            # Fetch prices outside loop or just batch now? 
+            # Ideally fetch all relevant symbols first.
+            # But here we are iterating. Let's do a batch fetch before loop.
+            pass # Placeholder to be removed by logic below
+        
+        # Batch fetch prices
+        symbols = [f"{row['symbol']}USDT" for row in rows if row["status"] == "OPEN"]
+        price_map = fetch_prices_batch(symbols, BINANCE_API_BASE)
+
         positions = []
         for row in rows:
             # Safely get leverage and notional_value (may not exist in old records)
@@ -304,29 +322,23 @@ async def get_positions(status: str = "OPEN", user_id: str = None):
             
             # For OPEN positions, get real-time price and calculate PnL
             if row["status"] == "OPEN":
-                try:
-                    resp = requests.get(
-                        f"{BINANCE_API_BASE}/api/v3/ticker/price?symbol={row['symbol']}USDT",
-
-                        timeout=3
-                    )
-                    if resp.status_code == 200:
-                        current_price = float(resp.json().get("price", 0))
-                        pos_data["current_price"] = current_price
-                        
-                        # 计算剩余数量（考虑阶段性平仓）
-                        closed_qty = row["closed_quantity"] if row["closed_quantity"] else 0
-                        remaining_qty = row["quantity"] - closed_qty
-                        
-                        # Calculate unrealized PnL (基于剩余数量)
-                        if row["direction"] == "LONG":
-                            unrealized_pnl = remaining_qty * (current_price - row["entry_price"])
-                        else:
-                            unrealized_pnl = remaining_qty * (row["entry_price"] - current_price)
-                        
-                        pos_data["unrealized_pnl"] = round(unrealized_pnl, 2)
-                except:
-                    pass  # Keep database values if API fails
+                symbol_pair = f"{row['symbol']}USDT"
+                current_price = price_map.get(symbol_pair)
+                
+                if current_price:
+                    pos_data["current_price"] = current_price
+                    
+                    # 计算剩余数量（考虑阶段性平仓）
+                    closed_qty = row["closed_quantity"] if row["closed_quantity"] else 0
+                    remaining_qty = row["quantity"] - closed_qty
+                    
+                    # Calculate unrealized PnL (基于剩余数量)
+                    if row["direction"] == "LONG":
+                        unrealized_pnl = remaining_qty * (current_price - row["entry_price"])
+                    else:
+                        unrealized_pnl = remaining_qty * (row["entry_price"] - current_price)
+                    
+                    pos_data["unrealized_pnl"] = round(unrealized_pnl, 2)
             
             positions.append(pos_data)
         
@@ -336,7 +348,7 @@ async def get_positions(status: str = "OPEN", user_id: str = None):
 
 
 @router.get("/orders")
-async def get_orders(user_id: str = None, limit: int = 20):
+def get_orders(user_id: str = None, limit: int = 20):
     """Get open orders - from Binance if configured, otherwise from local DB"""
     try:
         # 如果 user_id 提供且已配置 Binance，获取 Binance 订单
@@ -348,9 +360,18 @@ async def get_orders(user_id: str = None, limit: int = 20):
                 if status.get("is_trading_enabled"):
                     client = get_user_binance_client(user_id)
                     if client:
-                        binance_orders = client.get_open_orders()
-                        if not isinstance(binance_orders, dict) or "error" not in binance_orders:
-                            formatted_orders = []
+                        try:
+                            binance_orders = client.get_open_orders()
+                            # 确保返回的是列表
+                            if not isinstance(binance_orders, list):
+                                if isinstance(binance_orders, dict) and "code" in binance_orders:
+                                    print(f"[Strategy] Binance error: {binance_orders}")
+                                    # Don't fallback silently if we know it's a Binance user
+                                    return {"orders": [], "source": "binance_error", "error": str(binance_orders)}
+                                binance_orders = [] # Unknown format
+                            
+                            if binance_orders: # Process if there are orders
+                                formatted_orders = []
                             for order in binance_orders:
                                 # 格式化 Binance 订单字段
                                 order_type = order.get("type", "")
@@ -389,39 +410,47 @@ async def get_orders(user_id: str = None, limit: int = 20):
                                 })
                             
                             return {"orders": formatted_orders, "source": "binance"}
+                        except Exception as e:
+                            print(f"[Strategy] Binance get_orders error: {e}")
+                            # Continue to fallback
         
         # 回退到本地数据库
         conn = get_db_connection()
-        rows = conn.execute(
-            "SELECT * FROM orders ORDER BY created_at DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-        
-        orders = []
-        for row in rows:
-            order = dict(row)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM orders ORDER BY created_at DESC LIMIT %s",
+                (limit,)
+            )
+            rows = cursor.fetchall()
             
-            # 兼容旧订单：如果没有 direction，尝试从关联的 position 获取
-            if not order.get("direction") and order.get("position_id"):
-                pos = conn.execute(
-                    "SELECT direction, quantity FROM positions WHERE id = ?",
-                    (order["position_id"],)
-                ).fetchone()
+            orders = []
+            for row in rows:
+                order = dict(row)
+                pos = None
+                
+                # 兼容旧订单：如果没有 direction，尝试从关联的 position 获取
+                if not order.get("direction") and order.get("position_id"):
+                    cursor.execute(
+                        "SELECT direction, quantity FROM positions WHERE id = %s",
+                        (order["position_id"],)
+                    )
+                    pos = cursor.fetchone()
+                
                 if pos:
                     order["direction"] = pos["direction"]
                     if order.get("action", "").startswith("OPEN") and not order.get("quantity"):
                         order["quantity"] = pos["quantity"]
             
-            # 兼容旧订单：从 action 推断 direction
-            if not order.get("direction"):
-                action = order.get("action", "")
-                if "LONG" in action:
-                    order["direction"] = "LONG"
-                elif "SHORT" in action:
-                    order["direction"] = "SHORT"
-            
-            order["source"] = "local"
-            orders.append(order)
+                # 兼容旧订单：从 action 推断 direction
+                if not order.get("direction"):
+                    action = order.get("action", "")
+                    if "LONG" in action:
+                        order["direction"] = "LONG"
+                    elif "SHORT" in action:
+                        order["direction"] = "SHORT"
+                
+                order["source"] = "local"
+                orders.append(order)
         
         conn.close()
         return {"orders": orders, "source": "local"}
@@ -429,19 +458,22 @@ async def get_orders(user_id: str = None, limit: int = 20):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/logs")
-async def get_strategy_logs(limit: int = 10, offset: int = 0):
+def get_strategy_logs(limit: int = 10, offset: int = 0):
     """Get strategy logs with pagination support"""
     try:
         conn = get_db_connection()
         
         # Get total count for pagination
-        total_count = conn.execute("SELECT COUNT(*) FROM strategy_logs").fetchone()[0]
-        
-        # Get paginated logs
-        rows = conn.execute(
-            "SELECT * FROM strategy_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (limit, offset)
-        ).fetchall()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM strategy_logs")
+            total_count = cursor.fetchone()[0]
+            
+            # Get paginated logs
+            cursor.execute(
+                "SELECT * FROM strategy_logs ORDER BY timestamp DESC LIMIT %s OFFSET %s",
+                (limit, offset)
+            )
+            rows = cursor.fetchall()
         conn.close()
         
         logs = [dict(row) for row in rows]
@@ -456,22 +488,25 @@ async def get_strategy_logs(limit: int = 10, offset: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/equity-curve")
-async def get_equity_curve():
+def get_equity_curve():
     """Get equity curve data from closed positions"""
     try:
         conn = get_db_connection()
         
         # Get initial balance (use user_id for consistency)
-        wallet = conn.execute("SELECT initial_balance FROM virtual_wallet WHERE user_id = ?", (STRATEGY_ADMIN_USER_ID,)).fetchone()
-        initial = wallet["initial_balance"] if wallet else 10000
-        
-        # Get all closed positions ordered by close time (filtered by user_id)
-        rows = conn.execute("""
-            SELECT closed_at, realized_pnl 
-            FROM positions 
-            WHERE status IN ('CLOSED', 'LIQUIDATED') AND closed_at IS NOT NULL AND user_id = ?
-            ORDER BY closed_at ASC
-        """, (STRATEGY_ADMIN_USER_ID,)).fetchall()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT initial_balance FROM virtual_wallet WHERE user_id = %s", (STRATEGY_ADMIN_USER_ID,))
+            wallet = cursor.fetchone()
+            initial = wallet["initial_balance"] if wallet else 10000
+            
+            # Get all closed positions ordered by close time (filtered by user_id)
+            cursor.execute("""
+                SELECT closed_at, realized_pnl 
+                FROM positions 
+                WHERE status IN ('CLOSED', 'LIQUIDATED') AND closed_at IS NOT NULL AND user_id = %s
+                ORDER BY closed_at ASC
+            """, (STRATEGY_ADMIN_USER_ID,))
+            rows = cursor.fetchall()
         conn.close()
         
         # Build equity curve
@@ -490,7 +525,7 @@ async def get_equity_curve():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/trigger")
-async def trigger_strategy_manually():
+def trigger_strategy_manually():
     """Manually trigger a test trade (for testing)"""
     from datetime import datetime
     
@@ -505,19 +540,20 @@ async def trigger_strategy_manually():
         
         # Log to strategy_logs
         conn = get_db_connection()
-        conn.execute("""
-            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            round_id, 
-            "BTC,ETH,SOL", 
-            f"Manual trigger test at {round_id}",
-            f"Current positions: {summary['position_count']}, Balance: ${summary['wallet']['current_balance']}",
-            "Test trigger completed",
-            "[]",
-            f"Manual test - Wallet: {summary['wallet']}"
-        ))
-        conn.commit()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                round_id, 
+                "BTC,ETH,SOL", 
+                f"Manual trigger test at {round_id}",
+                f"Current positions: {summary['position_count']}, Balance: ${summary['wallet']['current_balance']}",
+                "Test trigger completed",
+                "[]",
+                f"Manual test - Wallet: {summary['wallet']}"
+            ))
+            conn.commit()
         conn.close()
         
         return {

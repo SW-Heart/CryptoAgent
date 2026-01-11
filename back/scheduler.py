@@ -159,12 +159,21 @@ def sync_binance_users_positions():
         print(f"[Scheduler] Error in Binance sync: {e}")
 
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+import os
+import time
+import uuid
+import json
+import logging
+import asyncio
+from typing import Dict, List, Optional
+from datetime import datetime
+from app.database import get_db_connection as get_db
+
+# ... existing imports ...
+
+# DB_PATH removed
+
+# get_db replaced by import
 
 def log_strategy_round(round_id: str, symbols: str, response: dict):
     """Save strategy log to database"""
@@ -197,43 +206,31 @@ def log_strategy_round(round_id: str, symbols: str, response: dict):
         
         # Check if Agent already logged this round within last 3 minutes (to avoid duplicates)
         # Agent may log with a slightly different round_id (1-2 min later)
-        existing = conn.execute("""
-            SELECT 1 FROM strategy_logs 
-            WHERE symbols = ? 
-            AND timestamp > datetime('now', '-3 minutes')
-        """, (symbols,)).fetchone()
-        if existing:
-            conn.close()
-            print(f"[Scheduler] Recent log for {symbols} exists, skipping duplicate")
-            return
-        
-        conn.execute("""
-            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000]))
-        
-        conn.commit()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT 1 FROM strategy_logs 
+                WHERE symbols = %s 
+                AND timestamp > NOW() - INTERVAL '3 minutes'
+            """, (symbols,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                conn.close()
+                print(f"[Scheduler] Recent log for {symbols} exists, skipping duplicate")
+                return
+            
+            cursor.execute("""
+                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000]))
+            
+            conn.commit()
         conn.close()
         print(f"[Scheduler] Logged strategy round: {round_id}")
     except Exception as e:
         print(f"[Scheduler] Error logging strategy: {e}")
 
-def _retry_db_operation(func, max_retries=3, base_delay=1.0):
-    """Execute a database operation with retry logic for handling locks"""
-    import random
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            return func()
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
-                last_error = e
-                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
-                print(f"[Scheduler] DB locked, retry {attempt + 1}/{max_retries} after {delay:.1f}s...")
-                time.sleep(delay)
-            else:
-                raise
-    raise last_error
+# Retry logic removed as it was specific to SQLite locking
 
 
 def update_positions_prices():
@@ -248,104 +245,106 @@ def update_positions_prices():
     partial_close_actions = []  # Collect partial close actions
     
     try:
-        conn = _retry_db_operation(get_db)
-        # Only process admin's positions (filter by user_id)
-        positions = conn.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = ?", (SCHEDULER_USER_ID,)).fetchall()
-        
-        for pos in positions:
-            symbol = pos["symbol"]
+        conn = get_db()
+        with conn.cursor() as cursor:
+            # Only process admin's positions (filter by user_id)
+            cursor.execute("SELECT * FROM positions WHERE status = 'OPEN' AND user_id = %s", (SCHEDULER_USER_ID,))
+            positions = cursor.fetchall()
             
-            # Get current price
-            try:
-                import os
-                binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
-                resp = requests.get(f"{binance_base}/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
-                current_price = float(resp.json().get("price", 0))
-            except:
-                continue
-            
-            if current_price <= 0:
-                continue
-            
-            # 计算剩余数量（考虑阶段性平仓）
-            closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
-            remaining_qty = pos["quantity"] - closed_qty
-            
-            # Calculate unrealized PnL (基于剩余数量)
-            if pos["direction"] == "LONG":
-                unrealized_pnl = remaining_qty * (current_price - pos["entry_price"])
-            else:
-                unrealized_pnl = remaining_qty * (pos["entry_price"] - current_price)
-            
-            # Update position price
-            conn.execute("""
-                UPDATE positions SET current_price = ?, unrealized_pnl = ? WHERE id = ?
-            """, (current_price, unrealized_pnl, pos["id"]))
-            
-            # Check liquidation (unrealized_pnl <= -margin)
-            if unrealized_pnl <= -pos["margin"]:
-                print(f"[Scheduler] LIQUIDATION triggered for position {pos['id']} ({symbol} {pos['direction']})")
-                positions_to_close.append((pos["id"], "liquidated"))
-                continue
-            
-            # Check stop loss
-            if pos["stop_loss"]:
-                if (pos["direction"] == "LONG" and current_price <= pos["stop_loss"]) or \
-                   (pos["direction"] == "SHORT" and current_price >= pos["stop_loss"]):
-                    print(f"[Scheduler] STOP LOSS triggered for position {pos['id']} ({symbol})")
-                    positions_to_close.append((pos["id"], "stop_loss"))
+            for pos in positions:
+                symbol = pos["symbol"]
+                
+                # Get current price
+                try:
+                    import os
+                    binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+                    resp = requests.get(f"{binance_base}/api/v3/ticker/price%ssymbol={symbol}USDT", timeout=5)
+                    current_price = float(resp.json().get("price", 0))
+                except:
                     continue
-            
-            # ========== 分批止盈检查 ==========
-            is_long = pos["direction"] == "LONG"
-            
-            def price_hit(target_price):
-                """Check if price hit target for this direction"""
-                if is_long:
-                    return current_price >= target_price
+                
+                if current_price <= 0:
+                    continue
+                
+                # 计算剩余数量（考虑阶段性平仓）
+                closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
+                remaining_qty = pos["quantity"] - closed_qty
+                
+                # Calculate unrealized PnL (基于剩余数量)
+                if pos["direction"] == "LONG":
+                    unrealized_pnl = remaining_qty * (current_price - pos["entry_price"])
                 else:
-                    return current_price <= target_price
-            
-            # Check TP1 (if not yet triggered)
-            if pos["tp1_price"] and not pos["tp1_triggered"]:
-                if price_hit(pos["tp1_price"]):
-                    tp1_pct = pos["tp1_percent"] or 50
-                    print(f"[Scheduler] TP1 triggered for position {pos['id']} ({symbol}) - closing {tp1_pct}%, moving SL to entry")
-                    partial_close_actions.append({
-                        "position_id": pos["id"],
-                        "close_percent": tp1_pct,
-                        "move_sl_to_entry": True,  # 保本铁律
-                        "tp_level": 1
-                    })
-                    continue  # Don't check further TPs this cycle
-            
-            # Check TP2 (only if TP1 already triggered)
-            elif pos["tp2_price"] and pos["tp1_triggered"] and not pos["tp2_triggered"]:
-                if price_hit(pos["tp2_price"]):
-                    # Calculate percentage of remaining position
-                    # If original was 100 and TP1 closed 50%, now we have 50%
-                    # To close TP2's 30% of original, we close 60% of remaining (30/50=60%)
-                    tp1_pct = pos["tp1_percent"] or 50
-                    tp2_pct = pos["tp2_percent"] or 30
-                    remaining_pct = 100 - tp1_pct
-                    close_pct_of_remaining = (tp2_pct / remaining_pct) * 100 if remaining_pct > 0 else 100
-                    print(f"[Scheduler] TP2 triggered for position {pos['id']} ({symbol}) - closing {close_pct_of_remaining:.0f}% of remaining")
-                    partial_close_actions.append({
-                        "position_id": pos["id"],
-                        "close_percent": min(close_pct_of_remaining, 100),
-                        "move_sl_to_entry": False,
-                        "tp_level": 2
-                    })
+                    unrealized_pnl = remaining_qty * (pos["entry_price"] - current_price)
+                
+                # Update position price
+                cursor.execute("""
+                    UPDATE positions SET current_price = %s, unrealized_pnl = %s WHERE id = %s
+                """, (current_price, unrealized_pnl, pos["id"]))
+                
+                # Check liquidation (unrealized_pnl <= -margin)
+                if unrealized_pnl <= -pos["margin"]:
+                    print(f"[Scheduler] LIQUIDATION triggered for position {pos['id']} ({symbol} {pos['direction']})")
+                    positions_to_close.append((pos["id"], "liquidated"))
                     continue
+                
+                # Check stop loss
+                if pos["stop_loss"]:
+                    if (pos["direction"] == "LONG" and current_price <= pos["stop_loss"]) or \
+                       (pos["direction"] == "SHORT" and current_price >= pos["stop_loss"]):
+                        print(f"[Scheduler] STOP LOSS triggered for position {pos['id']} ({symbol})")
+                        positions_to_close.append((pos["id"], "stop_loss"))
+                        continue
+                
+                # ========== 分批止盈检查 ==========
+                is_long = pos["direction"] == "LONG"
+                
+                def price_hit(target_price):
+                    """Check if price hit target for this direction"""
+                    if is_long:
+                        return current_price >= target_price
+                    else:
+                        return current_price <= target_price
+                
+                # Check TP1 (if not yet triggered)
+                if pos["tp1_price"] and not pos["tp1_triggered"]:
+                    if price_hit(pos["tp1_price"]):
+                        tp1_pct = pos["tp1_percent"] or 50
+                        print(f"[Scheduler] TP1 triggered for position {pos['id']} ({symbol}) - closing {tp1_pct}%, moving SL to entry")
+                        partial_close_actions.append({
+                            "position_id": pos["id"],
+                            "close_percent": tp1_pct,
+                            "move_sl_to_entry": True,  # 保本铁律
+                            "tp_level": 1
+                        })
+                        continue  # Don't check further TPs this cycle
+                
+                # Check TP2 (only if TP1 already triggered)
+                elif pos["tp2_price"] and pos["tp1_triggered"] and not pos["tp2_triggered"]:
+                    if price_hit(pos["tp2_price"]):
+                        # Calculate percentage of remaining position
+                        # If original was 100 and TP1 closed 50%, now we have 50%
+                        # To close TP2's 30% of original, we close 60% of remaining (30/50=60%)
+                        tp1_pct = pos["tp1_percent"] or 50
+                        tp2_pct = pos["tp2_percent"] or 30
+                        remaining_pct = 100 - tp1_pct
+                        close_pct_of_remaining = (tp2_pct / remaining_pct) * 100 if remaining_pct > 0 else 100
+                        print(f"[Scheduler] TP2 triggered for position {pos['id']} ({symbol}) - closing {close_pct_of_remaining:.0f}% of remaining")
+                        partial_close_actions.append({
+                            "position_id": pos["id"],
+                            "close_percent": min(close_pct_of_remaining, 100),
+                            "move_sl_to_entry": False,
+                            "tp_level": 2
+                        })
+                        continue
+                
+                # Check TP3 (only if TP2 already triggered)
+                elif pos["tp3_price"] and pos["tp2_triggered"] and not pos["tp3_triggered"]:
+                    if price_hit(pos["tp3_price"]):
+                        print(f"[Scheduler] TP3 triggered for position {pos['id']} ({symbol}) - closing remaining position")
+                        positions_to_close.append((pos["id"], "take_profit"))
+                        continue
             
-            # Check TP3 (only if TP2 already triggered)
-            elif pos["tp3_price"] and pos["tp2_triggered"] and not pos["tp3_triggered"]:
-                if price_hit(pos["tp3_price"]):
-                    print(f"[Scheduler] TP3 triggered for position {pos['id']} ({symbol}) - closing remaining position")
-                    positions_to_close.append((pos["id"], "take_profit"))
-                    continue
-        
-        conn.commit()
+            conn.commit()
         conn.close()
         
         # Execute partial closes AFTER releasing the connection
@@ -363,10 +362,11 @@ def update_positions_prices():
                     print(f"[Scheduler] Partial close result: {result}")
                     
                     # Mark TP level as triggered
-                    conn2 = _retry_db_operation(get_db)
-                    tp_level = action["tp_level"]
-                    conn2.execute(f"UPDATE positions SET tp{tp_level}_triggered = 1 WHERE id = ?", (action["position_id"],))
-                    conn2.commit()
+                    conn2 = get_db()
+                    with conn2.cursor() as cursor2:
+                        tp_level = action["tp_level"]
+                        cursor2.execute(f"UPDATE positions SET tp{tp_level}_triggered = 1 WHERE id = %s", (action["position_id"],))
+                        conn2.commit()
                     conn2.close()
                     
                 except Exception as e:
@@ -545,7 +545,7 @@ def clean_report_content(content: str) -> str:
     
     # Find the actual report header (### 📅 Alpha情报局 or ### 📅 Alpha Intelligence)
     # Pattern matches: ### 📅 followed by any text
-    header_pattern = r'(###\s*📅\s*(?:Alpha情报局|Alpha Intelligence)[\s\S]*)'
+    header_pattern = r'(###\s*📅\s*(%s:Alpha情报局|Alpha Intelligence)[\s\S]*)'
     
     match = re.search(header_pattern, content, re.DOTALL)
     
@@ -573,27 +573,30 @@ def save_report_to_db(report_date: str, content: str, language: str):
     from datetime import datetime
     
     conn = get_db()
-    cursor = conn.cursor()
-    
-    # Ensure table exists
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS daily_reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            report_date TEXT NOT NULL,
-            language TEXT DEFAULT 'en',
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(report_date, language)
-        )
-    """)
-    
-    # Insert or replace report
-    cursor.execute("""
-        INSERT OR REPLACE INTO daily_reports (report_date, language, content, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (report_date, language, content, datetime.now().isoformat()))
-    
-    conn.commit()
+    with conn.cursor() as cursor:
+        
+        # Ensure table exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_reports (
+                id SERIAL PRIMARY KEY,
+                report_date TEXT NOT NULL,
+                language TEXT DEFAULT 'en',
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(report_date, language)
+            )
+        """)
+        
+        # Insert or replace report
+        cursor.execute("""
+            INSERT INTO daily_reports (report_date, language, content, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (report_date, language) DO UPDATE SET
+            content = EXCLUDED.content,
+            created_at = EXCLUDED.created_at
+        """, (report_date, language, content, datetime.now().isoformat()))
+        
+        conn.commit()
     conn.close()
 
 def generate_daily_report():
@@ -695,26 +698,27 @@ def send_daily_report_emails():
         
         # Get reports for both languages
         conn = get_db()
-        
-        for sub in subscribers:
-            lang = sub.get("language", "en")
-            
-            # Get report content for this language
-            row = conn.execute("""
-                SELECT content FROM daily_reports 
-                WHERE report_date = ? AND language = ?
-            """, (report_date, lang)).fetchone()
-            
-            if row:
-                success = send_daily_report_email(
-                    to_email=sub["email"],
-                    report_date=report_date,
-                    content=row["content"],
-                    unsubscribe_token=sub["token"],
-                    language=lang
-                )
-                if success:
-                    print(f"[DailyReport] Email sent to {sub['email']}")
+        with conn.cursor() as cursor:
+            for sub in subscribers:
+                lang = sub.get("language", "en")
+                
+                # Get report content for this language
+                cursor.execute("""
+                    SELECT content FROM daily_reports 
+                    WHERE report_date = %s AND language = %s
+                """, (report_date, lang))
+                row = cursor.fetchone()
+                
+                if row:
+                    success = send_daily_report_email(
+                        to_email=sub["email"],
+                        report_date=report_date,
+                        content=row["content"],
+                        unsubscribe_token=sub["token"],
+                        language=lang
+                    )
+                    if success:
+                        print(f"[DailyReport] Email sent to {sub['email']}")
         
         conn.close()
         print(f"[DailyReport] Email sending completed")

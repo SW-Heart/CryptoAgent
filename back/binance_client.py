@@ -82,42 +82,38 @@ def decrypt_value(encrypted_value: str) -> str:
 # Database Operations
 # ==========================================
 
-def _get_db():
-    """Get database connection."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
-
+from app.database import get_db_connection as _get_db
 
 def init_binance_tables():
     """Initialize Binance-related database tables."""
     conn = _get_db()
-    
-    # User API Keys table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS user_binance_keys (
-            user_id TEXT PRIMARY KEY,
-            api_key_encrypted TEXT NOT NULL,
-            api_secret_encrypted TEXT NOT NULL,
-            is_testnet BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    with conn.cursor() as cursor:
+        # User API Keys table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_binance_keys (
+                user_id TEXT PRIMARY KEY,
+                api_key_encrypted TEXT NOT NULL,
+                api_secret_encrypted TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
     
     # User Trading Status table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS user_trading_status (
-            user_id TEXT PRIMARY KEY,
-            is_trading_enabled BOOLEAN DEFAULT FALSE,
-            enabled_at TIMESTAMP,
-            disabled_at TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    # User Trading Status table
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_trading_status (
+                user_id TEXT PRIMARY KEY,
+                is_trading_enabled BOOLEAN DEFAULT FALSE,
+                enabled_at TIMESTAMP,
+                disabled_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+    conn.close()
     
     conn.commit()
     conn.close()
@@ -145,11 +141,19 @@ def save_user_api_keys(user_id: str, api_key: str, api_secret: str, is_testnet: 
         encrypted_secret = encrypt_value(api_secret)
         
         conn = _get_db()
-        conn.execute("""
-            INSERT OR REPLACE INTO user_binance_keys 
-            (user_id, api_key_encrypted, api_secret_encrypted, is_testnet, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (user_id, encrypted_key, encrypted_secret, is_testnet))
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO user_binance_keys 
+                (user_id, api_key_encrypted, api_secret_encrypted, is_testnet, updated_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET 
+                api_key_encrypted = EXCLUDED.api_key_encrypted,
+                api_secret_encrypted = EXCLUDED.api_secret_encrypted,
+                is_testnet = EXCLUDED.is_testnet,
+                updated_at = CURRENT_TIMESTAMP
+            """, (user_id, encrypted_key, encrypted_secret, is_testnet))
+            conn.commit()
+        conn.close()
         conn.commit()
         conn.close()
         
@@ -169,17 +173,17 @@ def delete_user_api_keys(user_id: str) -> dict:
         dict with success status
     """
     conn = _get_db()
-    cursor = conn.execute("DELETE FROM user_binance_keys WHERE user_id = ?", (user_id,))
-    
-    # Also disable trading
-    conn.execute("""
-        UPDATE user_trading_status 
-        SET is_trading_enabled = FALSE, disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    """, (user_id,))
-    
-    conn.commit()
-    deleted = cursor.rowcount > 0
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM user_binance_keys WHERE user_id = %s", (user_id,))
+        deleted = cursor.rowcount > 0
+        
+        # Also disable trading
+        cursor.execute("""
+            UPDATE user_trading_status 
+            SET is_trading_enabled = FALSE, disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        """, (user_id,))
+        conn.commit()
     conn.close()
     
     return {"success": True, "deleted": deleted}
@@ -188,7 +192,9 @@ def delete_user_api_keys(user_id: str) -> dict:
 def has_user_api_keys(user_id: str) -> bool:
     """Check if user has configured API keys."""
     conn = _get_db()
-    row = conn.execute("SELECT 1 FROM user_binance_keys WHERE user_id = ?", (user_id,)).fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT 1 FROM user_binance_keys WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
     conn.close()
     return row is not None
 
@@ -204,10 +210,12 @@ def get_user_api_keys(user_id: str) -> Optional[Dict[str, Any]]:
         dict with api_key, api_secret, is_testnet or None if not found
     """
     conn = _get_db()
-    row = conn.execute(
-        "SELECT api_key_encrypted, api_secret_encrypted, is_testnet FROM user_binance_keys WHERE user_id = ?",
-        (user_id,)
-    ).fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT api_key_encrypted, api_secret_encrypted, is_testnet FROM user_binance_keys WHERE user_id = %s",
+            (user_id,)
+        )
+        row = cursor.fetchone()
     conn.close()
     
     if not row:
@@ -238,10 +246,12 @@ def get_user_trading_status(user_id: str) -> dict:
     is_configured = has_user_api_keys(user_id)
     
     conn = _get_db()
-    row = conn.execute(
-        "SELECT is_trading_enabled, enabled_at, disabled_at FROM user_trading_status WHERE user_id = ?",
-        (user_id,)
-    ).fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT is_trading_enabled, enabled_at, disabled_at FROM user_trading_status WHERE user_id = %s",
+            (user_id,)
+        )
+        row = cursor.fetchone()
     conn.close()
     
     if not row:
@@ -274,12 +284,17 @@ def enable_user_trading(user_id: str) -> dict:
         return {"success": False, "error": "API keys not configured"}
     
     conn = _get_db()
-    conn.execute("""
-        INSERT OR REPLACE INTO user_trading_status 
-        (user_id, is_trading_enabled, enabled_at, updated_at)
-        VALUES (?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    """, (user_id,))
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO user_trading_status 
+            (user_id, is_trading_enabled, enabled_at, updated_at)
+            VALUES (%s, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+            is_trading_enabled = TRUE,
+            enabled_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        """, (user_id,))
+        conn.commit()
     conn.close()
     
     return {"success": True, "message": "Trading enabled"}
@@ -296,12 +311,13 @@ def disable_user_trading(user_id: str) -> dict:
         dict with success status
     """
     conn = _get_db()
-    conn.execute("""
-        UPDATE user_trading_status 
-        SET is_trading_enabled = FALSE, disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    """, (user_id,))
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            UPDATE user_trading_status 
+            SET is_trading_enabled = FALSE, disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        """, (user_id,))
+        conn.commit()
     conn.close()
     
     return {"success": True, "message": "Trading disabled"}
@@ -315,12 +331,14 @@ def get_all_active_trading_users() -> List[str]:
         List of user IDs with active trading
     """
     conn = _get_db()
-    rows = conn.execute("""
-        SELECT uts.user_id 
-        FROM user_trading_status uts
-        JOIN user_binance_keys ubk ON uts.user_id = ubk.user_id
-        WHERE uts.is_trading_enabled = TRUE
-    """).fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT uts.user_id 
+            FROM user_trading_status uts
+            JOIN user_binance_keys ubk ON uts.user_id = ubk.user_id
+            WHERE uts.is_trading_enabled = TRUE
+        """)
+        rows = cursor.fetchall()
     conn.close()
     
     return [row["user_id"] for row in rows]

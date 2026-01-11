@@ -4,23 +4,13 @@ Daily Report Router - API for crypto daily reports and email subscriptions
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from datetime import datetime, date, timedelta
-import sqlite3
 import uuid
 import os
+from app.database import get_db_connection as get_db
 
 router = APIRouter()
 
-DB_PATH = os.getenv("DB_PATH", "tmp/test.db")
-
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60)
-    conn.row_factory = sqlite3.Row
-    # 启用 WAL 模式提高并发性能
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=60000")
-    return conn
-
+# DB_PATH removed, using global DB connection
 
 def init_daily_report_tables():
     """Initialize database tables for daily reports"""
@@ -30,7 +20,7 @@ def init_daily_report_tables():
     # Daily reports table - supports multi-language reports per day
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS daily_reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             report_date TEXT NOT NULL,
             language TEXT DEFAULT 'en',
             content TEXT NOT NULL,
@@ -42,7 +32,7 @@ def init_daily_report_tables():
     # Email subscriptions table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS email_subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             email TEXT UNIQUE NOT NULL,
             language TEXT DEFAULT 'en',
             verified INTEGER DEFAULT 1,
@@ -54,7 +44,7 @@ def init_daily_report_tables():
     # Suggested questions table - AI生成的每日推荐问题
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS suggested_questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             question_date TEXT NOT NULL,
             language TEXT DEFAULT 'zh',
             questions TEXT NOT NULL,
@@ -66,7 +56,7 @@ def init_daily_report_tables():
     # User question clicks table - 用户点击记录
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_question_clicks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id TEXT NOT NULL,
             question_date TEXT NOT NULL,
             current_index INTEGER DEFAULT 0,
@@ -100,8 +90,8 @@ class ReportResponse(BaseModel):
 
 # ============= API Endpoints =============
 
-@router.get("/api/daily-report")
-async def get_latest_report(language: str = "en"):
+@router.get("/latest")
+def get_latest_report(lang: str = "en"):
     """Get the latest daily report"""
     conn = get_db()
     cursor = conn.cursor()
@@ -109,10 +99,10 @@ async def get_latest_report(language: str = "en"):
     cursor.execute("""
         SELECT report_date, language, content, created_at 
         FROM daily_reports 
-        WHERE language = ?
+        WHERE language = %s
         ORDER BY report_date DESC 
         LIMIT 1
-    """, (language,))
+    """, (lang,))
     
     row = cursor.fetchone()
     conn.close()
@@ -121,7 +111,7 @@ async def get_latest_report(language: str = "en"):
         # Return a placeholder if no reports yet
         return {
             "report_date": str(date.today()),
-            "language": language,
+            "language": lang,
             "content": "# 📰 Daily Report\n\nNo report available yet. The first report will be generated at UTC 0:00.",
             "created_at": datetime.now().isoformat()
         }
@@ -143,9 +133,9 @@ async def get_available_dates(language: str = "en", limit: int = 30):
     cursor.execute("""
         SELECT report_date 
         FROM daily_reports 
-        WHERE language = ?
+        WHERE language = %s
         ORDER BY report_date DESC 
-        LIMIT ?
+        LIMIT %s
     """, (language, limit))
     
     rows = cursor.fetchall()
@@ -163,7 +153,7 @@ async def get_report_by_date(report_date: str, language: str = "en"):
     cursor.execute("""
         SELECT report_date, language, content, created_at 
         FROM daily_reports 
-        WHERE report_date = ? AND language = ?
+        WHERE report_date = %s AND language = %s
     """, (report_date, language))
     
     row = cursor.fetchone()
@@ -180,14 +170,14 @@ async def get_report_by_date(report_date: str, language: str = "en"):
     }
 
 
-@router.post("/api/subscribe")
-async def subscribe_email(request: SubscribeRequest):
+@router.post("/subscribe")
+def subscribe_report(request: SubscribeRequest):
     """Subscribe to daily report emails"""
     conn = get_db()
     cursor = conn.cursor()
     
     # Check if already subscribed
-    cursor.execute("SELECT unsubscribe_token FROM email_subscriptions WHERE email = ?", (request.email,))
+    cursor.execute("SELECT unsubscribe_token FROM email_subscriptions WHERE email = %s", (request.email,))
     existing = cursor.fetchone()
     if existing:
         conn.close()
@@ -198,7 +188,7 @@ async def subscribe_email(request: SubscribeRequest):
     
     cursor.execute("""
         INSERT INTO email_subscriptions (email, language, unsubscribe_token)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (request.email, request.language, unsubscribe_token))
     
     conn.commit()
@@ -217,13 +207,13 @@ async def subscribe_email(request: SubscribeRequest):
     return {"success": True, "message": "Subscribed successfully", "token": unsubscribe_token}
 
 
-@router.get("/api/unsubscribe/{token}")
-async def unsubscribe_email(token: str):
+@router.get("/unsubscribe")
+def unsubscribe_report(token: str):
     """Unsubscribe from daily report emails by token"""
     conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute("DELETE FROM email_subscriptions WHERE unsubscribe_token = ?", (token,))
+    cursor.execute("DELETE FROM email_subscriptions WHERE unsubscribe_token = %s", (token,))
     deleted = cursor.rowcount
     
     conn.commit()
@@ -241,7 +231,7 @@ async def unsubscribe_by_email(email: str):
     conn = get_db()
     cursor = conn.cursor()
     
-    cursor.execute("DELETE FROM email_subscriptions WHERE email = ?", (email,))
+    cursor.execute("DELETE FROM email_subscriptions WHERE email = %s", (email,))
     deleted = cursor.rowcount
     
     conn.commit()
@@ -262,7 +252,7 @@ def save_daily_report(report_date: str, content: str, language: str = "en"):
     
     cursor.execute("""
         INSERT OR REPLACE INTO daily_reports (report_date, language, content)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (report_date, language, content))
     
     conn.commit()
@@ -279,7 +269,7 @@ def get_all_subscribers(language: str = None):
         cursor.execute("""
             SELECT email, unsubscribe_token, language 
             FROM email_subscriptions 
-            WHERE language = ?
+            WHERE language = %s
         """, (language,))
     else:
         cursor.execute("""
@@ -314,7 +304,7 @@ async def get_suggested_question(user_id: str = "", language: str = "zh"):
     # 获取今日的推荐问题
     cursor.execute("""
         SELECT questions FROM suggested_questions 
-        WHERE question_date = ? AND language = ?
+        WHERE question_date = %s AND language = %s
     """, (today, language))
     
     row = cursor.fetchone()
@@ -335,16 +325,16 @@ async def get_suggested_question(user_id: str = "", language: str = "zh"):
             "DeFi 收益哪家强？"
         ]
         default_en = [
-            "What's the market outlook?",
-            "Should I buy BTC now?",
-            "What sectors are hot?",
-            "Where to take profit?",
-            "Any on-chain alpha?",
-            "Is altcoin season here?",
-            "How to size positions?",
-            "Any airdrop worth doing?",
-            "Will ETH pump?",
-            "Best DeFi yields?"
+            "What's the market outlook%s",
+            "Should I buy BTC now%s",
+            "What sectors are hot%s",
+            "Where to take profit%s",
+            "Any on-chain alpha%s",
+            "Is altcoin season here%s",
+            "How to size positions%s",
+            "Any airdrop worth doing%s",
+            "Will ETH pump%s",
+            "Best DeFi yields%s"
         ]
         questions = default_zh if language == "zh" else default_en
         current_index = 0
@@ -356,7 +346,7 @@ async def get_suggested_question(user_id: str = "", language: str = "zh"):
         if user_id:
             cursor.execute("""
                 SELECT current_index FROM user_question_clicks
-                WHERE user_id = ? AND question_date = ?
+                WHERE user_id = %s AND question_date = %s
             """, (user_id, today))
             click_row = cursor.fetchone()
             current_index = click_row["current_index"] if click_row else 0
@@ -393,7 +383,7 @@ async def record_question_click(request: QuestionClickRequest):
     cursor.execute("""
         INSERT OR REPLACE INTO user_question_clicks 
         (user_id, question_date, current_index, updated_at)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
     """, (request.user_id, today, next_index, datetime.now().isoformat()))
     
     conn.commit()
@@ -401,7 +391,7 @@ async def record_question_click(request: QuestionClickRequest):
     # 获取今日问题列表
     cursor.execute("""
         SELECT questions FROM suggested_questions 
-        WHERE question_date = ?
+        WHERE question_date = %s
     """, (today,))
     
     row = cursor.fetchone()
@@ -437,7 +427,7 @@ def save_suggested_questions(question_date: str, questions: list, language: str 
     cursor.execute("""
         INSERT OR REPLACE INTO suggested_questions 
         (question_date, language, questions, created_at)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
     """, (question_date, language, questions_json, datetime.now().isoformat()))
     
     conn.commit()

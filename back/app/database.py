@@ -1,16 +1,19 @@
 """
 Database connection and utilities.
 """
-import sqlite3
-from .config import DB_PATH
+import os
+import psycopg2
+from psycopg2.extras import DictCursor
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DB_URL = os.getenv("DB_URL")
 
 def get_db_connection():
-    """Get a database connection with row_factory set."""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60)
-    conn.row_factory = sqlite3.Row
-    # 启用 WAL 模式提高并发性能
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=60000")
+    """Get a database connection."""
+    conn = psycopg2.connect(DB_URL, cursor_factory=DictCursor)
+    # No WAL or busy_timeout needed for Postgres
     return conn
 
 def init_db():

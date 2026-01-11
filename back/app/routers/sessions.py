@@ -3,45 +3,45 @@ Sessions API router.
 Handles session listing, history, renaming, and deletion.
 """
 from fastapi import APIRouter, Request, HTTPException
-import sqlite3
+from pydantic import BaseModel
 import json
+from app.database import get_db_connection
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 
-def get_db_connection():
-    """Get database connection"""
-    conn = sqlite3.connect("tmp/test.db", check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+class RenameSessionRequest(BaseModel):
+    title: str
 
 def init_session_titles_table():
     """Initialize session titles table if not exists"""
     conn = get_db_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS session_titles (
-            session_id TEXT PRIMARY KEY,
-            title TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_titles (
+                session_id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
     conn.close()
 
 @router.get("/sessions")
-async def get_sessions(user_id: str):
+def get_sessions(user_id: str):
     """Get all sessions for a specific user."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT session_id, runs, updated_at FROM test_agent WHERE user_id = ? ORDER BY updated_at DESC",
+            "SELECT session_id, runs, updated_at FROM test_agent WHERE user_id = %s ORDER BY updated_at DESC",
             (user_id,)
         )
         rows = cursor.fetchall()
         
-        title_cursor = conn.execute("SELECT session_id, title FROM session_titles")
-        custom_titles = {row["session_id"]: row["title"] for row in title_cursor.fetchall()}
+        with conn.cursor() as title_cursor:
+            title_cursor.execute("SELECT session_id, title FROM session_titles")
+            custom_titles = {row["session_id"]: row["title"] for row in title_cursor.fetchall()}
         
         sessions = []
         for row in rows:
@@ -52,7 +52,7 @@ async def get_sessions(user_id: str):
             else:
                 title = "New Chat"
                 try:
-                    runs = json.loads(row["runs"])
+                    runs = row["runs"]
                     if isinstance(runs, str):
                         runs = json.loads(runs)
                     if runs and len(runs) > 0:
@@ -77,14 +77,14 @@ async def get_sessions(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/history")
-async def get_history(session_id: str):
+def get_history(session_id: str):
     """Get full chat history for a session."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT runs FROM test_agent WHERE session_id = ?",
+            "SELECT runs FROM test_agent WHERE session_id = %s",
             (session_id,)
         )
         row = cursor.fetchone()
@@ -92,7 +92,7 @@ async def get_history(session_id: str):
         if not row:
             raise HTTPException(status_code=404, detail="Session not found")
             
-        runs = json.loads(row["runs"])
+        runs = row["runs"]
         if isinstance(runs, str):
             runs = json.loads(runs)
         all_messages = []
@@ -148,21 +148,22 @@ async def get_history(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions/{session_id}/rename")
-async def rename_session(session_id: str, request: Request):
+def rename_session(session_id: str, body: RenameSessionRequest):
     """Rename a session"""
     try:
-        data = await request.json()
-        new_title = data.get("title", "").strip()
+        new_title = body.title.strip()
         
         if not new_title:
             raise HTTPException(status_code=400, detail="Title cannot be empty")
         
         conn = get_db_connection()
-        conn.execute(
-            """INSERT OR REPLACE INTO session_titles (session_id, title) VALUES (?, ?)""",
-            (session_id, new_title)
-        )
-        conn.commit()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO session_titles (session_id, title) VALUES (%s, %s) 
+                   ON CONFLICT (session_id) DO UPDATE SET title = EXCLUDED.title""",
+                (session_id, new_title)
+            )
+            conn.commit()
         conn.close()
         
         return {"success": True, "session_id": session_id, "title": new_title}
@@ -172,13 +173,14 @@ async def rename_session(session_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+def delete_session(session_id: str):
     """Delete a session"""
     try:
         conn = get_db_connection()
-        conn.execute("DELETE FROM test_agent WHERE session_id = ?", (session_id,))
-        conn.execute("DELETE FROM session_titles WHERE session_id = ?", (session_id,))
-        conn.commit()
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM test_agent WHERE session_id = %s", (session_id,))
+            cursor.execute("DELETE FROM session_titles WHERE session_id = %s", (session_id,))
+            conn.commit()
         conn.close()
         
         return {"success": True, "session_id": session_id}
@@ -186,14 +188,16 @@ async def delete_session(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sessions/{session_id}/title")
-async def get_session_title(session_id: str):
+def get_session_title(session_id: str):
     """Get custom title for a session"""
     try:
         conn = get_db_connection()
-        row = conn.execute(
-            "SELECT title FROM session_titles WHERE session_id = ?",
-            (session_id,)
-        ).fetchone()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT title FROM session_titles WHERE session_id = %s",
+                (session_id,)
+            )
+            row = cursor.fetchone()
         conn.close()
         
         if row:

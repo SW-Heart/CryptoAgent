@@ -9,7 +9,8 @@ import os
 from dotenv import load_dotenv
 from os import getenv
 from agno.agent import Agent
-from agno.db.sqlite import SqliteDb
+# from agno.db.sqlite import SqliteDb
+from custom_db import WalSqliteDb as SqliteDb
 from agno.models.deepseek import DeepSeek
 #from agno.os import AgentOS
 
