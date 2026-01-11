@@ -19,8 +19,11 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "tmp", "price_alerts.db")
 def get_db():
     """获取数据库连接"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    # 启用 WAL 模式提高并发性能
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
