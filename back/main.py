@@ -173,10 +173,12 @@ app.include_router(daily_report_router)
 from app.routers.sessions import init_session_titles_table
 from app.routers.credits import init_credits_table
 from app.routers.strategy import init_strategy_tables
+from binance_client import init_binance_tables
 
 init_session_titles_table()
 init_credits_table()
 init_strategy_tables()
+init_binance_tables()
 
 
 # ============= Scheduler Integration =============

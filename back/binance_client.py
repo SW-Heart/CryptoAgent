@@ -94,10 +94,22 @@ def init_binance_tables():
                 user_id TEXT PRIMARY KEY,
                 api_key_encrypted TEXT NOT NULL,
                 api_secret_encrypted TEXT NOT NULL,
+                is_testnet BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Migration: Add is_testnet column if it doesn't exist
+        try:
+            cursor.execute("SELECT is_testnet FROM user_binance_keys LIMIT 1")
+        except Exception:
+            # Column likely missing, rollback and add it
+            conn.rollback()
+            print("[BinanceClient] Migrating user_binance_keys: Adding is_testnet column")
+            with conn.cursor() as migration_cursor:
+                migration_cursor.execute("ALTER TABLE user_binance_keys ADD COLUMN is_testnet BOOLEAN DEFAULT TRUE")
+                conn.commit()
     
     # User Trading Status table
     # User Trading Status table
