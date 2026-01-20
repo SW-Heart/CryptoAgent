@@ -39,7 +39,7 @@ daily_report_agent = Agent(
         get_market_sentiment,
         get_token_analysis,
         search_news,
-        DuckDuckGoTools(all=True),
+        DuckDuckGoTools(),
         get_pro_crypto_news,
         get_market_hotspots,
         get_trending_tokens,          # 热门代币榜

@@ -125,7 +125,7 @@ crypto_agent = Agent(
         get_whale_signals,             # 鲸鱼买卖信号监控
         search_news,  # 自定义新闻搜索（无 imageUrl）
         search_google,  # 自定义 Google 搜索（无 imageUrl）
-        DuckDuckGoTools(all=True),
+        DuckDuckGoTools(),
         # SerperTools 已移除，改用自定义 search_news
         ExaTools(
             api_key=EXA_API_KEY,
