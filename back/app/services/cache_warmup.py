@@ -3,7 +3,7 @@ Cache warmup service - Pre-populate dashboard cache on startup and keep it fresh
 This eliminates the ~30s loading time for first-time visitors.
 """
 import threading
-import asyncio
+
 import time
 
 
@@ -34,10 +34,6 @@ def warmup_dashboard_cache(once_only=False):
                 get_dashboard_trending
             )
             
-            # Create event loop for async calls
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
             # Warmup in priority order (fastest first for quick partial availability)
             warmup_tasks = [
                 ("tokens", get_dashboard_tokens),
@@ -51,13 +47,11 @@ def warmup_dashboard_cache(once_only=False):
             for name, func in warmup_tasks:
                 try:
                     task_start = time.time()
-                    loop.run_until_complete(func())
+                    func()
                     elapsed = time.time() - task_start
                     print(f"[Cache Warmup] ✓ {name} cached ({elapsed:.1f}s)")
                 except Exception as e:
                     print(f"[Cache Warmup] ✗ {name} failed: {e}")
-            
-            loop.close()
             
             total_time = time.time() - start_time
             print(f"[Cache Warmup] Complete! Total time: {total_time:.1f}s")

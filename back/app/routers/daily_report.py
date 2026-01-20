@@ -251,8 +251,10 @@ def save_daily_report(report_date: str, content: str, language: str = "en"):
     cursor = conn.cursor()
     
     cursor.execute("""
-        INSERT OR REPLACE INTO daily_reports (report_date, language, content)
+        INSERT INTO daily_reports (report_date, language, content)
         VALUES (%s, %s, %s)
+        ON CONFLICT (report_date, language)
+        DO UPDATE SET content = EXCLUDED.content
     """, (report_date, language, content))
     
     conn.commit()
@@ -381,9 +383,13 @@ async def record_question_click(request: QuestionClickRequest):
     
     # 更新或插入用户点击记录
     cursor.execute("""
-        INSERT OR REPLACE INTO user_question_clicks 
+        INSERT INTO user_question_clicks 
         (user_id, question_date, current_index, updated_at)
         VALUES (%s, %s, %s, %s)
+        ON CONFLICT (user_id, question_date)
+        DO UPDATE SET 
+            current_index = EXCLUDED.current_index,
+            updated_at = EXCLUDED.updated_at
     """, (request.user_id, today, next_index, datetime.now().isoformat()))
     
     conn.commit()
@@ -425,9 +431,13 @@ def save_suggested_questions(question_date: str, questions: list, language: str 
     questions_json = json.dumps(questions, ensure_ascii=False)
     
     cursor.execute("""
-        INSERT OR REPLACE INTO suggested_questions 
+        INSERT INTO suggested_questions 
         (question_date, language, questions, created_at)
         VALUES (%s, %s, %s, %s)
+        ON CONFLICT (question_date, language) 
+        DO UPDATE SET 
+            questions = EXCLUDED.questions,
+            created_at = EXCLUDED.created_at
     """, (question_date, language, questions_json, datetime.now().isoformat()))
     
     conn.commit()
