@@ -127,8 +127,7 @@ def init_binance_tables():
         conn.commit()
     conn.close()
     
-    conn.commit()
-    conn.close()
+
 
 
 # ==========================================
