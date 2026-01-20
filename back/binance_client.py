@@ -165,8 +165,7 @@ def save_user_api_keys(user_id: str, api_key: str, api_secret: str, is_testnet: 
             """, (user_id, encrypted_key, encrypted_secret, is_testnet))
             conn.commit()
         conn.close()
-        conn.commit()
-        conn.close()
+
         
         return {"success": True, "message": "API keys saved successfully"}
     except Exception as e:
