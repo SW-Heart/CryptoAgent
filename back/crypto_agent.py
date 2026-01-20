@@ -59,6 +59,14 @@ from etf_tools import get_etf_flows, get_etf_daily, get_etf_summary, get_etf_tic
 # K 线图视觉分析工具
 from kline_analysis import analyze_kline
 
+# 🐋 鲸鱼监控工具
+from whale_monitor import (
+    get_btc_holder_distribution,
+    get_whale_transactions,
+    get_whale_balance_changes,
+    get_whale_signals
+)
+
 # 初始化ETF MCP工具 (提供BTC ETF流入流出数据) - 暂时禁用
 # etf_mcp_tools = MCPTools(
 #     transport="streamable-http",
@@ -110,6 +118,11 @@ crypto_agent = Agent(
         get_etf_summary,               # ETF汇总统计
         get_etf_ticker,                # 按机构查询(如IBIT, FBTC)
         analyze_kline,                 # K 线图视觉分析 (CHART-IMG + GPT-4o-mini)
+        # 🐋 鲸鱼监控工具
+        get_btc_holder_distribution,   # BTC持有者分布
+        get_whale_transactions,        # 大额转账监控
+        get_whale_balance_changes,     # 鲸鱼余额变化追踪
+        get_whale_signals,             # 鲸鱼买卖信号监控
         search_news,  # 自定义新闻搜索（无 imageUrl）
         search_google,  # 自定义 Google 搜索（无 imageUrl）
         DuckDuckGoTools(all=True),

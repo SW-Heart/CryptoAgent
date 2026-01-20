@@ -26,10 +26,128 @@ import TerminalLoader from './components/TerminalLoader';
 import HomePage from './components/HomePage';
 
 // Import from new modular structure
-import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, BASE_URL, dashboardApi, sessionApi, creditsApi, dashboardCache } from './services';
+import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, AGENT_SWAP_ID, BASE_URL, dashboardApi, sessionApi, creditsApi, dashboardCache, executeAction } from './services';
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
 import { QuickPrompts, QuickPromptsPills, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
+import { A2UIRenderer, extractA2UIBlocks, SwapCard } from './components/a2ui';
+
+
+// --- SwapCard with API Quote Fetch (定义在 App 外部，避免重新挂载) ---
+// 使用缓存存储已获取的报价
+const quoteCache = new Map();
+
+const SwapCardWithQuote = React.memo(({ params, a2uiStatus, txHash, onAction }) => {
+  const [quote, setQuote] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // 创建缓存键
+  const cacheKey = `${params.fromToken}-${params.toToken}-${params.amount}`;
+
+  useEffect(() => {
+    // 如果缓存中有数据，直接使用
+    if (quoteCache.has(cacheKey)) {
+      const cachedQuote = quoteCache.get(cacheKey);
+      setQuote(cachedQuote);
+      setLoading(false);
+      console.log('[SwapCard] Using cached quote:', cachedQuote);
+      return;
+    }
+
+    const fetchQuote = async () => {
+      try {
+        setLoading(true);
+
+        const url = `${BASE_URL}/api/swap/quote?from_token=${params.fromToken}&to_token=${params.toToken}&amount=${params.amount}&network=${params.network || 'ethereum'}`;
+        console.log('[SwapCard] Fetching quote:', url);
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.success) {
+          setQuote(data);
+          quoteCache.set(cacheKey, data);  // 缓存结果
+          console.log('[SwapCard] Quote received and cached:', data);
+        } else {
+          setError(data.error || '获取报价失败');
+        }
+      } catch (err) {
+        setError('网络错误，请重试');
+        console.error('[SwapCard] Fetch error:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (params.fromToken && params.toToken && params.amount) {
+      fetchQuote();
+    }
+  }, [cacheKey]);
+
+  // 加载中状态
+  if (loading) {
+    return (
+      <div className="mt-4 w-full max-w-md">
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 border border-slate-700/50">
+          <div className="animate-pulse flex flex-col gap-4">
+            <div className="h-6 bg-slate-700 rounded w-1/3"></div>
+            <div className="h-16 bg-slate-700 rounded"></div>
+            <div className="h-4 bg-slate-700 rounded w-2/3"></div>
+            <div className="h-10 bg-slate-700 rounded"></div>
+          </div>
+          <p className="text-slate-400 text-sm mt-4 text-center">获取报价中...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 错误状态
+  if (error) {
+    return (
+      <div className="mt-4 w-full max-w-md">
+        <div className="bg-red-900/30 rounded-2xl p-6 border border-red-700/50">
+          <p className="text-red-400">❌ {error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 正常渲染
+  return (
+    <div className="mt-4 w-full max-w-md">
+      {a2uiStatus ? (
+        <SwapCard
+          status={a2uiStatus}
+          txHash={txHash}
+        />
+      ) : quote && (
+        <SwapCard
+          fromToken={quote.from_token}
+          toToken={quote.to_token}
+          fromAmount={quote.from_amount}
+          toAmount={quote.to_amount}
+          exchangeRate={quote.exchange_rate}
+          priceUsd={quote.price_usd}
+          gasEstimate={quote.gas_estimate}
+          priceImpact={quote.price_impact}
+          route={quote.route}
+          onConfirm={() => onAction('EXECUTE_ONCHAIN_SWAP', {
+            chainId: 1,
+            fromToken: quote.from_token,
+            toToken: quote.to_token,
+            fromAmount: String(quote.from_amount),
+            toAmount: String(quote.to_amount),
+            priceUsd: quote.price_usd,
+            routerAddress: quote.router_address,
+            network: quote.network,
+          })}
+          onCancel={() => onAction('CANCEL_SWAP', {})}
+        />
+      )}
+    </div>
+  );
+});
 
 
 function AppContent() {
@@ -511,7 +629,12 @@ function AppContent() {
       params.append('session_id', sessionId);
 
       // Dynamic Agent ID based on selected mode
-      const activeAgentId = selectedAgent === 'trader' ? AGENT_TRADER_ID : AGENT_ANALYST_ID;
+      // 根据选中的 Agent 模式选择对应的 Agent ID
+      const activeAgentId = selectedAgent === 'trader'
+        ? AGENT_TRADER_ID
+        : selectedAgent === 'swap'
+          ? AGENT_SWAP_ID
+          : AGENT_ANALYST_ID;
 
       const response = await fetch(`${BASE_URL}/agents/${activeAgentId}/runs`, {
         method: 'POST',
@@ -581,6 +704,8 @@ function AppContent() {
                 const toolName = data.tool?.tool_name || 'tool';
                 const toolCallId = data.tool?.tool_call_id || toolName;
                 const duration = data.tool?.metrics?.duration || 0;
+                const toolContent = data.tool?.content || '';
+                const toolArgs = data.tool?.tool_args || {};
 
                 // Replace the running tool line with completed version
                 // Use a more robust pattern that escapes special chars
@@ -591,6 +716,30 @@ function AppContent() {
                 // Only replace if pattern found
                 if (assistantMessage.match(runningPattern)) {
                   assistantMessage = assistantMessage.replace(runningPattern, completedLine);
+                }
+
+                // 🔥 关键修改: 如果是 generate_swap_a2ui 工具
+                if (toolName === 'generate_swap_a2ui') {
+                  console.log('[A2UI] Tool completed:', { toolContent: toolContent?.substring(0, 100), toolArgs });
+
+                  // 方案1: 如果 SSE 包含工具内容
+                  if (toolContent && toolContent.includes('```a2ui')) {
+                    assistantMessage += '\n\n' + toolContent;
+                    console.log('[A2UI] Added tool content to message');
+                  }
+                  // 方案2: 如果没有内容但有参数，创建一个嵌入式 SwapCard 标记
+                  else if (toolArgs && (toolArgs.from_token || toolArgs.fromToken)) {
+                    const swapParams = JSON.stringify({
+                      fromToken: toolArgs.from_token || toolArgs.fromToken,
+                      toToken: toolArgs.to_token || toolArgs.toToken,
+                      amount: toolArgs.amount,
+                      network: toolArgs.network || 'ethereum',
+                      pending: true  // 标记为待获取完整数据
+                    });
+                    // 添加一个特殊标记，MessageContent 会识别并渲染 SwapCard
+                    assistantMessage += `\n\n<!-- SWAP_CARD_PLACEHOLDER:${swapParams} -->`;
+                    console.log('[A2UI] Added SwapCard placeholder');
+                  }
                 }
 
                 setMessages(prev => {
@@ -849,7 +998,7 @@ function AppContent() {
 
   // --- Tool UI Components ---
   // --- Tool UI Components (imported from components/chat) ---
-  const GroupBlock = ({ textParts, tools, toolStartTimes, blockId, isLastTextBlock }) => {
+  const GroupBlock = ({ textParts, tools, toolStartTimes, blockId, isLastTextBlock, customContent }) => {
     // Only show export button for the last text-only block (final analysis result)
     const showExport = isLastTextBlock;
 
@@ -875,12 +1024,52 @@ function AppContent() {
       }
     };
 
+    // 如果有自定义内容（SwapCard），特定渲染顺序：Tools -> Custom -> Text
+    // 这适用于交易场景：先显示工具调用，再显示卡片，最后显示"请确认"文本
+    if (customContent) {
+      return (
+        <div
+          id={`group-block-${blockId}`}
+          className="relative group bg-[#131722] rounded-2xl px-5 py-4 text-white animate-in fade-in slide-in-from-bottom-1 duration-300 mb-2"
+        >
+          {/* Tools First */}
+          {tools.length > 0 && (
+            <div className="flex flex-col gap-1 mb-3 pb-3 border-b border-slate-700/50">
+              {tools.map((tool, idx) => {
+                const toolKey = tool.replace(/\(.*\).*/, '').trim();
+                const startTime = toolStartTimes?.[toolKey];
+                return <ToolStep key={idx} text={tool} startTime={startTime} />;
+              })}
+            </div>
+          )}
+
+          {/* Custom Content (SwapCard) */}
+          <div className="mb-4">
+            {customContent}
+          </div>
+
+          {/* Text Last */}
+          {textParts.length > 0 && (
+            <div className="w-full overflow-hidden">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={MarkdownComponents}
+              >
+                {textParts.join('\n')}
+              </ReactMarkdown>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 默认渲染顺序：Text -> Tools
     return (
       <div
         id={`group-block-${blockId}`}
         className="relative group bg-[#131722] rounded-2xl px-5 py-4 text-white animate-in fade-in slide-in-from-bottom-1 duration-300 mb-2"
       >
-        {/* Export button for result blocks */}
+        {/* Export button ... */}
         {showExport && (
           <button
             onClick={handleExport}
@@ -904,7 +1093,6 @@ function AppContent() {
         {tools.length > 0 && (
           <div className="flex flex-col gap-1 mt-3 pt-3">
             {tools.map((tool, idx) => {
-              // Generate a stable key from tool text
               const toolKey = tool.replace(/\(.*\).*/, '').trim();
               const startTime = toolStartTimes?.[toolKey];
               return <ToolStep key={idx} text={tool} startTime={startTime} />;
@@ -916,16 +1104,51 @@ function AppContent() {
   };
 
   const MessageContent = ({ content, toolStartTimes, messageIndex }) => {
+    // A2UI 状态管理
+    const [a2uiStatus, setA2uiStatus] = useState(null); // 'connecting' | 'pending' | 'success' | 'failed' | 'cancelled'
+    const [statusMessage, setStatusMessage] = useState('');
+    const [txHash, setTxHash] = useState(null);
+
+    // 检测 A2UI 内容
+    const { hasA2UI, a2uiBlocks, cleanContent } = extractA2UIBlocks(content);
+
+    // 处理 A2UI 动作
+    const handleA2UIAction = async (actionId, params) => {
+      console.log('[A2UI] Action triggered:', actionId, params);
+
+      const result = await executeAction(actionId, params, {
+        onStatusChange: (status, message) => {
+          setA2uiStatus(status);
+          setStatusMessage(message);
+        }
+      });
+
+      if (result.txHash) {
+        setTxHash(result.txHash);
+      }
+
+      return result;
+    };
+
+    // 使用清理后的内容（移除 A2UI 代码块和 SwapCard 占位符）
+    let contentToRender = hasA2UI ? cleanContent : content;
+
+    // 移除 SWAP_CARD_PLACEHOLDER 标记（不显示在文本中）
+    contentToRender = contentToRender.replace(/<!-- SWAP_CARD_PLACEHOLDER:.*? -->/g, '');
+
+    // 移除所有 ```a2ui ... ``` 代码块（已由 SwapCard 组件渲染）
+    contentToRender = contentToRender.replace(/```a2ui[\s\S]*?```/g, '');
+
     // Filter out raw tool output that shouldn't be displayed (log_strategy_analysis raw data)
     // These contain position_check=, strategy_decision=, action_taken= etc.
-    const filteredContent = content
+    const filteredContent = contentToRender
       .replace(/,\s*(?:market_analysis|position_check|strategy_decision|action_taken)=[^,)]+/g, '')
       .replace(/\(\s*,/g, '(');  // Clean up leftover commas
 
     // Robust Regex to tokenize content into Text and Tools
     // Updated to support all tool patterns including trading tools
     // For log_strategy_analysis, match until "completed" to handle complex nested content
-    const TOKEN_REGEX = /(Running: .*?|Searching .*?|Browsing .*?|log_strategy_analysis\([^)]*\)(?:\s+completed(?:\s+策略执行完成)?(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?|(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position)\([^)]*\)(?:\s+completed(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?)/g;
+    const TOKEN_REGEX = /(Running: .*?|Searching .*?|Browsing .*?|log_strategy_analysis\([^)]*\)(?:\s+completed(?:\s+策略执行完成)?(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?|(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position|generate_swap_a2ui)\([^)]*\)(?:\s+completed(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?)/g;
 
     const parts = filteredContent.split(TOKEN_REGEX);
 
@@ -944,7 +1167,7 @@ function AppContent() {
 
       // Check if the part matches our tool patterns
       const isTool =
-        trimmed.match(/^(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|log_strategy_analysis|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position)\(/) ||
+        trimmed.match(/^(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|log_strategy_analysis|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position|generate_swap_a2ui)\(/) ||
         trimmed.startsWith('Searching') ||
         trimmed.startsWith('Browsing') ||
         trimmed.startsWith('Running');
@@ -976,21 +1199,70 @@ function AppContent() {
       }
     }
 
+    // 检测 SWAP_CARD_PLACEHOLDER 标记
+    const swapCardMatch = content.match(/<!-- SWAP_CARD_PLACEHOLDER:(.*?) -->/);
+    let swapCardParams = null;
+    if (swapCardMatch) {
+      try {
+        swapCardParams = JSON.parse(swapCardMatch[1]);
+        console.log('[A2UI] Found SwapCard placeholder:', swapCardParams);
+      } catch (e) {
+        console.warn('[A2UI] Failed to parse SwapCard params:', e);
+      }
+    }
+
     return (
       <div className="flex flex-col w-full max-w-3xl">
-        {groups.map((group, idx) => (
-          <GroupBlock
-            key={idx}
-            blockId={`${messageIndex}-${idx}`}
-            textParts={group.textParts}
-            tools={group.tools}
-            toolStartTimes={toolStartTimes}
-            isLastTextBlock={idx === lastTextBlockIndex}
-          />
+
+        {/* 渲染普通内容 */}
+        {groups.map((group, idx) => {
+          // 检查此 group 是否包含 swap 工具，如果有则将 SwapCard 作为自定义内容传入
+          // GroupBlock 会处理顺序：Tools -> CustomContent(Card) -> Text
+          const hasSwapTool = group.tools.some(t => t.includes('generate_swap_a2ui'));
+          const customContent = (hasSwapTool && swapCardParams) ? (
+            <SwapCardWithQuote
+              params={swapCardParams}
+              a2uiStatus={a2uiStatus}
+              txHash={txHash}
+              onAction={handleA2UIAction}
+            />
+          ) : null;
+
+          return (
+            <GroupBlock
+              key={idx}
+              blockId={`${messageIndex}-${idx}`}
+              textParts={group.textParts}
+              tools={group.tools}
+              toolStartTimes={toolStartTimes}
+              isLastTextBlock={idx === lastTextBlockIndex}
+              customContent={customContent}
+            />
+          );
+        })}
+
+        {/* 渲染 A2UI 交易卡片 (从 ```a2ui 代码块) */}
+        {hasA2UI && !swapCardParams && a2uiBlocks.map((block, idx) => (
+          <div key={`a2ui-${idx}`} className="mt-4 w-full max-w-md">
+            {a2uiStatus ? (
+              // 显示交易状态
+              <SwapCard
+                status={a2uiStatus}
+                txHash={txHash}
+              />
+            ) : (
+              // 渲染 A2UI 组件
+              <A2UIRenderer
+                surface={block.surface}
+                onAction={handleA2UIAction}
+              />
+            )}
+          </div>
         ))}
       </div>
     );
   };
+
 
   const MarkdownComponents = {
     code({ node, inline, className, children, ...props }) {
@@ -1531,7 +1803,13 @@ function AppContent() {
                               handleSend();
                             }
                           }}
-                          placeholder={selectedAgent === 'trader' ? t('agentMode.traderPlaceholder') : t('agentMode.analystPlaceholder')}
+                          placeholder={
+                            selectedAgent === 'trader'
+                              ? t('agentMode.traderPlaceholder')
+                              : selectedAgent === 'swap'
+                                ? t('agentMode.swapPlaceholder', '输入交易指令，如：购买 1000U 的 BTC')
+                                : t('agentMode.analystPlaceholder')
+                          }
                           className="w-full bg-transparent border-none outline-none focus:ring-0 focus:outline-none resize-none text-slate-100 placeholder:text-slate-500 text-lg leading-relaxed font-light"
                           rows={1}
                           style={{ minHeight: '48px', maxHeight: '120px' }}
@@ -1559,6 +1837,15 @@ function AppContent() {
                                   }`}
                               >
                                 {t('agentMode.trader')}
+                              </button>
+                              <button
+                                onClick={() => setSelectedAgent('swap')}
+                                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${selectedAgent === 'swap'
+                                  ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white'
+                                  : 'text-slate-400 hover:text-white'
+                                  }`}
+                              >
+                                {t('agentMode.swap', '操盘手')}
                               </button>
                             </div>
                           )}

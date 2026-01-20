@@ -16,13 +16,14 @@ import threading
 from crypto_agent import crypto_agent
 from trading_agent import trading_agent
 from daily_report_agent import daily_report_agent
+from swap_agent import swap_agent  # A2UI DEX 交易 Agent
 from agno.os import AgentOS
 
 # Import user context setter
 from trading_tools import set_current_user
 
 # Create AgentOS with all agents
-agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent])
+agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent, swap_agent])
 app = agent_os.get_app()
 
 # Middleware to set user context for trading tools
@@ -220,6 +221,24 @@ print("[Main] Daily report scheduler started (always runs)")
 from app.services.cache_warmup import start_warmup_thread
 warmup_thread = start_warmup_thread()
 print("[Main] Cache warmup started in background")
+
+
+# ============= Swap Quote API =============
+# 供前端 SwapCard 获取实时报价数据
+from fastapi import Query
+from swap_tools import get_swap_quote
+
+@app.get("/api/swap/quote")
+async def get_quote(
+    from_token: str = Query(..., description="源代币符号"),
+    to_token: str = Query(..., description="目标代币符号"),
+    amount: float = Query(..., description="源代币数量"),
+    network: str = Query("ethereum", description="网络")
+):
+    """获取 DEX 交易报价"""
+    quote = get_swap_quote(from_token, to_token, amount, network)
+    return quote
+
 
 
 
