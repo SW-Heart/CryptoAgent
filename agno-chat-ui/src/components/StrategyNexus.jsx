@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import TerminalLoader from './TerminalLoader';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import { BASE_URL } from '../services/config';
 
 // Admin user ID - must match backend STRATEGY_ADMIN_USER_ID
 const ADMIN_USER_ID = 'ee20fa53-5ac2-44bc-9237-41b308e291d8';

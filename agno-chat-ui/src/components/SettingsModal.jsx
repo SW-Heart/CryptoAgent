@@ -5,6 +5,7 @@ import {
     ChevronLeft, ChevronRight, Key, Eye, EyeOff, RefreshCw,
     CheckCircle, XCircle, AlertCircle
 } from 'lucide-react';
+import { BASE_URL } from '../services/config';
 
 export default function SettingsModal({
     isOpen,
@@ -406,7 +407,6 @@ function UsageContent({ credits, history, currentPage, totalPages, onPageChange,
     );
 }
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 function ExchangeContent({ userId, t }) {
     const [apiKey, setApiKey] = useState('');

@@ -2413,7 +2413,6 @@ function AuthWrapper() {
 
       // 加载首页所需的数据
       const loadInitialData = async () => {
-        const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
         try {
           // 并行加载用户数据和 dashboard 数据
@@ -2426,62 +2425,62 @@ function AuthWrapper() {
             fetch(`${BASE_URL}/api/dashboard/tokens`).then(r => r.json()).catch(() => ({})),
             fetch(`${BASE_URL}/api/dashboard/fear-greed`).then(r => r.json()).catch(() => ({})),
           ]);
-        } catch (e) {
-          console.error('Initial data load error:', e);
-        }
-
-        setInitialDataLoaded(true);
-      };
-
-      loadInitialData();
+    } catch (e) {
+      console.error('Initial data load error:', e);
     }
-  }, [user, authLoading]);
 
-  // 加载动画完成后隐藏
-  const handleLoaderComplete = () => {
-    setShowLoader(false);
+    setInitialDataLoaded(true);
   };
 
-  // Auth 状态检查中 - 显示简单的 loading
-  if (authLoading) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full" />
-      </div>
-    );
-  }
+  loadInitialData();
+}
+  }, [user, authLoading]);
 
-  // Show LandingPage for unauthenticated users
-  if (!user) {
-    return (
-      <>
-        <LandingPage
-          onLogin={handleLogin}
-          onLanguageChange={handleLanguageChange}
-          currentLanguage={i18n.language}
-        />
-        <AuthModal
-          isOpen={showAuthModal}
-          onClose={() => setShowAuthModal(false)}
-          initialMode={authMode}
-        />
-      </>
-    );
-  }
+// 加载动画完成后隐藏
+const handleLoaderComplete = () => {
+  setShowLoader(false);
+};
 
-  // 已登录用户 - 显示全屏加载动画直到数据加载完成
-  if (showLoader) {
-    return (
-      <TerminalLoader
-        fullScreen={true}
-        isReady={initialDataLoaded}
-        onComplete={handleLoaderComplete}
+// Auth 状态检查中 - 显示简单的 loading
+if (authLoading) {
+  return (
+    <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full" />
+    </div>
+  );
+}
+
+// Show LandingPage for unauthenticated users
+if (!user) {
+  return (
+    <>
+      <LandingPage
+        onLogin={handleLogin}
+        onLanguageChange={handleLanguageChange}
+        currentLanguage={i18n.language}
       />
-    );
-  }
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        initialMode={authMode}
+      />
+    </>
+  );
+}
 
-  // Show main app for authenticated users
-  return <AppContent />;
+// 已登录用户 - 显示全屏加载动画直到数据加载完成
+if (showLoader) {
+  return (
+    <TerminalLoader
+      fullScreen={true}
+      isReady={initialDataLoaded}
+      onComplete={handleLoaderComplete}
+    />
+  );
+}
+
+// Show main app for authenticated users
+return <AppContent />;
 }
 
 export default App;

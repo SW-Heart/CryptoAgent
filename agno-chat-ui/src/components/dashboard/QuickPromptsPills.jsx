@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Flame } from 'lucide-react';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import { BASE_URL } from '../../services/config';
 
 // Module-level cache
 const aiQuestionsCache = {};

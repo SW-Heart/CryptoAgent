@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SuggestedQuestionSkeleton } from './Skeleton';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import { BASE_URL } from '../../services/config';
 
 // 模块级缓存：避免页面切换时重复请求
 // 格式: { [language]: { questions: [], timestamp: number, index: number } }

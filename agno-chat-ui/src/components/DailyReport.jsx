@@ -4,7 +4,7 @@ import { Newspaper, Mail, ChevronLeft, ChevronRight, Loader2, Check, X, Bell, Be
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import { BASE_URL } from '../services/config';
 
 export default function DailyReport() {
     const { t, i18n } = useTranslation();
