@@ -15,10 +15,11 @@ RUN npm ci --silent
 COPY agno-chat-ui/ ./
 
 # Set production API URL (will be same origin, proxied by Nginx)
-ENV VITE_API_BASE_URL=""
+# Must use ARG + inline env for Vite to pick it up at build time
+ARG VITE_API_BASE_URL=""
 
-# Build the React app
-RUN npm run build
+# Build the React app with empty API URL
+RUN VITE_API_BASE_URL="" npm run build
 
 
 # ===========================================
