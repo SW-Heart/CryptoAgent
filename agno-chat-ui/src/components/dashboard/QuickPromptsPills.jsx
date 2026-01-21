@@ -178,10 +178,10 @@ export default function QuickPromptsPills({ staticPrompts = [], onSelectPrompt }
             }
 
             try {
-                const url = new URL(`${BASE_URL}/api/suggested-questions`);
-                url.searchParams.set('language', language);
+                const params = new URLSearchParams();
+                params.set('language', language);
 
-                const res = await fetch(url);
+                const res = await fetch(`${BASE_URL}/api/suggested-questions?${params}`);
                 const data = await res.json();
                 const questions = data.all_questions || [];
 

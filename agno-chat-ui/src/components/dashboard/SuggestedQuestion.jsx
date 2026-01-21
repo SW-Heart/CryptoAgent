@@ -43,13 +43,13 @@ export default function SuggestedQuestion({ userId, onFillInput }) {
 
             // 无缓存或已过期，请求新数据
             try {
-                const url = new URL(`${BASE_URL}/api/suggested-questions`);
-                url.searchParams.set('language', language);
+                const params = new URLSearchParams();
+                params.set('language', language);
                 if (userId) {
-                    url.searchParams.set('user_id', userId);
+                    params.set('user_id', userId);
                 }
 
-                const res = await fetch(url);
+                const res = await fetch(`${BASE_URL}/api/suggested-questions?${params}`);
                 const data = await res.json();
 
                 const questions = data.all_questions || [];
