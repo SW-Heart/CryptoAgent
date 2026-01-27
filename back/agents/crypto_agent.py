@@ -24,7 +24,7 @@ GOOGLE_API_KEY = getenv("GOOGLE_API_KEY")
 
 
 # 导入我们自己写的工具
-from crypto_tools import (
+from tools.crypto_tools import (
     get_market_sentiment, get_token_analysis, get_market_hotspots, 
     get_pro_crypto_news, get_narrative_dominance, search_news, search_google,
     get_btc_dominance, get_funding_rate, get_top_gainers_cex,
@@ -54,7 +54,7 @@ from pattern_recognition import (
 from indicator_memory import get_indicator_reliability, get_indicator_reliability_all_timeframes
 
 # ETF 资金流工具 (Farside)
-from etf_tools import get_etf_flows, get_etf_daily, get_etf_summary, get_etf_ticker
+from tools.etf_tools import get_etf_flows, get_etf_daily, get_etf_summary, get_etf_ticker
 
 # K 线图视觉分析工具
 from kline_analysis import analyze_kline

@@ -20,7 +20,7 @@ from binance_client import (
 )
 
 # Import context management from trading_tools
-from trading_tools import get_current_user, STRATEGY_ADMIN_USER_ID
+from tools.trading_tools import get_current_user, STRATEGY_ADMIN_USER_ID
 
 
 def _get_effective_user_id(user_id: str = None) -> str:

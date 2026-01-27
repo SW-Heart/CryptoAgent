@@ -6,27 +6,8 @@ from agno.agent import Agent
 from agno.models.deepseek import DeepSeek
 from agno.tools.duckduckgo import DuckDuckGoTools
 
-# Import specific tools
-from crypto_tools import (
-    get_market_sentiment,
-    get_token_analysis,
-    search_news,
-    get_pro_crypto_news,
-    get_market_hotspots,
-    get_trending_tokens,          # 热门代币榜
-    get_top_gainers_cex,
-    get_onchain_hot_gainers,  # 链上热点异动榜
-    get_eth_btc_ratio,
-    get_global_market_overview,
-    get_btc_dominance,
-)
-
-from technical_analysis import (
-    get_multi_timeframe_analysis
-)
-
-# 导入ETF工具
-from etf_tools import get_etf_daily, get_etf_summary
+# Import the new aggregated tool
+from tools.daily_report_tools import get_comprehensive_daily_report_data
 
 load_dotenv()
 LLM_KEY = getenv("OPENAI_API_KEY")
@@ -36,22 +17,7 @@ daily_report_agent = Agent(
     id="daily-report-agent",
     model=DeepSeek(id="deepseek-chat", api_key=LLM_KEY),
     tools=[
-        get_market_sentiment,
-        get_token_analysis,
-        search_news,
-        DuckDuckGoTools(),
-        get_pro_crypto_news,
-        get_market_hotspots,
-        get_trending_tokens,          # 热门代币榜
-        get_top_gainers_cex,
-        get_onchain_hot_gainers,  # 链上热点异动榜
-        get_eth_btc_ratio,
-        get_global_market_overview,
-        get_btc_dominance,
-        get_multi_timeframe_analysis,
-        # ETF数据工具
-        get_etf_daily,
-        get_etf_summary,
+        get_comprehensive_daily_report_data
     ],
     instructions=["""
 [OUTPUT_ANCHOR]
@@ -79,29 +45,17 @@ Style: **No fluff, but never superficial**. Every opinion must be backed by logi
 
 # Workflow
 
-1. **Gather Core Data**:
-   - Get Fear & Greed Index (`get_market_sentiment`).
-   - Get BTC real-time price and key technical levels (`get_token_analysis("BTC")`, `get_multi_timeframe_analysis`).
-   - **ETF Data**: Call `get_etf_daily("btc")` for precise ETF flow data.
-     - ⚠️ **Note**: ETF market is closed on weekends and US holidays. State "ETF market closed" when generating weekend reports.
+1. **Get Data**:
+   - Call `get_comprehensive_daily_report_data()` once. This will provide you with all the necessary data including sentiment, BTC analysis, ETF flows, news, and market scans.
 
-2. **Filter & Interpret Headlines**:
-   - Search for the most important news in the last 24 hours (`get_pro_crypto_news`, `search_news`).
-   - Select 3-5 major events.
-   - **Must interpret**: Don't just repeat the news - tell readers what it means for the market.
+2. **Analyze & Interpret**:
+   - **Trend**: Use the provided BTC technical analysis and EMA/MACD signals to determine the market structure.
+   - **Sentiment**: Combine the Fear & Greed Index with the ETF flow data to gauge market mood.
+   - **News**: Select the top 3-5 headlines from the provided news section. interpret their impact.
+   - **Sectors**: Identify leading sectors from the "Market Scans" section (Hotspots, Top Gainers, On-chain).
 
-3. **Deep Trend Analysis**:
-   - Use `get_multi_timeframe_analysis` to identify BTC/ETH trend structure.
-   - Find key **Support** and **Resistance** levels.
-   - Observe ETH/BTC ratio for altcoin season signals.
-
-4. **Capture Sector Rotation**:
-   - Use `get_market_hotspots` and `get_top_gainers_cex` for CEX gainers.
-   - **NEW**: Use `get_onchain_hot_gainers` for on-chain DEX hot tokens (filtered by liquidity/volume/market cap).
-   - Find leading sectors and explain the **rally logic** in one sentence.
-
-5. **Formulate Trading Strategy**:
-   - Based on the above analysis, give clear operational advice.
+3. **Formulate Strategy**:
+   - Based on the above, provide clear, actionable trading advice.
 
 ---
 

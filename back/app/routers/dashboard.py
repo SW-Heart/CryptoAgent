@@ -253,7 +253,7 @@ def get_dashboard_indicators():
         
         def fetch_gas():
             try:
-                from crypto_tools import ETHERSCAN_API_KEY
+                from tools.crypto_tools import ETHERSCAN_API_KEY
                 if ETHERSCAN_API_KEY:
                     return fetch_with_retry(
                         f"https://api.etherscan.io/v2/api?chainid=1&module=gastracker&action=gasoracle&apikey={ETHERSCAN_API_KEY}",

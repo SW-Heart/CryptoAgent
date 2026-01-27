@@ -200,12 +200,8 @@ function AppContent() {
   const [renameInput, setRenameInput] = useState('');
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(null); // session to delete
 
-  // Dashboard State (Home View)
-  const [dashboardNews, setDashboardNews] = useState([]);
-  const [dashboardTokens, setDashboardTokens] = useState([]);
-  const [dashboardFearGreed, setDashboardFearGreed] = useState({ value: 50, classification: 'Neutral' });
-  const [dashboardIndicators, setDashboardIndicators] = useState([]);
-  const [dashboardLoading, setDashboardLoading] = useState(true); // Loading state for skeleton
+  // Dashboard State (Home View) - CLEARED
+  // All dashboard data fetching logic has been removed as per user request.
 
   // Trending State (lifted from TrendingBar for caching) - read from localStorage on init
   const [trendingTokens, setTrendingTokens] = useState(() => {
@@ -269,170 +265,42 @@ function AppContent() {
     }
   }, [showSettingsModal, userId, user]);
 
-  // Fetch dashboard data on mount with cache-first strategy
+  // Restore Trending Token Fetching Logic (User Request)
   useEffect(() => {
-    const startTime = performance.now();
-
-    // Helper: fetch with timeout
-    const fetchWithTimeout = async (url, timeout = 5000, fallback = {}) => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
-      try {
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        return await res.json();
-      } catch (e) {
-        clearTimeout(timeoutId);
-        console.warn(`[Dashboard] Timeout or error for ${url}:`, e.message);
-        return fallback;
-      }
-    };
-
-    // Phase 1: Load from cache immediately (instant render)
-    const loadFromCache = () => {
-      const cachedNews = dashboardCache.getCache('news');
-      const cachedTokens = dashboardCache.getCache('tokens');
-      const cachedFearGreed = dashboardCache.getCache('fearGreed');
-      const cachedIndicators = dashboardCache.getCache('indicators');
-      const cachedTrending = dashboardCache.getCache('trending');
-
-      let hasAnyCache = false;
-
-      if (cachedNews?.data?.length > 0) {
-        setDashboardNews(cachedNews.data);
-        hasAnyCache = true;
-      }
-      if (cachedTokens?.data?.length > 0) {
-        setDashboardTokens(cachedTokens.data);
-        hasAnyCache = true;
-      }
-      if (cachedFearGreed?.data) {
-        setDashboardFearGreed(cachedFearGreed.data);
-        hasAnyCache = true;
-      }
-      if (cachedIndicators?.data?.length > 0) {
-        setDashboardIndicators(cachedIndicators.data);
-        hasAnyCache = true;
-      }
-      if (cachedTrending?.data?.length > 0) {
-        setTrendingTokens(cachedTrending.data);
-        setTrendingLoading(false);
-        hasAnyCache = true;
-      }
-
-      // If we have any cache, hide skeleton immediately
-      if (hasAnyCache) {
-        setDashboardLoading(false);
-        console.log(`[Dashboard] Cache loaded in ${(performance.now() - startTime).toFixed(0)}ms`);
-      }
-
-      return hasAnyCache;
-    };
-
-    // Phase 2: Background refresh (silent update)
-    const refreshFromAPI = async () => {
-      const [newsRes, tokensRes, fearGreedRes, indicatorsRes, trendingRes] = await Promise.all([
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/news`, 8000, { news: [] }),
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/tokens`, 5000, { tokens: [] }),
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/fear-greed`, 5000, { value: 50, classification: 'Neutral' }),
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/indicators`, 8000, { indicators: [] }),
-        fetchWithTimeout(`${BASE_URL}/api/dashboard/trending?limit=10`, 5000, { tokens: [] })
-      ]);
-
-      // Update state and cache
-      if (newsRes.news?.length > 0) {
-        setDashboardNews(newsRes.news);
-        dashboardCache.setCache('news', newsRes.news);
-      }
-      if (tokensRes.tokens?.length > 0) {
-        setDashboardTokens(tokensRes.tokens);
-        dashboardCache.setCache('tokens', tokensRes.tokens);
-      }
-      if (fearGreedRes.value !== undefined) {
-        setDashboardFearGreed(fearGreedRes);
-        dashboardCache.setCache('fearGreed', fearGreedRes);
-      }
-      if (indicatorsRes.indicators?.length > 0) {
-        setDashboardIndicators(indicatorsRes.indicators);
-        dashboardCache.setCache('indicators', indicatorsRes.indicators);
-      }
-
-      setDashboardLoading(false);
-
-      // Update trending
-      const trendingData = trendingRes.tokens || [];
-      if (trendingData.length > 0) {
-        setTrendingTokens(trendingData);
-        setTrendingLoading(false);
-        dashboardCache.setCache('trending', trendingData);
-      } else {
-        setTrendingLoading(false);
-      }
-
-      console.log(`[Dashboard] API refresh completed in ${(performance.now() - startTime).toFixed(0)}ms`);
-    };
-
-    // Execute: cache first, then refresh
-    const hasCache = loadFromCache();
-
-    // Always refresh in background, but with slight delay if we have cache
-    if (hasCache) {
-      // Delay refresh slightly to not compete with initial render
-      setTimeout(refreshFromAPI, 100);
-    } else {
-      // No cache, refresh immediately
-      refreshFromAPI();
+    // Initial fetch from cache
+    const cachedTrending = dashboardCache.getCache('trending');
+    if (cachedTrending?.data?.length > 0) {
+      setTrendingTokens(cachedTrending.data);
+      setTrendingLoading(false);
     }
 
-    // Token refresh every 1 minute (priority data)
-    const tokenInterval = setInterval(async () => {
-      try {
-        const res = await fetch(`${BASE_URL}/api/dashboard/tokens`);
-        const data = await res.json();
-        if (data.tokens?.length > 0) {
-          setDashboardTokens(data.tokens);
-          dashboardCache.setCache('tokens', data.tokens);
-        }
-      } catch (e) { console.error('[Dashboard] Token refresh error:', e); }
-    }, 60000);
-
-    // News and indicators refresh every 10 minutes
-    const otherInterval = setInterval(async () => {
-      try {
-        const [newsRes, indicatorsRes] = await Promise.all([
-          fetch(`${BASE_URL}/api/dashboard/news`).then(r => r.json()),
-          fetch(`${BASE_URL}/api/dashboard/indicators`).then(r => r.json())
-        ]);
-        if (newsRes.news?.length > 0) {
-          setDashboardNews(newsRes.news);
-          dashboardCache.setCache('news', newsRes.news);
-        }
-        if (indicatorsRes.indicators?.length > 0) {
-          setDashboardIndicators(indicatorsRes.indicators);
-          dashboardCache.setCache('indicators', indicatorsRes.indicators);
-        }
-      } catch (e) { console.error('[Dashboard] Other refresh error:', e); }
-    }, 600000);
-
-    // Trending refresh every 5 minutes
-    const trendingInterval = setInterval(async () => {
+    const fetchTrending = async () => {
       try {
         const res = await fetch(`${BASE_URL}/api/dashboard/trending?limit=10`);
         const data = await res.json();
         const tokens = data.tokens || [];
         if (tokens.length > 0) {
+          // Save with timestamp for persistence
+          localStorage.setItem('trendingTokens', JSON.stringify({
+            data: tokens,
+            timestamp: Date.now()
+          }));
           setTrendingTokens(tokens);
+          setTrendingLoading(false);
           dashboardCache.setCache('trending', tokens);
         }
       } catch (e) { console.error('[Dashboard] Trending refresh error:', e); }
-    }, 300000);
-
-    return () => {
-      clearInterval(tokenInterval);
-      clearInterval(otherInterval);
-      clearInterval(trendingInterval);
     };
+
+    // Fetch immediately on mount (background)
+    fetchTrending();
+
+    // Refresh every 5 minutes
+    const trendingInterval = setInterval(fetchTrending, 300000);
+
+    return () => clearInterval(trendingInterval);
   }, []);
+
 
   // --- Refs ---
   const messagesEndRef = useRef(null);
@@ -1777,7 +1645,7 @@ function AppContent() {
             {messages.length === 0 ? (
               // --- Home View (Manus Style) - scrollable ---
               <div className="flex-1 overflow-x-hidden overflow-y-auto">
-                <div className="min-h-full flex flex-col items-center py-16 md:py-20 px-4">
+                <div className="min-h-full flex flex-col items-center justify-center py-16 md:py-20 px-4">
                   {/* Title and Input - centered 768px width */}
                   <div className="w-full space-y-6 text-center mb-8" style={{ maxWidth: '768px' }}>
 
@@ -1864,247 +1732,6 @@ function AppContent() {
                     </div>
                   </div>
 
-                  {/* Dashboard Components - Full Width */}
-                  <div className="w-full px-8 lg:px-20 overflow-hidden">
-                    <div className="flex flex-col gap-4 min-w-0">
-
-                      {/* Row 1: Quick Prompts (50%) + Latest News (50%) */}
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
-                        {/* Top Left: Trending Prompts - Pills with rotation */}
-                        {(() => {
-                          // Static prompts from translations
-                          const staticPrompts = [
-                            { key: 'marketAnalysis', text: t('home.quickPrompts.marketAnalysis') },
-                            { key: 'investmentStrategies', text: t('home.quickPrompts.investmentStrategies') },
-                            { key: 'marketForecast', text: t('home.quickPrompts.marketForecast') },
-                            { key: 'investmentOpportunities', text: t('home.quickPrompts.investmentOpportunities') },
-                            { key: 'topGainers', text: t('home.quickPrompts.topGainers') },
-                            { key: 'defiYields', text: t('home.quickPrompts.defiYields') },
-                            { key: 'whale', text: t('home.quickPrompts.whale') },
-                            { key: 'meme', text: t('home.quickPrompts.meme') },
-                            { key: 'airdrop', text: t('home.quickPrompts.airdrop') },
-                            { key: 'layer2', text: t('home.quickPrompts.layer2') },
-                            { key: 'altseason', text: t('home.quickPrompts.altseason') },
-                            { key: 'macro', text: t('home.quickPrompts.macro') }
-                          ];
-                          return (
-                            <QuickPromptsPills
-                              staticPrompts={staticPrompts}
-                              onSelectPrompt={(text) => setInput(text)}
-                            />
-                          );
-                        })()}
-
-                        {/* Top Right: Latest News */}
-                        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                          {dashboardLoading ? (
-                            /* 骨架屏 - 被容器 overflow-hidden 限制 */
-                            <>
-                              <div className="flex items-center gap-2 mb-3">
-                                <div className="bg-slate-700/50 animate-pulse rounded-full w-4 h-4" />
-                                <div className="bg-slate-700/50 animate-pulse rounded w-20 h-4" />
-                              </div>
-                              <div className="flex flex-col justify-between h-[calc(100%-32px)]">
-                                {[...Array(5)].map((_, i) => (
-                                  <div key={i} className="flex items-start gap-2 px-2 py-1">
-                                    <div className="bg-slate-700/50 animate-pulse rounded w-4 h-4 flex-shrink-0 mt-0.5" />
-                                    <div className="flex-1">
-                                      <div className="bg-slate-700/50 animate-pulse rounded h-4 w-3/4" />
-                                      <div className="bg-slate-700/50 animate-pulse rounded h-3 w-1/2 mt-1" />
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </>
-                          ) : (
-                            /* 真实内容 */
-                            <>
-                              <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                                <Newspaper className="w-4 h-4 text-blue-400" />
-                                {t('home.latestNews')}
-                              </h3>
-                              <div className="flex flex-col justify-between h-[calc(100%-32px)]">
-                                {dashboardNews.length > 0 ? dashboardNews.slice(0, 5).map((news, i) => {
-                                  const isZh = i18n.language?.startsWith('zh');
-                                  const displayTitle = isZh ? (news.title_zh || news.title || news.title_en) : (news.title_en || news.title);
-                                  const displaySummary = isZh ? (news.summary_zh || '') : (news.summary_en || '');
-                                  return (
-                                    <button
-                                      key={i}
-                                      onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
-                                      className="w-full flex items-start gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition-colors text-left"
-                                    >
-                                      <span className="text-xs text-slate-500 mt-0.5 flex-shrink-0">{i + 1}.</span>
-                                      <div className="flex-1">
-                                        <span className="text-sm text-slate-300 line-clamp-1">{displayTitle}</span>
-                                        {displaySummary && (
-                                          <span className="text-xs text-slate-500 line-clamp-1 block mt-0.5">{displaySummary}</span>
-                                        )}
-                                      </div>
-                                    </button>
-                                  )
-                                }) : (() => {
-                                  const DEFAULT_NEWS = [
-                                    { title_en: "Bitcoin holds steady as market awaits Fed decision", title_zh: "比特币保持稳定，市场等待美联储决议" },
-                                    { title_en: "Ethereum Layer 2 solutions see record TVL growth", title_zh: "以太坊二层解决方案TVL创历史新高" },
-                                    { title_en: "Institutional crypto adoption accelerates in Asia", title_zh: "亚洲机构加密货币采用加速" },
-                                    { title_en: "DeFi protocols show renewed growth momentum", title_zh: "DeFi协议增长势头强劲" },
-                                    { title_en: "NFT market sees signs of recovery in Q4", title_zh: "NFT市场第四季度复苏迹象显现" }
-                                  ];
-                                  const isZh = i18n.language?.startsWith('zh');
-                                  return DEFAULT_NEWS.map((news, i) => {
-                                    const displayTitle = isZh ? news.title_zh : news.title_en;
-                                    return (
-                                      <button
-                                        key={i}
-                                        onClick={() => setInput(`${t('dashboard.analyzeNews', 'Analyze news')}: '${displayTitle}'`)}
-                                        className="w-full flex items-start gap-2 px-2 py-1.5 hover:bg-slate-800 rounded-lg transition-colors text-left"
-                                      >
-                                        <span className="text-xs text-slate-500">{i + 1}.</span>
-                                        <span className="text-sm text-slate-300">{displayTitle}</span>
-                                      </button>
-                                    );
-                                  });
-                                })()}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Row 2: Popular Tokens (50%) + Key Indicators (50%) */}
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
-                        {/* Bottom Left: Popular Tokens */}
-                        {/* Bottom Left: Popular Tokens */}
-                        {dashboardLoading ? (
-                          <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                            {/* 骨架屏 */}
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                <div className="bg-slate-700/50 animate-pulse rounded-full w-4 h-4" />
-                                <div className="bg-slate-700/50 animate-pulse rounded w-20 h-4" />
-                              </div>
-                              <div className="flex bg-slate-800/50 rounded-lg p-0.5 gap-1">
-                                <div className="bg-slate-700/50 animate-pulse rounded-md w-12 h-6" />
-                                <div className="bg-slate-700/50 animate-pulse rounded-md w-14 h-6" />
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-4 px-2 pb-1 border-b border-slate-800/50 mb-1">
-                              <div className="bg-slate-700/50 animate-pulse rounded w-10 h-3" />
-                              <div className="bg-slate-700/50 animate-pulse rounded w-10 h-3 ml-auto" />
-                              <div className="bg-slate-700/50 animate-pulse rounded w-10 h-3 ml-auto" />
-                              <div />
-                            </div>
-                            <div className="flex-1 flex flex-col justify-between">
-                              {[...Array(6)].map((_, i) => (
-                                <div key={i} className="grid grid-cols-4 items-center px-2 py-1.5">
-                                  <div className="bg-slate-700/50 animate-pulse rounded w-14 h-4" />
-                                  <div className="bg-slate-700/50 animate-pulse rounded w-16 h-4 ml-auto" />
-                                  <div className="bg-slate-700/50 animate-pulse rounded w-12 h-4 ml-auto" />
-                                  <div className="bg-slate-700/50 animate-pulse rounded-full w-4 h-4 ml-auto" />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ) : (
-                          <PopularTokens
-                            tokens={dashboardTokens}
-                            onAnalyzeToken={(prompt) => setInput(prompt)}
-                          />
-                        )}
-
-                        {/* Bottom Right: Key Indicators + Fear & Greed */}
-                        <div className="bg-[#131722] rounded-xl p-5 border border-slate-800 h-[330px] overflow-hidden">
-                          {dashboardLoading ? (
-                            /* 骨架屏 */
-                            <>
-                              <div className="flex items-center gap-2 mb-3">
-                                <div className="bg-slate-700/50 animate-pulse rounded-full w-4 h-4" />
-                                <div className="bg-slate-700/50 animate-pulse rounded w-24 h-4" />
-                              </div>
-                              <div className="w-full flex items-center justify-between p-3 bg-slate-800/50 rounded-lg mb-3">
-                                <div className="flex items-center gap-2">
-                                  <div className="bg-slate-700/50 animate-pulse rounded-full w-4 h-4" />
-                                  <div className="bg-slate-700/50 animate-pulse rounded w-20 h-3" />
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <div className="bg-slate-700/50 animate-pulse rounded w-8 h-5" />
-                                  <div className="bg-slate-700/50 animate-pulse rounded w-12 h-3" />
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-2 gap-2">
-                                {[...Array(6)].map((_, i) => (
-                                  <div key={i} className="flex flex-col p-2.5 bg-slate-800/50 rounded-lg">
-                                    <div className="bg-slate-700/50 animate-pulse rounded w-16 h-3 mb-1" />
-                                    <div className="bg-slate-700/50 animate-pulse rounded w-12 h-4" />
-                                  </div>
-                                ))}
-                              </div>
-                            </>
-                          ) : (
-                            /* 真实内容 */
-                            <>
-                              <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                                <BarChart2 className="w-4 h-4 text-cyan-400" />
-                                {t('home.keyIndicators.title')}
-                              </h3>
-
-                              {/* Fear & Greed at top */}
-                              <button
-                                onClick={() => {
-                                  const translatedClassification = t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification);
-                                  setInput(`${t('dashboard.analyzeFearGreed', 'Analyze Fear & Greed Index')}: ${dashboardFearGreed.value} (${translatedClassification})`);
-                                }}
-                                className="w-full flex items-center justify-between p-3 bg-slate-800/50 hover:bg-slate-700 rounded-lg mb-3 transition-colors"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <Activity className="w-4 h-4 text-yellow-400" />
-                                  <span className="text-xs text-slate-400">{t('home.keyIndicators.fearGreed')}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-lg font-bold ${dashboardFearGreed.value <= 25 ? 'text-red-400' :
-                                    dashboardFearGreed.value <= 45 ? 'text-orange-400' :
-                                      dashboardFearGreed.value <= 55 ? 'text-yellow-400' :
-                                        dashboardFearGreed.value <= 75 ? 'text-lime-400' : 'text-green-400'
-                                    }`}>{dashboardFearGreed.value}</span>
-                                  <span className="text-xs text-slate-500">{t(`home.keyIndicators.classifications.${dashboardFearGreed.classification}`, dashboardFearGreed.classification)}</span>
-                                </div>
-                              </button>
-
-                              {/* Other indicators */}
-                              <div className="grid grid-cols-2 gap-2">
-                                {dashboardIndicators.map((indicator, i) => {
-                                  const nameKeyMap = {
-                                    'Total Market Cap': 'totalMarketCap',
-                                    'Bitcoin Market Cap': 'bitcoinMarketCap',
-                                    'Bitcoin Dominance': 'bitcoinDominance',
-                                    'ETH/BTC Ratio': 'ethBtcRatio',
-                                    'Ethereum Gas': 'ethereumGas',
-                                    'DeFi TVL': 'defiTvl'
-                                  };
-                                  const translatedName = nameKeyMap[indicator.name]
-                                    ? t(`home.keyIndicators.${nameKeyMap[indicator.name]}`)
-                                    : indicator.name;
-
-                                  return (
-                                    <button
-                                      key={i}
-                                      onClick={() => setInput(`${t('dashboard.analyzeIndicator', 'Analyze')}: ${translatedName} ${indicator.value}`)}
-                                      className="flex flex-col p-2.5 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors text-left"
-                                    >
-                                      <span className="text-xs text-slate-500 truncate">{translatedName}</span>
-                                      <span className="text-sm font-medium text-white mt-0.5">{indicator.value}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                    </div>
-                  </div>
                 </div>
               </div>
             ) : (
@@ -2246,79 +1873,83 @@ function AppContent() {
         )}
       </div>
       {/* Rename Dialog */}
-      {renameDialogOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          onKeyDown={(e) => { if (e.key === 'Escape') { setRenameDialogOpen(null); setRenameInput(''); } }}
-        >
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm cursor-pointer" onClick={() => { setRenameDialogOpen(null); setRenameInput(''); }} />
-          <div className="relative bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-slate-700">
-            <h3 className="text-lg font-semibold text-white mb-4">{t('sidebar.renameChat')}</h3>
-            <input
-              type="text"
-              value={renameInput}
-              onChange={(e) => setRenameInput(e.target.value)}
-              placeholder={t('sidebar.enterNewName')}
-              className="w-full px-4 py-3 bg-slate-700 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleRenameSession(renameDialogOpen.session_id);
-                if (e.key === 'Escape') { setRenameDialogOpen(null); setRenameInput(''); }
-              }}
-            />
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => { setRenameDialogOpen(null); setRenameInput(''); }}
-                className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-700 transition-colors"
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={() => handleRenameSession(renameDialogOpen.session_id)}
-                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
-              >
-                {t('sidebar.rename')}
-              </button>
+      {
+        renameDialogOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            onKeyDown={(e) => { if (e.key === 'Escape') { setRenameDialogOpen(null); setRenameInput(''); } }}
+          >
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm cursor-pointer" onClick={() => { setRenameDialogOpen(null); setRenameInput(''); }} />
+            <div className="relative bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-slate-700">
+              <h3 className="text-lg font-semibold text-white mb-4">{t('sidebar.renameChat')}</h3>
+              <input
+                type="text"
+                value={renameInput}
+                onChange={(e) => setRenameInput(e.target.value)}
+                placeholder={t('sidebar.enterNewName')}
+                className="w-full px-4 py-3 bg-slate-700 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRenameSession(renameDialogOpen.session_id);
+                  if (e.key === 'Escape') { setRenameDialogOpen(null); setRenameInput(''); }
+                }}
+              />
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => { setRenameDialogOpen(null); setRenameInput(''); }}
+                  className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-700 transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={() => handleRenameSession(renameDialogOpen.session_id)}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium transition-colors"
+                >
+                  {t('sidebar.rename')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Delete Confirmation Dialog */}
-      {deleteConfirmOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          onKeyDown={(e) => { if (e.key === 'Escape') setDeleteConfirmOpen(null); }}
-          tabIndex={-1}
-        >
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm cursor-pointer" onClick={() => setDeleteConfirmOpen(null)} />
-          <div className="relative bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-slate-700">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-red-500/20 rounded-full">
-                <AlertTriangle className="w-6 h-6 text-red-400" />
+      {
+        deleteConfirmOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            onKeyDown={(e) => { if (e.key === 'Escape') setDeleteConfirmOpen(null); }}
+            tabIndex={-1}
+          >
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm cursor-pointer" onClick={() => setDeleteConfirmOpen(null)} />
+            <div className="relative bg-slate-800 rounded-xl p-6 w-full max-w-md shadow-2xl border border-slate-700">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-red-500/20 rounded-full">
+                  <AlertTriangle className="w-6 h-6 text-red-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-white">{t('sidebar.deleteChat')}</h3>
               </div>
-              <h3 className="text-lg font-semibold text-white">{t('sidebar.deleteChat')}</h3>
-            </div>
-            <p className="text-slate-300 mb-6">
-              {t('sidebar.deleteChatConfirm')}
-            </p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setDeleteConfirmOpen(null)}
-                className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-700 transition-colors"
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={() => handleDeleteSession(deleteConfirmOpen.session_id)}
-                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
-              >
-                {t('common.delete')}
-              </button>
+              <p className="text-slate-300 mb-6">
+                {t('sidebar.deleteChatConfirm')}
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setDeleteConfirmOpen(null)}
+                  className="px-4 py-2 rounded-lg text-slate-300 hover:bg-slate-700 transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={() => handleDeleteSession(deleteConfirmOpen.session_id)}
+                  className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-medium transition-colors"
+                >
+                  {t('common.delete')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Auth Modal */}
       <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
@@ -2344,7 +1975,7 @@ function AppContent() {
         creditsHistory={creditsHistory}
         defaultTab={settingsDefaultTab}
       />
-    </div>
+    </div >
   );
 }
 
@@ -2425,62 +2056,62 @@ function AuthWrapper() {
             fetch(`${BASE_URL}/api/dashboard/tokens`).then(r => r.json()).catch(() => ({})),
             fetch(`${BASE_URL}/api/dashboard/fear-greed`).then(r => r.json()).catch(() => ({})),
           ]);
-    } catch (e) {
-      console.error('Initial data load error:', e);
+        } catch (e) {
+          console.error('Initial data load error:', e);
+        }
+
+        setInitialDataLoaded(true);
+      };
+
+      loadInitialData();
     }
-
-    setInitialDataLoaded(true);
-  };
-
-  loadInitialData();
-}
   }, [user, authLoading]);
 
-// 加载动画完成后隐藏
-const handleLoaderComplete = () => {
-  setShowLoader(false);
-};
+  // 加载动画完成后隐藏
+  const handleLoaderComplete = () => {
+    setShowLoader(false);
+  };
 
-// Auth 状态检查中 - 显示简单的 loading
-if (authLoading) {
-  return (
-    <div className="min-h-screen bg-black flex items-center justify-center">
-      <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full" />
-    </div>
-  );
-}
+  // Auth 状态检查中 - 显示简单的 loading
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="animate-spin w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full" />
+      </div>
+    );
+  }
 
-// Show LandingPage for unauthenticated users
-if (!user) {
-  return (
-    <>
-      <LandingPage
-        onLogin={handleLogin}
-        onLanguageChange={handleLanguageChange}
-        currentLanguage={i18n.language}
+  // Show LandingPage for unauthenticated users
+  if (!user) {
+    return (
+      <>
+        <LandingPage
+          onLogin={handleLogin}
+          onLanguageChange={handleLanguageChange}
+          currentLanguage={i18n.language}
+        />
+        <AuthModal
+          isOpen={showAuthModal}
+          onClose={() => setShowAuthModal(false)}
+          initialMode={authMode}
+        />
+      </>
+    );
+  }
+
+  // 已登录用户 - 显示全屏加载动画直到数据加载完成
+  if (showLoader) {
+    return (
+      <TerminalLoader
+        fullScreen={true}
+        isReady={initialDataLoaded}
+        onComplete={handleLoaderComplete}
       />
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        initialMode={authMode}
-      />
-    </>
-  );
-}
+    );
+  }
 
-// 已登录用户 - 显示全屏加载动画直到数据加载完成
-if (showLoader) {
-  return (
-    <TerminalLoader
-      fullScreen={true}
-      isReady={initialDataLoaded}
-      onComplete={handleLoaderComplete}
-    />
-  );
-}
-
-// Show main app for authenticated users
-return <AppContent />;
+  // Show main app for authenticated users
+  return <AppContent />;
 }
 
 export default App;

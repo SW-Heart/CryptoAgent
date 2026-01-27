@@ -126,7 +126,7 @@ def get_wallet(user_id: str = None):
     # 如果用户启用了 Binance 交易，使用 Binance 数据
     if user_id:
         try:
-            from binance_trading_tools import binance_get_positions_summary
+            from tools.binance_trading_tools import binance_get_positions_summary
             from binance_client import get_user_trading_status
             
             status = get_user_trading_status(user_id)
@@ -223,7 +223,7 @@ def get_positions(status: str = "OPEN", user_id: str = None):
     # 如果用户启用了 Binance 交易，使用 Binance 数据
     if user_id:
         try:
-            from binance_trading_tools import binance_get_positions_summary
+            from tools.binance_trading_tools import binance_get_positions_summary
             from binance_client import get_user_trading_status
             
             trading_status = get_user_trading_status(user_id)
@@ -533,7 +533,7 @@ def trigger_strategy_manually():
     
     try:
         # Import trading tools directly (avoid proxy issues with requests)
-        from trading_tools import open_position, get_positions_summary
+        from tools.trading_tools import open_position, get_positions_summary
         
         # Get current positions
         summary = get_positions_summary()
@@ -570,7 +570,7 @@ def trigger_strategy_manually():
 async def test_trade(symbol: str = "BTC", direction: str = "LONG", margin: float = 500):
     """Create a test trade position"""
     try:
-        from trading_tools import open_position
+        from tools.trading_tools import open_position
         
         result = open_position(
             symbol=symbol,

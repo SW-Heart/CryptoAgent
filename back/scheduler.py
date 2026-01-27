@@ -18,7 +18,7 @@ AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
 DB_PATH = os.getenv("DB_PATH", "tmp/test.db")
 
 # Use admin user ID for all scheduler operations
-from trading_tools import STRATEGY_ADMIN_USER_ID, set_current_user
+from tools.trading_tools import STRATEGY_ADMIN_USER_ID, set_current_user
 SCHEDULER_USER_ID = STRATEGY_ADMIN_USER_ID  # Scheduler runs as admin
 
 # ============= Scheduler State Management =============
@@ -121,7 +121,8 @@ def sync_binance_users_positions():
     """
     try:
         from binance_client import get_all_active_trading_users, get_user_binance_client
-        from binance_trading_tools import binance_get_positions_summary
+        from tools.binance_trading_tools import binance_get_positions_summary
+        from agents.suggested_questions_agent import generate_suggested_questions
         
         # Get all users with trading enabled
         users = get_all_active_trading_users()
@@ -350,7 +351,7 @@ def update_positions_prices():
         # Execute partial closes AFTER releasing the connection
         if partial_close_actions:
             set_current_user(SCHEDULER_USER_ID)
-            from trading_tools import partial_close_position
+            from tools.trading_tools import partial_close_position
             
             for action in partial_close_actions:
                 try:
@@ -375,7 +376,7 @@ def update_positions_prices():
         # Execute full closes AFTER releasing the connection
         if positions_to_close:
             set_current_user(SCHEDULER_USER_ID)
-            from trading_tools import close_position
+            from tools.trading_tools import close_position
             for pos_id, reason in positions_to_close:
                 try:
                     result = close_position(pos_id, reason=reason)
@@ -439,7 +440,7 @@ def trigger_strategy():
 def check_price_alerts():
     """Check if any price alerts have been triggered and call agent"""
     from price_alerts import get_pending_alerts, mark_alert_triggered
-    from trading_tools import get_current_price
+    from tools.trading_tools import get_current_price
     
     pending_alerts = get_pending_alerts()
     
@@ -652,7 +653,7 @@ def generate_daily_report():
                     
                     # Generate suggested questions based on the report
                     try:
-                        from suggested_questions_agent import generate_suggested_questions
+                        from agents.suggested_questions_agent import generate_suggested_questions
                         from app.routers.daily_report import save_suggested_questions
                         
                         print(f"[DailyReport] Generating suggested questions for {language}...")

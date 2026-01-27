@@ -13,14 +13,14 @@ import threading
 
 # Import both Agents
 # Import agents
-from crypto_agent import crypto_agent
-from trading_agent import trading_agent
-from daily_report_agent import daily_report_agent
-from swap_agent import swap_agent  # A2UI DEX 交易 Agent
+from agents.crypto_agent import crypto_agent
+from agents.trading_agent import trading_agent
+from agents.daily_report_agent import daily_report_agent
+from agents.swap_agent import swap_agent  # A2UI DEX 交易 Agent
 from agno.os import AgentOS
 
 # Import user context setter
-from trading_tools import set_current_user
+from tools.trading_tools import set_current_user
 
 # Create AgentOS with all agents
 agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent, swap_agent])
@@ -220,15 +220,15 @@ print("[Main] Daily report scheduler started (always runs)")
 
 # ============= Cache Warmup =============
 # Pre-populate dashboard cache on startup to eliminate first-load delay
-from app.services.cache_warmup import start_warmup_thread
-warmup_thread = start_warmup_thread()
-print("[Main] Cache warmup started in background")
+# from app.services.cache_warmup import start_warmup_thread
+# warmup_thread = start_warmup_thread()
+print("[Main] Cache warmup disabled")
 
 
 # ============= Swap Quote API =============
 # 供前端 SwapCard 获取实时报价数据
 from fastapi import Query
-from swap_tools import get_swap_quote
+from tools.swap_tools import get_swap_quote
 
 @app.get("/api/swap/quote")
 async def get_quote(

@@ -576,7 +576,7 @@ def get_positions_summary(user_id: str = None) -> dict:
         dict with wallet and position info
     """
     # 演示模式：所有人都看Admin的仓位
-    from trading_tools import STRATEGY_ADMIN_USER_ID
+    from tools.trading_tools import STRATEGY_ADMIN_USER_ID
     effective_user = STRATEGY_ADMIN_USER_ID  # 固定使用Admin账户
     
     conn = get_db()

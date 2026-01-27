@@ -21,7 +21,7 @@ load_dotenv()
 LLM_KEY = getenv("OPENAI_API_KEY")
 
 # 导入合并工具 (减少 token 消耗)
-from crypto_tools import (
+from tools.crypto_tools import (
     get_macro_overview,           # 合并: 恐贪 + BTC主导率 + 市值
     get_batch_technical_analysis, # 合并: 周期对齐 + EMA + ATR + 费率
     get_key_levels,               # 合并: Fib + EMA + POC + 共振区
@@ -51,11 +51,11 @@ from indicator_memory import get_indicator_reliability, get_indicator_reliabilit
 from kline_analysis import analyze_kline
 
 # 导入ETF工具 (宏观参考)
-from etf_tools import get_etf_daily
+from tools.etf_tools import get_etf_daily
 
 # 导入交易执行工具
 # 注意：使用 Binance 版本进行真实交易，同时保留虚拟版本的一些工具
-from binance_trading_tools import (
+from tools.binance_trading_tools import (
     binance_open_position as open_position,
     binance_close_position as close_position,
     binance_get_positions_summary as get_positions_summary,
@@ -64,7 +64,7 @@ from binance_trading_tools import (
 )
 
 # 虚拟交易版本的日志和警报工具（这些不涉及 Binance）
-from trading_tools import (
+from tools.trading_tools import (
     log_strategy_analysis,
     # 价格警报工具
     set_price_alert,
