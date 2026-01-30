@@ -23,35 +23,22 @@ LLM_KEY = getenv("OPENAI_API_KEY")
 # 导入合并工具 (减少 token 消耗)
 from tools.crypto_tools import (
     get_macro_overview,           # 合并: 恐贪 + BTC主导率 + 市值
-    get_batch_technical_analysis, # 合并: 周期对齐 + EMA + ATR + 费率
-    get_key_levels,               # 合并: Fib + EMA + POC + 共振区
+    get_macro_overview,           # 合并: 恐贪 + BTC主导率 + 市值
+    get_key_levels,               # 关键位一站式
     get_pro_crypto_news,          # 新闻 (独立，内容长)
     get_trending_tokens,          # 热门代币榜
 )
 
-# 导入专业技术分析工具
-from technical_analysis import (
-    get_multi_timeframe_analysis,
-    get_ema_structure,
-    get_vegas_channel,
-    get_macd_signal,
-    get_volume_analysis,
-    get_volume_profile
-)
-
-# 导入趋势线分析
-from pattern_recognition import (
-    get_trendlines,
-)
-
-# 导入历史规律记忆
-from indicator_memory import get_indicator_reliability, get_indicator_reliability_all_timeframes
+# 导入聚合技术指标工具
+from tools.technical_aggregator import get_all_technical_indicators
 
 # 导入 K 线图视觉分析工具
 from kline_analysis import analyze_kline
 
 # 导入ETF工具 (宏观参考)
 from tools.etf_tools import get_etf_daily
+# 导入Polymarket工具 (市场预测/宏观)
+from tools.polymarket import get_market_odds
 
 # 导入交易执行工具
 # 注意：使用 Binance 版本进行真实交易，同时保留虚拟版本的一些工具
@@ -84,30 +71,15 @@ trading_agent = Agent(
     tools=[
         # ========== 一站式查询工具 ==========
         get_macro_overview,           # 宏观一站式
-        get_batch_technical_analysis, # 综合技术分析一站式
-        get_key_levels,               # 关键位一站式
-        get_pro_crypto_news,          # 深度新闻
-        get_trending_tokens,          # 热门代币榜
-        get_etf_daily,                # ETF 资金流
-        
-        # ========== 专业技术分析 (细颗粒度) ==========
-        get_multi_timeframe_analysis,  # 多周期综合 (主入口)
-        get_ema_structure,             # EMA 均线结构分析
-        get_vegas_channel,             # Vegas 通道分析
-        get_macd_signal,               # MACD 信号分析
-        get_volume_analysis,           # 量价关系分析
-        get_volume_profile,            # 密集成交区识别
-        get_trendlines,                # 趋势线识别
-        get_indicator_reliability,     # 指标历史可靠性
-        get_indicator_reliability_all_timeframes,
-        
+        # ========== 聚合技术分析 (核心) ==========
+        get_all_technical_indicators, # 包含: 趋势、MACD、Vegas、成交量、形态、共振区、历史可靠性
         # ========== K 线视觉分析 (核心) ==========
         analyze_kline,                 # K 线图视觉形态分析 (CHART-IMG + GPT-4o-mini)
         
         # ========== 持仓与警报 ==========
         get_positions_summary,        # Binance 持仓汇总
         get_price_alerts,             # 价格警报列表
-        
+
         # ========== 交易执行 ==========
         open_position,                # Binance 开仓
         close_position,               # Binance 平仓
@@ -123,7 +95,8 @@ trading_agent = Agent(
 
 ---
 
-## ⚡ 直接执行模式 (Fast Track)
+## ⚡ 直接执行模式
+
 
 **当用户明确提供完整交易参数时，无需纠结，立即执行！**
 
@@ -137,27 +110,28 @@ trading_agent = Agent(
 
 ---
 
-## 🕵️ 职业交易员工作流 (Analytical Track)
+## 🕵️ 职业交易员工作流
+
 
 对于需要分析的请求，严格遵守以下流程，确保"数据共振"：
 
-### Step 1: 视觉验证 (The Edge)
+### 第一步: 视觉验证
+
 - **CRITICAL**: 在做任何决策前，必须先调用 `analyze_kline(symbol, intervals="D,240")`。
 - 视觉 LLM 会识别你可能在数值计算中忽略的：**形态 (旗形/楔形)、和谐形态、甚至潜在的陷阱**。
 - 将视觉分析结论作为你决策的最重要权重之一。
 
-### Step 2: 趋势共振分析 (The Compass)
-- 调用 `get_multi_timeframe_analysis(symbol)` 检查日线与 4H 周期。
-- 只有当日线 (趋势方向) 与 4H (入场点位) 形成 Confluence 时才考虑交易。
-- 顺大逆小原则：日线多头 → 4H 回踩支撑 → **BUY**。
-
-### Step 3: 指标可靠性与量价 (The Filter)
-- 调用 `get_indicator_reliability(symbol)`。如果某个指标在过去 30 笔交易中表现极差，请降低其权重。
-- 调用 `get_volume_analysis(symbol)` 检查是否为"缩量反弹"或"缩量回踩"。
-
-### Step 4: 风险评估与执行 (The Execution)
-- 计算止损：使用 `get_volatility_analysis(symbol)` 获取 ATR。
-- 止损位：结构位 ± (1.5 × ATR)。
+### 第二步: 数据共振分析 (One-Shot)
+ 
+- 调用 `get_all_technical_indicators(symbols, timeframe="1d")` 获取全面报告。
+- 重点关注报告中的 "TREND STRUCTURE" (日线与 4H 是否共振) 和 "CONFLUENCE ZONES" (共振支撑位)。
+- 检查 "HISTORICAL RELIABILITY"：如果某个指标在过去 30 笔交易中表现极差，请降低其权重。
+- 顺大逆小原则：日线多头 + 4H 回踩支撑 + 缩量 (Volume Analysis) → **BUY**。
+ 
+### 第三步: 风险评估与执行
+ 
+- 从 "CONFLUENCE ZONES" 中寻找最近的强支撑作为止损参考。
+- 止损设定：支撑位下方 1% 或结构位 - ATR。
 - 检查盈亏比 (R:R)：必须 ≥ 1.5 才可执行开仓。
 
 ---
@@ -168,10 +142,7 @@ trading_agent = Agent(
 | 场景 | 工具 | 目的 |
 |-----|-----|-----|
 | **视觉形态** | `analyze_kline` | 识别形态、趋势、视觉陷阱 |
-| **综合趋势** | `get_multi_timeframe_analysis` | 寻找日线与 4H 的共振信号 |
-| **通道/支撑** | `get_vegas_channel`, `get_key_levels` | 寻找具体的入场和防守位 |
-| **风险/止损** | `get_volatility_analysis` | 基于波动率计算科学止损距离 |
-| **可靠性** | `get_indicator_reliability` | 剔除当前无效的指标信号 |
+| **全面分析** | `get_all_technical_indicators` | 获取趋势、支撑阻力、量价、形态、可靠性一站式报告 |
 
 ---
 
@@ -181,6 +152,7 @@ trading_agent = Agent(
 2. **严禁扛单**: 止损一旦设定，除非由于重大黑天鹅手动干预平仓，否则严禁向亏损方向移动。
 3. **仓位管理**: BTC/ETH 单笔风险(SL) 占总权益比例控制在 10% 以内；山寨币控制在 2% 以内。
 4. **拒绝噪音**: 1H 周期以下的波动视为噪音，分析至少从 4H 开始。
+5. **优先限价单**: 除非为了止损或紧急追涨，否则优先使用 `open_position(..., order_type="LIMIT")` 限价单开仓，以降低手续费（Maker 费率）。
 
 ---
 

@@ -14,7 +14,7 @@ CRYPTOPANIC_BASE_URL = "https://cryptopanic.com/api/developer/v2/posts/"
 # 🧱 基础组件：混合数据源 (Binance + DexScreener)
 # ==========================================
 
-def _get_binance_data(symbol: str):
+def get_binance_data(symbol: str):
     """
     尝试从 Binance 获取实时价格和 K 线 (毫秒级延迟)
     """

@@ -30,7 +30,7 @@ import { AGENT_ID, AGENT_ANALYST_ID, AGENT_TRADER_ID, AGENT_SWAP_ID, BASE_URL, d
 import { COIN_DATA, detectCoinsFromText, formatPrice, getOrCreateTempUserId } from './utils';
 import { QuickPrompts, QuickPromptsPills, LatestNews, PopularTokens, KeyIndicators, TrendingBar, SuggestedQuestion } from './components/dashboard';
 import { ToolStep, CoinButton, CoinButtonBar } from './components/chat';
-import { A2UIRenderer, extractA2UIBlocks, SwapCard } from './components/a2ui';
+import { A2UIRenderer, extractA2UIBlocks, SwapCard, A2UISkeleton } from './components/a2ui';
 
 
 // --- SwapCard with API Quote Fetch (定义在 App 外部，避免重新挂载) ---
@@ -522,6 +522,7 @@ function AppContent() {
       let currentEvent = null;
       const activeTools = {}; // Track active tool calls: { toolCallId: { name, startTime } }
       let runMetrics = null; // Store metrics from RunCompleted event
+      let a2uiSurfaces = []; // 🔥 收集工具返回的 A2UI surfaces（直接渲染，不通过文本流）
 
       while (true) {
         const { done, value } = await reader.read();
@@ -568,11 +569,13 @@ function AppContent() {
                   return newMsgs;
                 });
               } else if (currentEvent === 'ToolCallCompleted' || data.event === 'ToolCallCompleted') {
+                console.log('[A2UI DEBUG] RAW SSE DATA:', JSON.stringify(data)); // 🔥 查看完整数据结构
                 // Tool call completed - update with precise time
                 const toolName = data.tool?.tool_name || 'tool';
                 const toolCallId = data.tool?.tool_call_id || toolName;
                 const duration = data.tool?.metrics?.duration || 0;
-                const toolContent = data.tool?.content || '';
+                // 🔥 Critical Fix: Agno 可能会把工具结果放在 context 或 result 字段中
+                const toolContent = data.tool?.content || data.tool?.result || '';
                 const toolArgs = data.tool?.tool_args || {};
 
                 // Replace the running tool line with completed version
@@ -586,28 +589,39 @@ function AppContent() {
                   assistantMessage = assistantMessage.replace(runningPattern, completedLine);
                 }
 
-                // 🔥 关键修改: 如果是 generate_swap_a2ui 工具
-                if (toolName === 'generate_swap_a2ui') {
-                  console.log('[A2UI] Tool completed:', { toolContent: toolContent?.substring(0, 100), toolArgs });
+                // 🔥 A2UI 工具统一处理：直接解析 JSON，存入 a2uiSurfaces，不追加到文本流
+                if (toolName === 'generate_swap_a2ui' || toolName === 'generate_market_ticker_a2ui') {
+                  console.log('[A2UI DEBUG] Tool completed:', toolName);
+                  console.log('[A2UI DEBUG] Tool Content Preview:', JSON.stringify(toolContent?.substring(0, 100)));
 
-                  // 方案1: 如果 SSE 包含工具内容
                   if (toolContent && toolContent.includes('```a2ui')) {
-                    assistantMessage += '\n\n' + toolContent;
-                    console.log('[A2UI] Added tool content to message');
+                    // 解析 A2UI JSON
+                    const match = toolContent.match(/```a2ui\s*([\s\S]*?)```/);
+                    console.log('[A2UI DEBUG] Regex match:', !!match);
+
+                    if (match) {
+                      try {
+                        const parsed = JSON.parse(match[1]);
+                        a2uiSurfaces.push({
+                          toolName,
+                          surface: parsed.surface,
+                          timestamp: Date.now()
+                        });
+                        console.log('[A2UI DEBUG] Parsed surface:', parsed.surface?.id);
+
+                        // 🔥 立即更新消息，触发渲染
+                        setMessages(prev => {
+                          const newMsgs = [...prev];
+                          const lastMsg = newMsgs[newMsgs.length - 1];
+                          lastMsg.a2uiSurfaces = [...a2uiSurfaces];
+                          return newMsgs;
+                        });
+                      } catch (e) {
+                        console.warn('[A2UI] Parse error:', e);
+                      }
+                    }
                   }
-                  // 方案2: 如果没有内容但有参数，创建一个嵌入式 SwapCard 标记
-                  else if (toolArgs && (toolArgs.from_token || toolArgs.fromToken)) {
-                    const swapParams = JSON.stringify({
-                      fromToken: toolArgs.from_token || toolArgs.fromToken,
-                      toToken: toolArgs.to_token || toolArgs.toToken,
-                      amount: toolArgs.amount,
-                      network: toolArgs.network || 'ethereum',
-                      pending: true  // 标记为待获取完整数据
-                    });
-                    // 添加一个特殊标记，MessageContent 会识别并渲染 SwapCard
-                    assistantMessage += `\n\n<!-- SWAP_CARD_PLACEHOLDER:${swapParams} -->`;
-                    console.log('[A2UI] Added SwapCard placeholder');
-                  }
+                  // 不再追加 toolContent 到 assistantMessage
                 }
 
                 setMessages(prev => {
@@ -630,6 +644,7 @@ function AppContent() {
                 // Regular content update (RunContent events)
                 setIsThinking(false); // Got content, not thinking
                 assistantMessage += data.content;
+
                 setMessages(prev => {
                   const newMsgs = [...prev];
                   const lastMsg = newMsgs[newMsgs.length - 1];
@@ -971,14 +986,15 @@ function AppContent() {
     );
   };
 
-  const MessageContent = ({ content, toolStartTimes, messageIndex }) => {
+  const MessageContent = ({ content, toolStartTimes, messageIndex, a2uiSurfaces = [] }) => {
     // A2UI 状态管理
     const [a2uiStatus, setA2uiStatus] = useState(null); // 'connecting' | 'pending' | 'success' | 'failed' | 'cancelled'
     const [statusMessage, setStatusMessage] = useState('');
     const [txHash, setTxHash] = useState(null);
 
-    // 检测 A2UI 内容
-    const { hasA2UI, a2uiBlocks, cleanContent } = extractA2UIBlocks(content);
+    // 🔥 优先使用直接传入的 a2uiSurfaces（来自工具输出），否则从 content 提取
+    const { hasA2UI: hasA2UIFromContent, a2uiBlocks, cleanContent } = extractA2UIBlocks(content);
+    const hasA2UI = a2uiSurfaces.length > 0 || hasA2UIFromContent;
 
     // 处理 A2UI 动作
     const handleA2UIAction = async (actionId, params) => {
@@ -1005,7 +1021,18 @@ function AppContent() {
     contentToRender = contentToRender.replace(/<!-- SWAP_CARD_PLACEHOLDER:.*? -->/g, '');
 
     // 移除所有 ```a2ui ... ``` 代码块（已由 SwapCard 组件渲染）
-    contentToRender = contentToRender.replace(/```a2ui[\s\S]*?```/g, '');
+    // 注意：放宽正则匹配，处理可能缺失换行符的情况，并使用非贪婪匹配
+    // 使用与 A2UIRenderer.jsx 一致的宽容正则
+    const a2uiPattern = /```a2ui\s*([\s\S]*?)```/g;
+
+    // 如果 hasA2UI 为 true，则 cleanContent 应该已经移除了这些块。
+    // 但为了保险，我们在这里再尝试移除一次（以防 regex 不匹配或 cleanContent 逻辑有误）
+    contentToRender = contentToRender.replace(a2uiPattern, '');
+    contentToRender = contentToRender.replace(a2uiPattern, '');
+    contentToRender = contentToRender.replace(a2uiPattern, '');
+
+    // 额外清理可能残留的空行
+    contentToRender = contentToRender.replace(/\n\s*\n\s*\n/g, '\n\n');
 
     // Filter out raw tool output that shouldn't be displayed (log_strategy_analysis raw data)
     // These contain position_check=, strategy_decision=, action_taken= etc.
@@ -1016,7 +1043,7 @@ function AppContent() {
     // Robust Regex to tokenize content into Text and Tools
     // Updated to support all tool patterns including trading tools
     // For log_strategy_analysis, match until "completed" to handle complex nested content
-    const TOKEN_REGEX = /(Running: .*?|Searching .*?|Browsing .*?|log_strategy_analysis\([^)]*\)(?:\s+completed(?:\s+策略执行完成)?(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?|(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position|generate_swap_a2ui)\([^)]*\)(?:\s+completed(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?)/g;
+    const TOKEN_REGEX = /(Running: .*?|Searching .*?|Browsing .*?|log_strategy_analysis\([^)]*\)(?:\s+completed(?:\s+策略执行完成)?(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?|(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position|generate_swap_a2ui|generate_market_ticker_a2ui)\([^)]*\)(?:\s+completed(?:\s+in\s+(?:~)?[\d\.]+s\.?)?)?)/g;
 
     const parts = filteredContent.split(TOKEN_REGEX);
 
@@ -1035,7 +1062,7 @@ function AppContent() {
 
       // Check if the part matches our tool patterns
       const isTool =
-        trimmed.match(/^(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|log_strategy_analysis|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position|generate_swap_a2ui)\(/) ||
+        trimmed.match(/^(?:get_\w+|search_\w+|duckduckgo_\w+|search_exa|search|browse|log_strategy_analysis|open_position|close_position|update_stop_loss_take_profit|get_positions_summary|partial_close_position|generate_swap_a2ui|generate_market_ticker_a2ui)\(/) ||
         trimmed.startsWith('Searching') ||
         trimmed.startsWith('Browsing') ||
         trimmed.startsWith('Running');
@@ -1109,8 +1136,18 @@ function AppContent() {
           );
         })}
 
-        {/* 渲染 A2UI 交易卡片 (从 ```a2ui 代码块) */}
-        {hasA2UI && !swapCardParams && a2uiBlocks.map((block, idx) => (
+        {/* 🔥 渲染 A2UI 卡片（优先使用直接传入的 surfaces，无需从 content 提取） */}
+        {a2uiSurfaces.length > 0 && a2uiSurfaces.map((item, idx) => (
+          <div key={`a2ui-direct-${idx}`} className="mt-4 w-full max-w-md">
+            <A2UIRenderer
+              surface={item.surface}
+              onAction={handleA2UIAction}
+            />
+          </div>
+        ))}
+
+        {/* 兼容旧模式：从 content 提取的 A2UI 块（fallback） */}
+        {a2uiSurfaces.length === 0 && hasA2UI && !swapCardParams && a2uiBlocks.map((block, idx) => (
           <div key={`a2ui-${idx}`} className="mt-4 w-full max-w-md">
             {a2uiStatus ? (
               // 显示交易状态
@@ -1118,6 +1155,15 @@ function AppContent() {
                 status={a2uiStatus}
                 txHash={txHash}
               />
+            ) : block.error ? (
+              // 显示解析错误
+              <div className="p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-xs font-mono overflow-auto">
+                <div className="font-bold mb-1">A2UI Parse Error:</div>
+                {block.error}
+                <div className="mt-2 text-slate-500 border-t border-red-500/20 pt-2">
+                  {block.raw.substring(0, 100)}...
+                </div>
+              </div>
             ) : (
               // 渲染 A2UI 组件
               <A2UIRenderer
@@ -1645,7 +1691,7 @@ function AppContent() {
             {messages.length === 0 ? (
               // --- Home View (Manus Style) - scrollable ---
               <div className="flex-1 overflow-x-hidden overflow-y-auto">
-                <div className="min-h-full flex flex-col items-center justify-center py-16 md:py-20 px-4">
+                <div className="min-h-full flex flex-col items-center justify-center pb-40 px-4">
                   {/* Title and Input - centered 768px width */}
                   <div className="w-full space-y-6 text-center mb-8" style={{ maxWidth: '768px' }}>
 
@@ -1655,7 +1701,7 @@ function AppContent() {
                     />
 
                     <div className="relative group">
-                      <div className="relative bg-[#131722] border border-white/10 rounded-2xl flex flex-col p-5 shadow-xl">
+                      <div className="relative bg-[#131722] border border-white/10 rounded-full flex items-center gap-2 p-2 shadow-xl shadow-purple-900/5 transition-all hover:border-purple-500/30 group-focus-within:border-purple-500/50 group-focus-within:shadow-purple-500/10 active:scale-[0.998]">
                         {/* Text input area */}
                         <textarea
                           ref={inputRef}
@@ -1671,63 +1717,20 @@ function AppContent() {
                               handleSend();
                             }
                           }}
-                          placeholder={
-                            selectedAgent === 'trader'
-                              ? t('agentMode.traderPlaceholder')
-                              : selectedAgent === 'swap'
-                                ? t('agentMode.swapPlaceholder', '输入交易指令，如：购买 1000U 的 BTC')
-                                : t('agentMode.analystPlaceholder')
-                          }
-                          className="w-full bg-transparent border-none outline-none focus:ring-0 focus:outline-none resize-none text-slate-100 placeholder:text-slate-500 text-lg leading-relaxed font-light"
+                          placeholder={t('agentMode.analystPlaceholder')}
+                          className="flex-1 bg-transparent border-none outline-none focus:ring-0 focus:outline-none resize-none text-slate-100 placeholder:text-slate-500 text-lg leading-relaxed font-light py-2 pl-6"
                           rows={1}
                           style={{ minHeight: '48px', maxHeight: '120px' }}
                         />
 
-                        {/* Toolbar - no divider, just spacing */}
-                        <div className="flex items-center justify-between mt-4">
-                          {/* Agent Mode Tabs - inline toggle like the reference image */}
-                          {messages.length === 0 && (
-                            <div className="flex items-center bg-slate-800 rounded-lg p-1">
-                              <button
-                                onClick={() => setSelectedAgent('analyst')}
-                                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${selectedAgent === 'analyst'
-                                  ? 'bg-slate-700 text-white'
-                                  : 'text-slate-400 hover:text-white'
-                                  }`}
-                              >
-                                {t('agentMode.analyst')}
-                              </button>
-                              <button
-                                onClick={() => setSelectedAgent('trader')}
-                                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${selectedAgent === 'trader'
-                                  ? 'bg-slate-700 text-white'
-                                  : 'text-slate-400 hover:text-white'
-                                  }`}
-                              >
-                                {t('agentMode.trader')}
-                              </button>
-                              <button
-                                onClick={() => setSelectedAgent('swap')}
-                                className={`px-3 py-1 text-sm font-medium rounded-md transition-all ${selectedAgent === 'swap'
-                                  ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white'
-                                  : 'text-slate-400 hover:text-white'
-                                  }`}
-                              >
-                                {t('agentMode.swap', '操盘手')}
-                              </button>
-                            </div>
-                          )}
-                          {messages.length > 0 && <div />}
-
-                          {/* Send button - solid purple */}
-                          <button
-                            onClick={() => handleSend()}
-                            disabled={!input.trim()}
-                            className="w-8 h-8 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white disabled:opacity-30 disabled:bg-slate-600 flex items-center justify-center transition-all shadow-lg shadow-indigo-500/20"
-                          >
-                            <ArrowUp className="w-4 h-4" />
-                          </button>
-                        </div>
+                        {/* Send button - inline */}
+                        <button
+                          onClick={() => handleSend()}
+                          disabled={!input.trim()}
+                          className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-30 disabled:bg-slate-700 flex items-center justify-center transition-all shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/40 transform hover:-translate-y-0.5 active:translate-y-0 mr-1"
+                        >
+                          <ArrowUp className="w-5 h-5" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1755,7 +1758,7 @@ function AppContent() {
                             <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                           </div>
                         ) : (
-                          <MessageContent content={msg.content} toolStartTimes={toolStartTimes} messageIndex={idx} />
+                          <MessageContent content={msg.content} toolStartTimes={toolStartTimes} messageIndex={idx} a2uiSurfaces={msg.a2uiSurfaces} />
                         )}
                       </div>
                     ))}
@@ -1807,7 +1810,7 @@ function AppContent() {
                 {/* Chat Input Area */}
                 <div className="p-4 bg-black">
                   <div className="max-w-3xl mx-auto relative">
-                    <div className="relative flex items-end gap-2 bg-[#131722] rounded-xl">
+                    <div className="relative flex items-end gap-2 bg-[#131722] rounded-3xl pl-2">
                       <textarea
                         ref={inputRef}
                         value={input}
@@ -1824,7 +1827,7 @@ function AppContent() {
                           }
                         }}
                         placeholder="Message Crypto Analyst..."
-                        className="w-full p-3.5 bg-transparent border-none focus:ring-0 resize-none text-slate-100 placeholder:text-slate-500 text-sm leading-relaxed overflow-y-auto"
+                        className="w-full p-3.5 bg-transparent border-none focus:ring-0 resize-none text-slate-100 placeholder:text-slate-500 text-sm leading-relaxed overflow-y-auto pl-4"
                         rows={1}
                         style={{ minHeight: '48px', maxHeight: '120px' }}
                         disabled={isLoading}
@@ -1834,7 +1837,7 @@ function AppContent() {
                         {isLoading ? (
                           <button
                             onClick={handleStop}
-                            className="p-2 bg-slate-600 text-slate-300 hover:bg-slate-500 rounded-lg transition-colors"
+                            className="p-2 bg-slate-600 text-slate-300 hover:bg-slate-500 rounded-full transition-colors"
                           >
                             <StopCircle className="w-4 h-4" />
                           </button>
@@ -1842,7 +1845,7 @@ function AppContent() {
                           <button
                             onClick={() => handleSend()}
                             disabled={!input.trim()}
-                            className="p-2 bg-[#131722] hover:bg-slate-700 text-white disabled:opacity-30 rounded-lg transition-all duration-200"
+                            className="p-2 bg-[#131722] hover:bg-slate-700 text-white disabled:opacity-30 rounded-full transition-all duration-200"
                           >
                             <Send className="w-4 h-4" />
                           </button>

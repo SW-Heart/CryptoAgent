@@ -126,6 +126,8 @@ def binance_open_position(
     leverage: int = DEFAULT_LEVERAGE,
     stop_loss: float = None,
     take_profit: float = None,
+    order_type: str = "MARKET",
+    price: float = None,
     user_id: str = None
 ) -> dict:
     """
@@ -133,14 +135,17 @@ def binance_open_position(
     
     使用方法:
         open_position(symbol="BTC", direction="LONG", margin=100, leverage=10, stop_loss=89000)
+        open_position(symbol="BTC", direction="LONG", margin=100, order_type="LIMIT", price=85000)
     
     Args:
         symbol: 交易对 (BTC, ETH, SOL 或 BTCUSDT)
         direction: 方向 LONG(做多) 或 SHORT(做空)
         margin: 保证金金额 (USDT)
         leverage: 杠杆倍数 (默认10倍，最高125倍)
-        stop_loss: 止损价格 (可选)
-        take_profit: 止盈价格 (可选)
+        stop_loss: 止损价格 (可选，仅限 MARKET 单生效)
+        take_profit: 止盈价格 (可选，仅限 MARKET 单生效)
+        order_type: 订单类型 "MARKET" 或 "LIMIT" (默认 "MARKET")
+        price: 限价单价格 (当 order_type="LIMIT" 时必填)
         user_id: 用户ID (可选，自动从上下文获取)
     
     Returns:
@@ -155,6 +160,7 @@ def binance_open_position(
     # Validate inputs
     symbol = get_symbol_usdt(symbol)
     direction = direction.upper()
+    order_type = order_type.upper()
     
     if direction not in ["LONG", "SHORT"]:
         return {"error": "Direction must be LONG or SHORT"}
@@ -164,6 +170,9 @@ def binance_open_position(
     
     if leverage < 1 or leverage > 125:
         return {"error": "Leverage must be between 1 and 125"}
+        
+    if order_type == "LIMIT" and (price is None or price <= 0):
+        return {"error": "Price must be provided for LIMIT orders"}
     
     # Check user trading status
     if not has_user_api_keys(user_id):
@@ -186,7 +195,7 @@ def binance_open_position(
             if "No need to change" not in str(leverage_result.get("error", "")):
                 print(f"[BinanceTrading] Leverage warning: {leverage_result}")
         
-        # Get current price
+        # Get current price (for quantity calculation if Market, or reference if Limit)
         price_info = client.get_mark_price(symbol)
         if "error" in price_info:
             return {"error": f"Failed to get price: {price_info['error']}"}
@@ -196,8 +205,12 @@ def binance_open_position(
             return {"error": f"Invalid price for {symbol}"}
         
         # Calculate quantity
+        # For Limit orders, we use the specific limit price to calculate quantity
+        # For Market orders, we use current mark price
+        calc_price = price if order_type == "LIMIT" else current_price
+        
         notional_value = margin * leverage
-        quantity = notional_value / current_price
+        quantity = notional_value / calc_price
         quantity = round_quantity(symbol, quantity)
         
         # Check minimum order size
@@ -209,42 +222,62 @@ def binance_open_position(
         side = "BUY" if direction == "LONG" else "SELL"
         close_side = "SELL" if direction == "LONG" else "BUY"
         
-        # Build batch orders for atomic execution (开仓+止损+止盈一次性提交)
+        # Build batch orders
         orders = []
         
-        # 1. 开仓市价单
-        orders.append({
-            "symbol": symbol,
-            "side": side,
-            "type": "MARKET",
-            "quantity": str(quantity)
-        })
-        
-        # 2. 止损单 (if specified)
-        if stop_loss:
-            stop_loss = round_price(symbol, stop_loss)
+        # 1. 开仓单 (Main Order)
+        if order_type == "LIMIT":
+            # Limit Order
+            price = round_price(symbol, price)
             orders.append({
                 "symbol": symbol,
-                "side": close_side,
-                "type": "STOP_MARKET",
+                "side": side,
+                "type": "LIMIT",
+                "timeInForce": "GTC", # Good Till Cancel
                 "quantity": str(quantity),
-                "stopPrice": str(stop_loss),
-                "reduceOnly": "true"
+                "price": str(price)
             })
-        
-        # 3. 止盈单 (if specified)
-        if take_profit:
-            take_profit = round_price(symbol, take_profit)
+            
+            # NOTE: For Limit orders, we cannot safely attach SL/TP in the same batch 
+            # because the entry might not fill immediately, and reduceOnly orders 
+            # might be rejected or trigger inappropriately.
+            if stop_loss or take_profit:
+                print(f"[BinanceTrading] WARNING: SL/TP ignored for LIMIT order on {symbol}. "
+                      f"Please manage risk manually after fill.")
+        else:
+            # Market Order
             orders.append({
                 "symbol": symbol,
-                "side": close_side,
-                "type": "TAKE_PROFIT_MARKET",
-                "quantity": str(quantity),
-                "stopPrice": str(take_profit),
-                "reduceOnly": "true"
+                "side": side,
+                "type": "MARKET",
+                "quantity": str(quantity)
             })
+            
+            # 2. 止损单 (if specified, only for Market)
+            if stop_loss:
+                stop_loss = round_price(symbol, stop_loss)
+                orders.append({
+                    "symbol": symbol,
+                    "side": close_side,
+                    "type": "STOP_MARKET",
+                    "quantity": str(quantity),
+                    "stopPrice": str(stop_loss),
+                    "reduceOnly": "true"
+                })
+            
+            # 3. 止盈单 (if specified, only for Market)
+            if take_profit:
+                take_profit = round_price(symbol, take_profit)
+                orders.append({
+                    "symbol": symbol,
+                    "side": close_side,
+                    "type": "TAKE_PROFIT_MARKET",
+                    "quantity": str(quantity),
+                    "stopPrice": str(take_profit),
+                    "reduceOnly": "true"
+                })
         
-        print(f"[BinanceTrading] Placing batch orders: {len(orders)} orders")
+        print(f"[BinanceTrading] Placing batch orders: {len(orders)} orders (Type: {order_type})")
         
         # Use batch orders API for atomic execution
         batch_result = client.place_batch_orders(orders)
@@ -259,31 +292,37 @@ def binance_open_position(
         order_id = None
         sl_order_id = None
         tp_order_id = None
-        avg_price = current_price
-        executed_qty = quantity
+        avg_price = 0
+        executed_qty = 0
         
         for i, result in enumerate(batch_result):
             if "error" in result or "code" in result:
                 print(f"[BinanceTrading] Order {i+1} failed: {result}")
                 continue
             
-            order_type = result.get("type", "")
-            if order_type == "MARKET":
+            res_type = result.get("type", "")
+            if res_type == "MARKET" or res_type == "LIMIT":
                 order_id = result.get("orderId")
-                # 批量订单可能还没成交，先用计算值，后面可以查询
-                avg_price = float(result.get("avgPrice", 0) or 0) or current_price
-                executed_qty = float(result.get("executedQty", 0) or 0) or quantity
-            elif order_type == "STOP_MARKET":
+                avg_price = float(result.get("avgPrice", 0) or 0)
+                executed_qty = float(result.get("executedQty", 0) or 0)
+            elif res_type == "STOP_MARKET":
                 sl_order_id = result.get("orderId")
-            elif order_type == "TAKE_PROFIT_MARKET":
+            elif res_type == "TAKE_PROFIT_MARKET":
                 tp_order_id = result.get("orderId")
         
         # Check if main order succeeded
         if not order_id:
-            return {"error": "Failed to place market order"}
+            return {"error": "Failed to place order"}
         
-        # Calculate fee
+        # Calculate fee (estimate)
         fee = notional_value * FEE_RATE
+        
+        # Construct success message
+        msg = f"Opened {direction} position on {symbol}"
+        if order_type == "LIMIT":
+            msg = f"Placed LIMIT {direction} order on {symbol} at ${price}"
+            if stop_loss or take_profit:
+                msg += ". (Warning: SL/TP NOT set for Limit Order)"
         
         return {
             "success": True,
@@ -292,14 +331,15 @@ def binance_open_position(
             "direction": direction,
             "margin": margin,
             "leverage": leverage,
-            "entry_price": avg_price if avg_price > 0 else current_price,
+            "entry_price": avg_price if avg_price > 0 else (price if order_type == "LIMIT" else current_price),
             "quantity": executed_qty if executed_qty > 0 else quantity,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
+            "stop_loss": stop_loss if order_type == "MARKET" else None,
+            "take_profit": take_profit if order_type == "MARKET" else None,
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id,
             "fee": fee,
-            "message": f"Opened {direction} position on {symbol}"
+            "order_type": order_type,
+            "message": msg
         }
         
     except Exception as e:

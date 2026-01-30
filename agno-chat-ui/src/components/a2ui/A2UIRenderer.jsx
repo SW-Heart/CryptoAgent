@@ -67,6 +67,22 @@ const Icon = ({ name, size = 'md', color }) => {
     return <IconComponent className={`${sizeClass} ${colorClass}`} />;
 };
 
+const Badge = ({ label, color = 'primary' }) => {
+    const colorStyles = {
+        primary: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+        secondary: 'bg-slate-700 text-slate-300 border-slate-600',
+        success: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+        danger: 'bg-red-500/20 text-red-300 border-red-500/30',
+        warning: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+    }[color] || 'bg-slate-700 text-slate-300 border-slate-600';
+
+    return (
+        <span className={`px-2 py-0.5 rounded text-xs font-medium border ${colorStyles}`}>
+            {label}
+        </span>
+    );
+};
+
 const Button = ({ label, variant = 'primary', action_id, action_params, onAction, disabled }) => {
     const variantStyles = {
         primary: 'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white shadow-lg shadow-blue-500/25',
@@ -193,12 +209,17 @@ const Card = ({ children, title, variant = 'default', padding = 'lg' }) => {
  * @param {Function} onAction - Action 回调函数 (actionId, params) => void
  */
 const A2UIRenderer = ({ surface, onAction }) => {
-    if (!surface || !surface.surface) {
-        console.warn('[A2UIRenderer] Invalid surface:', surface);
+    // 兼容两种结构：
+    // 1. 完整 A2UI 结构: { type: "surfaceUpdate", surface: { ... } }
+    // 2. 直接 Surface 对象: { id: "...", components: [...] }
+    const surfaceData = surface.surface || surface;
+
+    if (!surfaceData || !surfaceData.components) {
+        console.warn('[A2UIRenderer] Invalid surface data:', surface);
         return null;
     }
 
-    const { components } = surface.surface;
+    const { components } = surfaceData;
     if (!components || !Array.isArray(components)) {
         console.warn('[A2UIRenderer] Invalid components:', components);
         return null;
@@ -234,6 +255,9 @@ const A2UIRenderer = ({ surface, onAction }) => {
 
             case 'icon':
                 return <Icon key={comp.id} {...props} />;
+
+            case 'badge':
+                return <Badge key={comp.id} {...props} />;
 
             case 'button':
                 return <Button key={comp.id} {...props} onAction={onAction} />;
@@ -274,7 +298,8 @@ const A2UIRenderer = ({ surface, onAction }) => {
  * @returns {Object} { hasA2UI: boolean, a2uiBlocks: Array, cleanContent: string }
  */
 export const extractA2UIBlocks = (content) => {
-    const a2uiPattern = /```a2ui\n([\s\S]*?)\n```/g;
+    // 使用更宽容的正则，允许省略换行符
+    const a2uiPattern = /```a2ui\s*([\s\S]*?)```/g;
     const blocks = [];
     let match;
 
@@ -289,6 +314,11 @@ export const extractA2UIBlocks = (content) => {
             });
         } catch (e) {
             console.warn('[A2UI] Failed to parse JSON:', e);
+            blocks.push({
+                error: e.message,
+                raw: match[0],
+                surface: null
+            });
         }
     }
 

@@ -22,7 +22,7 @@
     "agentMode": {
         "analyst": "Analyst",
         "trader": "Trader",
-        "analystPlaceholder": "Ask about fundamental analysis, token unlock schedules, or project whitepapers...",
+        "analystPlaceholder": "Ask for professional crypto analysis, trading strategies, or deep market insights...",
         "traderPlaceholder": "Check real-time chart, set entry price, or analyze support/resistance levels..."
     },
     "sidebar": {

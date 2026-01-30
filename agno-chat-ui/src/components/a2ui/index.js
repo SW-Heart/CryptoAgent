@@ -4,3 +4,4 @@
 
 export { default as A2UIRenderer, extractA2UIBlocks, renderMessageWithA2UI } from './A2UIRenderer';
 export { default as SwapCard } from './SwapCard';
+export { default as A2UISkeleton } from './A2UISkeleton';
