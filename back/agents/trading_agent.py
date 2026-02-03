@@ -101,29 +101,36 @@ def monitor_tool_usage(func):
     return wrapper
 
 import time
+import functools
+import asyncio
 
 # ========== Token Usage Monitor ==========
 def monitor_tool_usage(func):
     """Wrapper to log tool input/output sizes for token debugging"""
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         tool_name = func.__name__
-        # Log input size (approx)
         input_str = str(args) + str(kwargs)
         print(f"\n[TokenMonitor] 🟢 CALLING {tool_name}...")
         print(f"[TokenMonitor]    Input Size: {len(input_str)} chars")
         
         start_time = time.time()
         try:
-            result = func(*args, **kwargs)
+            # Check if function is a coroutine
+            if asyncio.iscoroutinefunction(func):
+                # This might be tricky inside a sync wrapper if the runner is sync
+                # But Agno tools are often called in a way that respects their nature
+                # Let's handle sync first, but wraps is the key for Metadata
+                result = func(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
+                
             duration = time.time() - start_time
-            
-            # Log output size
             result_str = str(result)
             result_len = len(result_str)
             print(f"[TokenMonitor] 🟡 FINISHED {tool_name} ({duration:.2f}s)")
             print(f"[TokenMonitor]    Output Size: {result_len} chars")
             
-            # Alert on massive outputs (>20k chars approx 5k tokens)
             if result_len > 10000:
                 print(f"[TokenMonitor] ⚠️ HUGE OUTPUT DETECTED (>10k chars) for {tool_name}!")
                 print(f"[TokenMonitor]    Preview: {result_str[:200]}...")
