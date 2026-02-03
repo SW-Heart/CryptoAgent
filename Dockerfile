@@ -36,7 +36,11 @@ RUN apt-get update && apt-get install -y \
     libxslt1-dev \
     libopenblas-dev \
     liblapack-dev \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Set timezone
+ENV TZ=Asia/Shanghai
 
 # Copy requirements first for cache
 COPY back/requirements.txt .

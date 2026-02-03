@@ -2,7 +2,7 @@
 Strategy API router.
 Handles virtual trading, positions, and strategy logs.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 import os
 from datetime import datetime
 from app.database import get_db_connection as get_db_connection
@@ -29,6 +29,7 @@ def init_strategy_tables():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS virtual_wallet (
                 id SERIAL PRIMARY KEY,
+                user_id TEXT UNIQUE,
                 initial_balance DOUBLE PRECISION DEFAULT 10000,
                 current_balance DOUBLE PRECISION DEFAULT 10000,
                 total_pnl DOUBLE PRECISION DEFAULT 0,
@@ -43,6 +44,7 @@ def init_strategy_tables():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 id SERIAL PRIMARY KEY,
+                user_id TEXT,
                 symbol TEXT NOT NULL,
 
             direction TEXT NOT NULL,
@@ -100,17 +102,68 @@ def init_strategy_tables():
                 raw_response TEXT
             )
         """)
+        
+        # Binance sync state table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS binance_sync_state (
+                user_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                last_trade_id BIGINT DEFAULT 0,
+                total_pnl DOUBLE PRECISION DEFAULT 0,
+                total_trades INTEGER DEFAULT 0,
+                win_trades INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, symbol)
+            )
+        """)
         conn.commit()
     
     # Initialize wallet if not exists
     with conn.cursor() as cursor:
         cursor.execute("""
-            INSERT INTO virtual_wallet (id, initial_balance, current_balance)
-            VALUES (1, 10000, 10000)
+            INSERT INTO virtual_wallet (id, user_id, initial_balance, current_balance)
+            VALUES (1, %s, 10000, 10000)
             ON CONFLICT (id) DO NOTHING
-        """)
+        """, (STRATEGY_ADMIN_USER_ID,))
         conn.commit()
     conn.close()
+    
+    # Run migrations
+    migrate_tables()
+
+def migrate_tables():
+    """Migrate tables to add missing columns"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            print("[Strategy] Checking migrations...")
+            
+            # Virtual wallet user_id
+            try:
+                cursor.execute("ALTER TABLE virtual_wallet ADD COLUMN IF NOT EXISTS user_id TEXT UNIQUE")
+            except Exception as e:
+                # Fallback for older Postgres versions if needed, or ignore if exists
+                print(f"[Strategy] virtual_wallet migration note: {e}")
+            
+            # Fix data: ensure ID 1 has user_id
+            cursor.execute("UPDATE virtual_wallet SET user_id = %s WHERE id = 1 AND user_id IS NULL", (STRATEGY_ADMIN_USER_ID,))
+            
+            # Positions user_id
+            try:
+                cursor.execute("ALTER TABLE positions ADD COLUMN IF NOT EXISTS user_id TEXT")
+            except Exception as e:
+                 print(f"[Strategy] positions migration note: {e}")
+
+            # Fix data: populate missing user_ids
+            cursor.execute("UPDATE positions SET user_id = %s WHERE user_id IS NULL", (STRATEGY_ADMIN_USER_ID,))
+            
+            print("[Strategy] Migrations completed")
+                
+        conn.commit()
+    except Exception as e:
+        print(f"[Strategy] Migration error: {e}")
+    finally:
+        conn.close()
 
 # GET endpoints for UI
 
@@ -133,6 +186,32 @@ def get_wallet(user_id: str = None):
             if status.get("is_configured") and status.get("is_trading_enabled"):
                 result = binance_get_positions_summary(user_id)
                 if "error" not in result:
+                    # Fetch synced stats from DB
+                    conn = get_db_connection()
+                    total_pnl = 0
+                    total_trades = 0
+                    win_trades = 0
+                    try:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                SELECT SUM(total_pnl), SUM(total_trades), SUM(win_trades)
+                                FROM binance_sync_state
+                                WHERE user_id = %s
+                            """, (user_id,))
+                            row = cursor.fetchone()
+                            if row and row[0] is not None:
+                                total_pnl = row[0]
+                                total_trades = row[1]
+                                win_trades = row[2]
+                    except Exception as db_e:
+                        print(f"[Strategy] Error fetching stats: {db_e}")
+                    finally:
+                        conn.close()
+
+                    win_rate = 0
+                    if total_trades > 0:
+                        win_rate = round(win_trades / total_trades * 100, 1)
+
                     return {
                         "source": "binance",
                         "initial_balance": None,  # Binance 不跟踪初始余额
@@ -140,10 +219,10 @@ def get_wallet(user_id: str = None):
                         "margin_in_use": result.get("margin_in_use", 0),
                         "unrealized_pnl": result.get("unrealized_pnl", 0),
                         "equity": result.get("equity", 0),
-                        "total_pnl": None,  # 需要单独跟踪
-                        "total_trades": None,
-                        "win_trades": None,
-                        "win_rate": None,
+                        "total_pnl": round(total_pnl, 2),
+                        "total_trades": total_trades,
+                        "win_trades": win_trades,
+                        "win_rate": win_rate,
                         "balance_breakdown": result.get("balance_breakdown", [])
                     }
         except Exception as e:
@@ -348,36 +427,65 @@ def get_positions(status: str = "OPEN", user_id: str = None):
 
 
 @router.get("/orders")
-def get_orders(user_id: str = None, limit: int = 20):
-    """Get open orders - from Binance if configured, otherwise from local DB"""
+def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT"):
+    """
+    Get orders - from Binance if configured, otherwise from local DB
+    
+    Args:
+        user_id: User ID
+        limit: Max orders to return
+        status: "OPEN" or "HISTORY"
+        symbols: Comma-separated symbols for history lookup (Binance requires symbol for history)
+    """
     try:
         # 如果 user_id 提供且已配置 Binance，获取 Binance 订单
         if user_id:
             from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
             
             if has_user_api_keys(user_id):
-                status = get_user_trading_status(user_id)
-                if status.get("is_trading_enabled"):
+                trading_status = get_user_trading_status(user_id)
+                # Allow viewing history even if trading is currently disabled, as long as keys exist
+                if trading_status.get("is_configured"):
                     client = get_user_binance_client(user_id)
                     if client:
                         try:
-                            binance_orders = client.get_open_orders()
+                            binance_orders = []
+                            
+                            if status == "OPEN":
+                                # Open orders don't strictly require symbol, but can be filtered
+                                binance_orders = client.get_open_orders()
+                            else:
+                                # History requires symbol iterations
+                                symbol_list = [s.strip().upper() for s in symbols.split(",")]
+                                for sym in symbol_list:
+                                    if not sym.endswith("USDT"):
+                                        sym += "USDT"
+                                    try:
+                                        sym_orders = client.get_order_history(symbol=sym, limit=limit)
+                                        if isinstance(sym_orders, list):
+                                            binance_orders.extend(sym_orders)
+                                    except Exception as e:
+                                        print(f"[Strategy] Error fetching order history for {sym}: {e}")
+                                
+                                # Sort combined history by time desc
+                                binance_orders.sort(key=lambda x: x.get("time", 0), reverse=True)
+                                # Limit total results
+                                binance_orders = binance_orders[:limit]
+
                             # 确保返回的是列表
                             if not isinstance(binance_orders, list):
                                 if isinstance(binance_orders, dict) and "code" in binance_orders:
                                     print(f"[Strategy] Binance error: {binance_orders}")
-                                    # Don't fallback silently if we know it's a Binance user
                                     return {"orders": [], "source": "binance_error", "error": str(binance_orders)}
                                 binance_orders = [] # Unknown format
                             
-                            if binance_orders: # Process if there are orders
-                                formatted_orders = []
+                            formatted_orders = []
                             for order in binance_orders:
                                 # 格式化 Binance 订单字段
                                 order_type = order.get("type", "")
                                 side = order.get("side", "")
                                 
-                                # 推断方向：对于止损/止盈订单，需要反推
+                                # 推断方向
                                 if order_type in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]:
                                     direction = "SHORT" if side == "BUY" else "LONG"
                                 else:
@@ -402,7 +510,9 @@ def get_orders(user_id: str = None, limit: int = 20):
                                     "type": order_type,
                                     "side": side,
                                     "quantity": float(order.get("origQty", 0)),
+                                    "filled_quantity": float(order.get("executedQty", 0)),
                                     "price": float(order.get("price", 0)),
+                                    "avg_price": float(order.get("avgPrice", 0)),
                                     "stop_price": float(order.get("stopPrice", 0)),
                                     "status": order.get("status"),
                                     "created_at": order.get("time"),
@@ -456,6 +566,281 @@ def get_orders(user_id: str = None, limit: int = 20):
         return {"orders": orders, "source": "local"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/trade-history")
+def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT", limit: int = 50):
+    """
+    Get trade history from Binance (Realan executed trades).
+    
+    Args:
+        user_id: User ID (required for Binance API)
+        symbols: Comma-separated list of symbols (e.g. "BTCUSDT,ETHUSDT")
+        limit: Number of trades per symbol
+    """
+    if not user_id:
+        # Fallback to local DB for demo/virtual users
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM orders WHERE status = 'FILLED' ORDER BY created_at DESC LIMIT %s",
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+            conn.close()
+            
+            trades = []
+            for row in rows:
+                trade = dict(row)
+                trade["source"] = "local_virtual"
+                trades.append(trade)
+            return {"trades": trades, "source": "local_virtual"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Fetch from Binance
+    try:
+        from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
+        
+        if not has_user_api_keys(user_id):
+             return {"trades": [], "source": "binance", "error": "API keys not configured"}
+             
+        client = get_user_binance_client(user_id)
+        if not client:
+            return {"trades": [], "source": "binance", "error": "Failed to create client"}
+            
+        symbol_list = [s.strip().upper() for s in symbols.split(",")]
+        all_trades = []
+        
+        for symbol in symbol_list:
+            # Add USDT if missing
+            if not symbol.endswith("USDT"):
+                symbol += "USDT"
+                
+            try:
+                trades = client.get_trade_history(symbol=symbol, limit=limit)
+                
+                if isinstance(trades, list):
+                    for t in trades:
+                        # Normalize fields
+                        all_trades.append({
+                            "id": t.get("id"),
+                            "order_id": t.get("orderId"),
+                            "symbol": t.get("symbol"),
+                            "side": t.get("side"),
+                            "price": float(t.get("price", 0)),
+                            "quantity": float(t.get("qty", 0)),
+                            "quote_quantity": float(t.get("quoteQty", 0)),
+                            "realized_pnl": float(t.get("realizedPnl", 0)),
+                            "commission": float(t.get("commission", 0)),
+                            "commission_asset": t.get("commissionAsset"),
+                            "time": t.get("time"),
+                            "position_side": t.get("positionSide"),
+                            "maker": t.get("maker"),
+                            "source": "binance"
+                        })
+            except Exception as e:
+                print(f"[Strategy] Error fetching trades for {symbol}: {e}")
+                # Continue to next symbol
+                
+        # Sort by time descending
+        all_trades.sort(key=lambda x: x["time"], reverse=True)
+        
+        return {"trades": all_trades, "source": "binance"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/income-history")
+def get_income_history(
+    user_id: str = None,
+    symbol: str = None,
+    income_type: str = None,
+    limit: int = 50
+):
+    """
+    获取收益历史记录（资金费率、已实现盈亏、手续费等）。
+    
+    Args:
+        user_id: User ID (required)
+        symbol: 交易对 (可选，如 "BTCUSDT")
+        income_type: 收益类型 (可选: REALIZED_PNL, FUNDING_FEE, COMMISSION, TRANSFER)
+        limit: 返回数量 (默认50，最大1000)
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from tools.binance_trading_tools import binance_get_income_history
+        
+        result = binance_get_income_history(
+            symbol=symbol,
+            income_type=income_type,
+            limit=limit,
+            user_id=user_id
+        )
+        
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/funding-rate")
+def get_funding_rate(symbol: str, limit: int = 10, user_id: str = None):
+    """
+    获取资金费率历史。
+    
+    Args:
+        symbol: 交易对 (如 "BTCUSDT" 或 "BTC")
+        limit: 返回数量 (默认10)
+        user_id: User ID (可选)
+    """
+    try:
+        from tools.binance_trading_tools import binance_get_funding_rate
+        
+        result = binance_get_funding_rate(
+            symbol=symbol,
+            limit=limit,
+            user_id=user_id
+        )
+        
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/adl-risk")
+def get_adl_risk(user_id: str):
+    """获取 ADL (自动减仓) 风险等级。"""
+    try:
+        from tools.binance_trading_tools import binance_get_adl_risk
+        result = binance_get_adl_risk(user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/force-orders")
+def get_force_orders(user_id: str, symbol: str = None, limit: int = 20):
+    """获取强平订单历史。"""
+    try:
+        from tools.binance_trading_tools import binance_get_force_orders
+        result = binance_get_force_orders(symbol=symbol, limit=limit, user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/leverage-bracket")
+def get_leverage_bracket(user_id: str, symbol: str = None):
+    """获取杠杆档位信息。"""
+    try:
+        from tools.binance_trading_tools import binance_get_leverage_info
+        result = binance_get_leverage_info(symbol=symbol, user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/commission-rate")
+def get_commission_rate_api(user_id: str, symbol: str):
+    """获取佣金费率。"""
+    try:
+        from tools.binance_trading_tools import binance_get_commission_rate
+        result = binance_get_commission_rate(symbol=symbol, user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trailing-stop")
+def place_trailing_stop(
+    user_id: str,
+    symbol: str,
+    callback_rate: float,
+    quantity: float = None,
+    close_percent: float = 100,
+    activation_price: float = None
+):
+    """设置跟踪止损订单。"""
+    try:
+        from tools.binance_trading_tools import binance_place_trailing_stop
+        result = binance_place_trailing_stop(
+            symbol=symbol,
+            callback_rate=callback_rate,
+            quantity=quantity,
+            close_percent=close_percent,
+            activation_price=activation_price,
+            user_id=user_id
+        )
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/position-mode")
+def get_position_mode(user_id: str):
+    """获取当前持仓模式。"""
+    try:
+        from tools.binance_trading_tools import binance_get_position_mode
+        result = binance_get_position_mode(user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/position-mode")
+def change_position_mode(user_id: str, dual_side: bool):
+    """切换持仓模式（需先平掉所有仓位）。"""
+    try:
+        from tools.binance_trading_tools import binance_change_position_mode
+        result = binance_change_position_mode(dual_side=dual_side, user_id=user_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/logs")
 def get_strategy_logs(limit: int = 10, offset: int = 0):
@@ -522,6 +907,9 @@ def get_equity_curve():
         
         return {"curve": curve}
     except Exception as e:
+        print(f"[EquityCurve] Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/trigger")
@@ -641,7 +1029,7 @@ from pydantic import BaseModel
 class BinanceKeysRequest(BaseModel):
     api_key: str
     api_secret: str
-    is_testnet: bool = True
+    is_testnet: bool = False  # Default to mainnet
 
 
 @router.post("/binance/keys")
@@ -794,3 +1182,57 @@ async def disable_trading(user_id: str = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@router.delete("/reset")
+async def reset_strategy(user_id: str = None):
+    """
+    Hard reset strategy tables (DROP & RECREATE).
+    WARNING: This will delete all strategy data!
+    """
+    if user_id != STRATEGY_ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            print("[Strategy] Resetting tables...")
+            cursor.execute("DROP TABLE IF EXISTS strategy_logs")
+            cursor.execute("DROP TABLE IF EXISTS orders")
+            cursor.execute("DROP TABLE IF EXISTS positions")
+            cursor.execute("DROP TABLE IF EXISTS virtual_wallet")
+            conn.commit()
+        conn.close()
+        
+        # Re-initialize
+        init_strategy_tables()
+        
+        return {"success": True, "message": "Strategy tables reset successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+# ============= Manual Strategy Trigger =============
+
+@router.post("/analysis/run")
+def run_strategy_analysis(
+    background_tasks: BackgroundTasks,
+    symbols: str = "BTC,ETH,SOL",
+    user_id: str = None
+):
+    """
+    手动触发策略分析 (异步后台执行)。
+    
+    Args:
+        symbols: 逗号分隔的币种列表
+    """
+    try:
+        from scheduler import trigger_strategy
+        
+        # Add task to background queue
+        background_tasks.add_task(trigger_strategy, symbols=symbols)
+        
+        return {
+            "status": "success",
+            "message": f"Strategy analysis started for {symbols}",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

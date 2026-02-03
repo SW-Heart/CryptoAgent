@@ -94,7 +94,7 @@ def init_binance_tables():
                 user_id TEXT PRIMARY KEY,
                 api_key_encrypted TEXT NOT NULL,
                 api_secret_encrypted TEXT NOT NULL,
-                is_testnet BOOLEAN DEFAULT TRUE,
+                is_testnet BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -108,7 +108,7 @@ def init_binance_tables():
             conn.rollback()
             print("[BinanceClient] Migrating user_binance_keys: Adding is_testnet column")
             with conn.cursor() as migration_cursor:
-                migration_cursor.execute("ALTER TABLE user_binance_keys ADD COLUMN is_testnet BOOLEAN DEFAULT TRUE")
+                migration_cursor.execute("ALTER TABLE user_binance_keys ADD COLUMN is_testnet BOOLEAN DEFAULT FALSE")
                 conn.commit()
     
     # User Trading Status table
@@ -134,7 +134,7 @@ def init_binance_tables():
 # API Key Management
 # ==========================================
 
-def save_user_api_keys(user_id: str, api_key: str, api_secret: str, is_testnet: bool = True) -> dict:
+def save_user_api_keys(user_id: str, api_key: str, api_secret: str, is_testnet: bool = False) -> dict:
     """
     Save user's Binance API keys (encrypted).
     
@@ -142,7 +142,7 @@ def save_user_api_keys(user_id: str, api_key: str, api_secret: str, is_testnet: 
         user_id: User ID
         api_key: Binance API Key
         api_secret: Binance API Secret
-        is_testnet: Whether to use testnet (default True)
+        is_testnet: Whether to use testnet (default False for mainnet)
     
     Returns:
         dict with success status
@@ -365,14 +365,14 @@ class BinanceFuturesClient:
     Handles authentication, request signing, and API calls.
     """
     
-    def __init__(self, api_key: str, api_secret: str, testnet: bool = True):
+    def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
         """
         Initialize the client.
         
         Args:
             api_key: Binance API Key
             api_secret: Binance API Secret
-            testnet: Use testnet if True, mainnet if False
+            testnet: Use testnet if True, mainnet if False (default: mainnet)
         """
         self.api_key = api_key
         self.api_secret = api_secret
@@ -384,13 +384,15 @@ class BinanceFuturesClient:
             "Content-Type": "application/x-www-form-urlencoded"
         })
         
-        # 测试网在某些网络环境下可能有 SSL 证书问题，允许跳过验证
-        # 注意：仅用于测试网，主网必须验证 SSL
+        # SSL 验证：正式网必须验证 SSL，测试网可选择跳过
         if testnet:
+            # 测试网在某些网络环境下可能有 SSL 证书问题，允许跳过验证
             self.session.verify = False
-            # 禁止 SSL 警告
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        else:
+            # 正式网强制启用 SSL 验证
+            self.session.verify = True
     
     def _get_timestamp(self) -> int:
         """Get current timestamp in milliseconds."""
@@ -437,6 +439,10 @@ class BinanceFuturesClient:
         params = params or {}
         
         if signed:
+            # Set recvWindow to 60000 (60 seconds) to tolerate clock skew and network latency
+            if "recvWindow" not in params:
+                params["recvWindow"] = 60000
+                
             params["timestamp"] = self._get_timestamp()
             params["signature"] = self._sign(params)
         
@@ -837,6 +843,179 @@ class BinanceFuturesClient:
         })
     
     # ==========================================
+    # Phase 4: 高级订单类型
+    # ==========================================
+    
+    def place_trailing_stop_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        callback_rate: float,
+        activation_price: float = None,
+        reduce_only: bool = True
+    ) -> dict:
+        """
+        下跟踪止损订单 (Trailing Stop Market)。
+        
+        跟踪止损会根据价格波动自动调整止损价格，
+        锁定利润的同时给予价格波动空间。
+        
+        Args:
+            symbol: 交易对
+            side: BUY (用于空头平仓) 或 SELL (用于多头平仓)
+            quantity: 数量
+            callback_rate: 回调比例 (0.1 = 0.1%, 范围 0.1-5)
+            activation_price: 激活价格 (可选，价格达到此点开始跟踪)
+            reduce_only: 是否仅平仓 (默认 True)
+        
+        Returns:
+            订单信息
+        
+        Example:
+            # 多头持仓，设置 1% 回调的跟踪止损
+            client.place_trailing_stop_order("BTCUSDT", "SELL", 0.001, callback_rate=1.0)
+            
+            # 设置激活价格的跟踪止损
+            client.place_trailing_stop_order("BTCUSDT", "SELL", 0.001, 
+                callback_rate=0.5, activation_price=100000)
+        """
+        params = {
+            "symbol": symbol,
+            "side": side.upper(),
+            "type": "TRAILING_STOP_MARKET",
+            "quantity": quantity,
+            "callbackRate": callback_rate,
+            "reduceOnly": "true" if reduce_only else "false"
+        }
+        
+        if activation_price:
+            params["activationPrice"] = activation_price
+        
+        return self._request("POST", "/fapi/v1/order", params)
+    
+    def place_stop_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        stop_price: float,
+        reduce_only: bool = True,
+        time_in_force: str = "GTC"
+    ) -> dict:
+        """
+        下限价止损订单 (STOP)。
+        
+        当价格触及 stop_price 时，以 price 价格挂限价单。
+        
+        Args:
+            symbol: 交易对
+            side: BUY 或 SELL
+            quantity: 数量
+            price: 限价单价格
+            stop_price: 触发价格
+            reduce_only: 是否仅平仓
+            time_in_force: 有效期 (GTC/IOC/FOK)
+        
+        Returns:
+            订单信息
+        """
+        return self._request("POST", "/fapi/v1/order", {
+            "symbol": symbol,
+            "side": side.upper(),
+            "type": "STOP",
+            "quantity": quantity,
+            "price": price,
+            "stopPrice": stop_price,
+            "reduceOnly": "true" if reduce_only else "false",
+            "timeInForce": time_in_force
+        })
+    
+    def place_take_profit_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        stop_price: float,
+        reduce_only: bool = True,
+        time_in_force: str = "GTC"
+    ) -> dict:
+        """
+        下限价止盈订单 (TAKE_PROFIT)。
+        
+        当价格触及 stop_price 时，以 price 价格挂限价单。
+        
+        Args:
+            symbol: 交易对
+            side: BUY 或 SELL
+            quantity: 数量
+            price: 限价单价格
+            stop_price: 触发价格
+            reduce_only: 是否仅平仓
+            time_in_force: 有效期
+        
+        Returns:
+            订单信息
+        """
+        return self._request("POST", "/fapi/v1/order", {
+            "symbol": symbol,
+            "side": side.upper(),
+            "type": "TAKE_PROFIT",
+            "quantity": quantity,
+            "price": price,
+            "stopPrice": stop_price,
+            "reduceOnly": "true" if reduce_only else "false",
+            "timeInForce": time_in_force
+        })
+    
+    def get_position_mode(self) -> dict:
+        """
+        获取当前持仓模式。
+        
+        Returns:
+            - dualSidePosition: True = 对冲模式, False = 单向模式
+        """
+        return self._request("GET", "/fapi/v1/positionSide/dual", {})
+    
+    def change_position_mode(self, dual_side: bool) -> dict:
+        """
+        切换持仓模式。
+        
+        注意：切换前必须平掉所有仓位！
+        
+        Args:
+            dual_side: True = 对冲模式, False = 单向模式
+                - 对冲模式：可同时持有多空仓位
+                - 单向模式：只能持有单边仓位
+        
+        Returns:
+            操作结果
+        """
+        return self._request("POST", "/fapi/v1/positionSide/dual", {
+            "dualSidePosition": "true" if dual_side else "false"
+        })
+    
+    def change_multi_assets_mode(self, multi_assets: bool) -> dict:
+        """
+        切换多资产保证金模式。
+        
+        Args:
+            multi_assets: True = 联合保证金模式, False = 单资产模式
+        
+        Returns:
+            操作结果
+        """
+        return self._request("POST", "/fapi/v1/multiAssetsMargin", {
+            "multiAssetsMargin": "true" if multi_assets else "false"
+        })
+    
+    def get_multi_assets_mode(self) -> dict:
+        """获取多资产保证金模式状态。"""
+        return self._request("GET", "/fapi/v1/multiAssetsMargin", {})
+    
+    # ==========================================
     # Query Endpoints
     # ==========================================
     
@@ -872,21 +1051,26 @@ class BinanceFuturesClient:
             "limit": limit
         })
     
-    def get_trade_history(self, symbol: str, limit: int = 50) -> List[dict]:
+    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None) -> List[dict]:
         """
         Get trade history.
         
         Args:
             symbol: Trading pair
             limit: Number of trades to return
+            fromId: Trade ID to fetch from (for pagination/incremental sync)
         
         Returns:
             List of trades
         """
-        return self._request("GET", "/fapi/v1/userTrades", {
+        params = {
             "symbol": symbol,
             "limit": limit
-        })
+        }
+        if fromId:
+            params["fromId"] = fromId
+            
+        return self._request("GET", "/fapi/v1/userTrades", params)
     
     def get_mark_price(self, symbol: str) -> dict:
         """
@@ -901,6 +1085,275 @@ class BinanceFuturesClient:
         return self._request("GET", "/fapi/v1/premiumIndex", {
             "symbol": symbol
         }, signed=False)
+    
+    def modify_order(
+        self,
+        symbol: str,
+        order_id: int,
+        side: str,
+        quantity: float,
+        price: float
+    ) -> dict:
+        """
+        修改已挂的限价订单。
+        
+        注意：只能修改限价单 (LIMIT)，市价单无法修改。
+        
+        Args:
+            symbol: 交易对 (e.g., "BTCUSDT")
+            order_id: 要修改的订单 ID
+            side: 订单方向 "BUY" 或 "SELL"
+            quantity: 新的数量
+            price: 新的价格
+        
+        Returns:
+            修改后的订单信息
+        
+        Example:
+            client.modify_order("BTCUSDT", 123456, "BUY", 0.01, 95000.0)
+        """
+        return self._request("PUT", "/fapi/v1/order", {
+            "symbol": symbol,
+            "orderId": order_id,
+            "side": side.upper(),
+            "quantity": quantity,
+            "price": price
+        })
+    
+    def get_income_history(
+        self,
+        symbol: str = None,
+        income_type: str = None,
+        start_time: int = None,
+        end_time: int = None,
+        limit: int = 100
+    ) -> List[dict]:
+        """
+        获取收益历史记录。
+        
+        包括：资金费率、已实现盈亏、手续费、转账等。
+        
+        Args:
+            symbol: 交易对 (可选，不传返回所有)
+            income_type: 收益类型 (可选)
+                - "TRANSFER": 转账
+                - "WELCOME_BONUS": 欢迎奖励
+                - "REALIZED_PNL": 已实现盈亏
+                - "FUNDING_FEE": 资金费率
+                - "COMMISSION": 手续费
+                - "INSURANCE_CLEAR": 保险基金清算
+                - "REFERRAL_KICKBACK": 推荐返佣
+                - "COMMISSION_REBATE": 手续费返还
+                - "API_REBATE": API返还
+                - "CONTEST_REWARD": 竞赛奖励
+                - "CROSS_COLLATERAL_TRANSFER": 跨保证金转账
+                - "OPTIONS_PREMIUM_FEE": 期权权利金
+                - "OPTIONS_SETTLE_PROFIT": 期权结算收益
+                - "INTERNAL_TRANSFER": 内部转账
+                - "AUTO_EXCHANGE": 自动兑换
+                - "DELIVERED_SETTELMENT": 交割结算
+                - "COIN_SWAP_DEPOSIT": 币种兑换入账
+                - "COIN_SWAP_WITHDRAW": 币种兑换出账
+            start_time: 开始时间戳 (毫秒)
+            end_time: 结束时间戳 (毫秒)
+            limit: 返回数量限制 (默认100，最大1000)
+        
+        Returns:
+            收益记录列表
+        
+        Example:
+            # 获取最近100条资金费率记录
+            client.get_income_history(income_type="FUNDING_FEE", limit=100)
+            
+            # 获取 BTC 的已实现盈亏
+            client.get_income_history(symbol="BTCUSDT", income_type="REALIZED_PNL")
+        """
+        params = {"limit": min(limit, 1000)}
+        
+        if symbol:
+            params["symbol"] = symbol
+        if income_type:
+            params["incomeType"] = income_type
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        
+        return self._request("GET", "/fapi/v1/income", params)
+    
+    def get_funding_rate(self, symbol: str, limit: int = 100) -> List[dict]:
+        """
+        获取资金费率历史。
+        
+        Args:
+            symbol: 交易对 (e.g., "BTCUSDT")
+            limit: 返回数量 (默认100，最大1000)
+        
+        Returns:
+            资金费率历史列表，每条记录包含：
+            - symbol: 交易对
+            - fundingTime: 资金费率时间
+            - fundingRate: 资金费率
+            - markPrice: 标记价格
+        
+        Example:
+            rates = client.get_funding_rate("BTCUSDT", limit=10)
+        """
+        return self._request("GET", "/fapi/v1/fundingRate", {
+            "symbol": symbol,
+            "limit": min(limit, 1000)
+        }, signed=False)
+    
+    def get_leverage_bracket(self, symbol: str = None) -> List[dict]:
+        """
+        获取杠杆档位信息。
+        
+        显示不同仓位大小对应的最大杠杆倍数。
+        
+        Args:
+            symbol: 交易对 (可选，不传返回所有)
+        
+        Returns:
+            杠杆档位列表
+        """
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+        return self._request("GET", "/fapi/v1/leverageBracket", params)
+    
+    def get_adl_quantile(self, symbol: str = None) -> dict:
+        """
+        获取 ADL (自动减仓) 风险等级。
+        
+        ADL 系统会根据用户盈利率和杠杆排名对用户进行排序。
+        当强平发生时，ADL 排名靠前的用户可能被减仓。
+        
+        Args:
+            symbol: 交易对 (可选，不传返回所有持仓的 ADL 信息)
+        
+        Returns:
+            ADL 风险等级信息:
+            - adlQuantile: ADL 排名等级 (1-5，5最危险)
+                - 0: 无持仓
+                - 1-5: 风险从低到高
+        
+        Example:
+            adl = client.get_adl_quantile("BTCUSDT")
+        """
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+        return self._request("GET", "/fapi/v1/adlQuantile", params)
+    
+    def get_force_orders(
+        self,
+        symbol: str = None,
+        auto_close_type: str = None,
+        start_time: int = None,
+        end_time: int = None,
+        limit: int = 50
+    ) -> List[dict]:
+        """
+        获取强平订单历史。
+        
+        Args:
+            symbol: 交易对 (可选)
+            auto_close_type: 强平类型 (可选)
+                - "LIQUIDATION": 强制平仓
+                - "ADL": 自动减仓
+            start_time: 开始时间戳 (毫秒)
+            end_time: 结束时间戳 (毫秒)
+            limit: 返回数量 (默认50，最大100)
+        
+        Returns:
+            强平订单列表
+        """
+        params = {"limit": min(limit, 100)}
+        if symbol:
+            params["symbol"] = symbol
+        if auto_close_type:
+            params["autoCloseType"] = auto_close_type
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        
+        return self._request("GET", "/fapi/v1/forceOrders", params)
+    
+    def get_position_margin_history(
+        self,
+        symbol: str,
+        margin_type: int = None,
+        start_time: int = None,
+        end_time: int = None,
+        limit: int = 50
+    ) -> List[dict]:
+        """
+        获取逐仓保证金变动历史。
+        
+        Args:
+            symbol: 交易对
+            margin_type: 变动类型 (可选)
+                - 1: 增加保证金
+                - 2: 减少保证金
+            start_time: 开始时间戳 (毫秒)
+            end_time: 结束时间戳 (毫秒)
+            limit: 返回数量 (默认50，最大500)
+        
+        Returns:
+            保证金变动记录列表
+        """
+        params = {"symbol": symbol, "limit": min(limit, 500)}
+        if margin_type:
+            params["type"] = margin_type
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        
+        return self._request("GET", "/fapi/v1/positionMargin/history", params)
+    
+    def modify_position_margin(
+        self,
+        symbol: str,
+        amount: float,
+        margin_type: int,
+        position_side: str = "BOTH"
+    ) -> dict:
+        """
+        调整逐仓保证金。
+        
+        Args:
+            symbol: 交易对
+            amount: 保证金数量 (正数)
+            margin_type: 调整方向
+                - 1: 增加保证金
+                - 2: 减少保证金
+            position_side: 持仓方向 (默认 "BOTH")
+        
+        Returns:
+            调整结果
+        """
+        return self._request("POST", "/fapi/v1/positionMargin", {
+            "symbol": symbol,
+            "amount": amount,
+            "type": margin_type,
+            "positionSide": position_side
+        })
+    
+    def get_commission_rate(self, symbol: str) -> dict:
+        """
+        获取用户在指定交易对的佣金费率。
+        
+        Args:
+            symbol: 交易对
+        
+        Returns:
+            佣金费率信息:
+            - makerCommissionRate: Maker 费率
+            - takerCommissionRate: Taker 费率
+        """
+        return self._request("GET", "/fapi/v1/commissionRate", {"symbol": symbol})
     
     def test_connection(self) -> dict:
         """

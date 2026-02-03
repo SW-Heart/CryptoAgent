@@ -488,10 +488,9 @@ def update_positions_prices():
     except Exception as e:
         print(f"[Scheduler] Error updating positions: {e}")
 
-def trigger_strategy():
+def trigger_strategy(symbols: str = "BTC,ETH,SOL"):
     """Trigger agent strategy analysis"""
     round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
-    symbols = "BTC,ETH,SOL"
     
     print(f"\n[Scheduler] ========== Strategy Round: {round_id} ==========")
     print(f"[Scheduler] Analyzing symbols: {symbols}")

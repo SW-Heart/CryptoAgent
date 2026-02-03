@@ -6,7 +6,12 @@ import psycopg2
 from psycopg2.extras import DictCursor
 from dotenv import load_dotenv
 
-load_dotenv()
+import os
+from pathlib import Path
+
+# Load .env from parent directory (back/.env) if not found in current dir
+env_path = Path(__file__).resolve().parent.parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 DB_URL = os.getenv("DB_URL")
 

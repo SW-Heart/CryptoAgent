@@ -71,7 +71,8 @@ def init_daily_report_tables():
 
 
 # Initialize tables on import
-init_daily_report_tables()
+# Initialize tables on import - REMOVED to prevent startup crash
+# init_daily_report_tables()
 
 
 # ============= API Models =============
@@ -90,8 +91,8 @@ class ReportResponse(BaseModel):
 
 # ============= API Endpoints =============
 
-@router.get("/latest")
-def get_latest_report(lang: str = "en"):
+@router.get("/api/daily-report")
+def get_latest_report(language: str = "en"):
     """Get the latest daily report"""
     conn = get_db()
     cursor = conn.cursor()
@@ -102,7 +103,7 @@ def get_latest_report(lang: str = "en"):
         WHERE language = %s
         ORDER BY report_date DESC 
         LIMIT 1
-    """, (lang,))
+    """, (language,))
     
     row = cursor.fetchone()
     conn.close()
@@ -111,7 +112,7 @@ def get_latest_report(lang: str = "en"):
         # Return a placeholder if no reports yet
         return {
             "report_date": str(date.today()),
-            "language": lang,
+            "language": language,
             "content": "# 📰 Daily Report\n\nNo report available yet. The first report will be generated at UTC 0:00.",
             "created_at": datetime.now().isoformat()
         }
@@ -170,7 +171,7 @@ async def get_report_by_date(report_date: str, language: str = "en"):
     }
 
 
-@router.post("/subscribe")
+@router.post("/api/subscribe")
 def subscribe_report(request: SubscribeRequest):
     """Subscribe to daily report emails"""
     conn = get_db()

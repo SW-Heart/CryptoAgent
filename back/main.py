@@ -18,13 +18,51 @@ from agents.trading_agent import trading_agent
 from agents.daily_report_agent import daily_report_agent
 from agents.swap_agent import swap_agent  # A2UI DEX 交易 Agent
 from agno.os import AgentOS
+from fastapi import FastAPI
 
 # Import user context setter
 from tools.trading_tools import set_current_user
 
 # Create AgentOS with all agents
+# Create AgentOS with all agents
 agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent, swap_agent])
+
+# Import initialization functions
+from app.routers.sessions import init_session_titles_table
+from app.routers.credits import init_credits_table
+from app.routers.strategy import init_strategy_tables
+from app.routers.daily_report import init_daily_report_tables
+from binance_client import init_binance_tables
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan events: startup and shutdown"""
+    # Startup: Initialize tables
+    print("[Main] Initializing database tables...")
+    try:
+        init_session_titles_table()
+        init_credits_table()
+        init_strategy_tables()
+        init_binance_tables()
+        init_daily_report_tables()
+        print("[Main] Tables initialized successfully")
+        
+        # Auto-start strategy scheduler
+        print("[Main] Auto-starting Strategy Scheduler...")
+        start_scheduler()
+    except Exception as e:
+        print(f"[Main] Error initializing tables: {e}")
+        # Don't raise, allow app to start even if DB is flaky
+    
+    yield
+    
+    # Shutdown logic if needed
+    print("[Main] Shutting down...")
+
 app = agent_os.get_app()
+app.router.lifespan_context = lifespan
 
 # Middleware to set user context for trading tools
 class UserContextMiddleware(BaseHTTPMiddleware):
@@ -169,24 +207,17 @@ app.include_router(credits_router)
 app.include_router(strategy_router)
 app.include_router(daily_report_router)
 
-# Initialize database tables
-from app.routers.sessions import init_session_titles_table
-from app.routers.credits import init_credits_table
-from app.routers.strategy import init_strategy_tables
-from binance_client import init_binance_tables
-
-init_session_titles_table()
-init_credits_table()
-init_strategy_tables()
-init_binance_tables()
+# Initialize database tables - MOVED TO LIFESPAN
+# init_session_titles_table()
+# init_credits_table()
+# init_strategy_tables()
+# init_binance_tables()
 
 
 # ============= Scheduler Integration =============
-# Strategy Scheduler: Controlled via API endpoints (not auto-started)
-#   GET  /api/strategy/scheduler/status - Get status
-#   POST /api/strategy/scheduler/start  - Start (admin only)
-#   POST /api/strategy/scheduler/stop   - Stop (admin only)
-print("[Main] Strategy scheduler available via API (not auto-started)")
+# Strategy Scheduler: Strategy scheduler is now auto-started!
+from scheduler import start_scheduler
+print("[Main] Strategy scheduler imported")
 
 # Daily Report Scheduler: Always runs automatically (independent from strategy)
 def start_daily_report_scheduler():
