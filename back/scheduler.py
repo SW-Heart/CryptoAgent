@@ -25,6 +25,7 @@ SCHEDULER_USER_ID = STRATEGY_ADMIN_USER_ID  # Scheduler runs as admin
 _scheduler_running = False
 _scheduler_thread = None
 _scheduler_lock = threading.Lock()
+_scheduler_lock_file = None
 
 def is_scheduler_running() -> bool:
     """Return current scheduler running status"""
@@ -39,12 +40,28 @@ def get_scheduler_status() -> dict:
 
 def start_scheduler() -> dict:
     """Start the scheduler in background thread"""
-    global _scheduler_running, _scheduler_thread
+    global _scheduler_running, _scheduler_thread, _scheduler_lock_file
     
     with _scheduler_lock:
         if _scheduler_running:
             return {"success": False, "message": "Scheduler already running"}
-        
+            
+        # Try to acquire file lock to prevent multi-process duplicates
+        try:
+            import fcntl
+            lock_path = "/tmp/scheduler.lock"
+            _scheduler_lock_file = open(lock_path, "w")
+            try:
+                # Try non-blocking exclusive lock
+                fcntl.flock(_scheduler_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except IOError:
+                _scheduler_lock_file.close()
+                _scheduler_lock_file = None
+                print("[Scheduler] Another instance is running (lock held). Skipping start.")
+                return {"success": False, "message": "Scheduler locked by another process"}
+        except ImportError:
+            pass # Windows or non-Unix, skip lock
+
         _scheduler_running = True
         _scheduler_thread = threading.Thread(target=_run_scheduler_loop, daemon=True)
         _scheduler_thread.start()
@@ -99,13 +116,19 @@ def _run_scheduler_loop():
     print("[Scheduler] Scheduler is running. Use API to stop.")
     
     while _scheduler_running:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            print(f"[Scheduler] CRITICAL ERROR in run_pending: {e}")
+            import traceback
+            traceback.print_exc()
         time.sleep(1)
     
     print("[Scheduler] Scheduler loop exited")
 
 
 # ============= Binance Multi-User Position Sync =============
+
 
 def sync_binance_users_positions():
     """
@@ -120,9 +143,8 @@ def sync_binance_users_positions():
     so we only need to sync position status changes.
     """
     try:
-        from binance_client import get_all_active_trading_users, get_user_binance_client
+        from binance_client import get_all_active_trading_users
         from tools.binance_trading_tools import binance_get_positions_summary
-        from agents.suggested_questions_agent import generate_suggested_questions
         
         # Get all users with trading enabled
         users = get_all_active_trading_users()
@@ -130,25 +152,17 @@ def sync_binance_users_positions():
         if not users:
             return
         
-        print(f"[Scheduler] Syncing Binance positions for {len(users)} user(s)...")
+        # print(f"[Scheduler] Syncing Binance positions for {len(users)} user(s)...")
         
         for user_id in users:
             try:
-                # Get positions summary from Binance
+                # 1. Sync Positions (Status)
                 summary = binance_get_positions_summary(user_id)
-                
                 if "error" in summary:
-                    print(f"[Scheduler] Error syncing user {user_id[:8]}: {summary['error']}")
-                    continue
+                    print(f"[Scheduler] Error syncing positions for {user_id[:8]}: {summary['error']}")
                 
-                position_count = summary.get("position_count", 0)
-                equity = summary.get("equity", 0)
-                unrealized_pnl = summary.get("unrealized_pnl", 0)
-                
-                # Log if there are open positions
-                if position_count > 0:
-                    print(f"[Scheduler] User {user_id[:8]}: {position_count} positions, "
-                          f"equity: ${equity:.2f}, unrealized: ${unrealized_pnl:.2f}")
+                # 2. Sync Stats (PnL/WinRate) via Incremental Trade History
+                sync_user_account_stats(user_id)
                     
             except Exception as e:
                 print(f"[Scheduler] Error syncing user {user_id[:8]}: {e}")
@@ -158,6 +172,93 @@ def sync_binance_users_positions():
         pass
     except Exception as e:
         print(f"[Scheduler] Error in Binance sync: {e}")
+
+
+def sync_user_account_stats(user_id: str):
+    """
+    Incrementally sync user trade history to update PnL and Win Rate stats.
+    Compatible with Binance API restrictions (per symbol, fromId).
+    """
+    from binance_client import get_user_binance_client
+    from app.database import get_db_connection
+    
+    client = get_user_binance_client(user_id)
+    if not client:
+        return
+
+    # List of symbols to track (Top coins + others as needed)
+    SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
+    
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            for symbol in SYMBOLS:
+                # 1. Get last synced ID
+                cursor.execute(
+                    "SELECT last_trade_id FROM binance_sync_state WHERE user_id = %s AND symbol = %s",
+                    (user_id, symbol)
+                )
+                row = cursor.fetchone()
+                last_id = row[0] if row else 0
+                
+                # 2. Fetch new trades (use fromId if we have history, otherwise recent)
+                # Note: If last_id is 0, we might want to fetch recent history (e.g. last 1000 trades)
+                # But to avoid massive initial sync time for active accounts, let's limit to recent if 0.
+                try:
+                    # fromId + 1 to avoid re-processing the same trade
+                    params = {"limit": 500}
+                    if last_id > 0:
+                        params["fromId"] = last_id + 1
+                    
+                    trades = client.get_trade_history(symbol=symbol, **params)
+                    
+                    if not trades or not isinstance(trades, list):
+                        continue
+                        
+                    # 3. Process new trades
+                    new_pnl = 0.0
+                    new_trades_count = 0
+                    new_win_trades = 0
+                    max_id = last_id
+                    
+                    for trade in trades:
+                        # Update max_id
+                        t_id = int(trade.get("id", 0))
+                        if t_id > max_id:
+                            max_id = t_id
+                            
+                        # Only count TRADES that have Realized PnL (Close positions)
+                        # Binance puts realizedPnl on closing trades
+                        r_pnl = float(trade.get("realizedPnl", 0))
+                        
+                        if r_pnl != 0:
+                            new_pnl += r_pnl
+                            new_trades_count += 1
+                            if r_pnl > 0:
+                                new_win_trades += 1
+                    
+                    # 4. Update DB if we found new data
+                    if max_id > last_id:
+                        cursor.execute("""
+                            INSERT INTO binance_sync_state (user_id, symbol, last_trade_id, total_pnl, total_trades, win_trades, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                            ON CONFLICT (user_id, symbol) DO UPDATE SET
+                            last_trade_id = EXCLUDED.last_trade_id,
+                            total_pnl = binance_sync_state.total_pnl + EXCLUDED.total_pnl,
+                            total_trades = binance_sync_state.total_trades + EXCLUDED.total_trades,
+                            win_trades = binance_sync_state.win_trades + EXCLUDED.win_trades,
+                            updated_at = NOW()
+                        """, (user_id, symbol, max_id, new_pnl, new_trades_count, new_win_trades))
+                        
+                        # print(f"[Stats] Updated {symbol} for {user_id[:8]}: +{new_trades_count} trades, PnL: {new_pnl:.2f}")
+                        
+                except Exception as e:
+                    # print(f"[Stats] Sync error for {symbol}: {e}")
+                    pass
+            
+            conn.commit()
+    finally:
+        conn.close()
 
 
 import os
@@ -179,7 +280,7 @@ from app.database import get_db_connection as get_db
 def log_strategy_round(round_id: str, symbols: str, response: dict):
     """Save strategy log to database"""
     try:
-        conn = _retry_db_operation(get_db)
+        conn = get_db()
         
         # Extract structured content from response
         raw_response = response.get("content", "")
@@ -211,7 +312,7 @@ def log_strategy_round(round_id: str, symbols: str, response: dict):
             cursor.execute("""
                 SELECT 1 FROM strategy_logs 
                 WHERE symbols = %s 
-                AND timestamp > NOW() - INTERVAL '3 minutes'
+                AND timestamp::timestamptz > NOW() - INTERVAL '3 minutes'
             """, (symbols,))
             existing = cursor.fetchone()
             
@@ -439,46 +540,50 @@ def trigger_strategy():
 
 def check_price_alerts():
     """Check if any price alerts have been triggered and call agent"""
-    from price_alerts import get_pending_alerts, mark_alert_triggered
-    from tools.trading_tools import get_current_price
-    
-    pending_alerts = get_pending_alerts()
-    
-    if not pending_alerts:
-        return
-    
-    # Get current prices for all symbols with alerts
-    symbols = list(set(alert["symbol"] for alert in pending_alerts))
-    current_prices = {symbol: get_current_price(symbol) for symbol in symbols}
-    
-    triggered_alerts = []
-    
-    for alert in pending_alerts:
-        symbol = alert["symbol"]
-        current_price = current_prices.get(symbol, 0)
+    try:
+        from price_alerts import get_pending_alerts, mark_alert_triggered
+        from tools.trading_tools import get_current_price
         
-        if current_price <= 0:
-            continue
+        pending_alerts = get_pending_alerts()
         
-        trigger_price = alert["trigger_price"]
-        condition = alert["trigger_condition"]
+        if not pending_alerts:
+            return
         
-        triggered = False
+        # Get current prices for all symbols with alerts
+        symbols = list(set(alert["symbol"] for alert in pending_alerts))
+        current_prices = {symbol: get_current_price(symbol) for symbol in symbols}
         
-        if condition == "above" and current_price >= trigger_price:
-            triggered = True
-        elif condition == "below" and current_price <= trigger_price:
-            triggered = True
+        triggered_alerts = []
         
-        if triggered:
-            mark_alert_triggered(alert["id"])
-            alert["current_price"] = current_price
-            triggered_alerts.append(alert)
-            print(f"[Scheduler] 🔔 Price alert triggered: {symbol} {condition} ${trigger_price:,.0f} (current: ${current_price:,.0f})")
-    
-    # Call agent for each triggered alert
-    for alert in triggered_alerts:
-        trigger_agent_on_alert(alert)
+        for alert in pending_alerts:
+            symbol = alert["symbol"]
+            current_price = current_prices.get(symbol, 0)
+            
+            if current_price <= 0:
+                continue
+            
+            trigger_price = alert["trigger_price"]
+            condition = alert["trigger_condition"]
+            
+            triggered = False
+            
+            if condition == "above" and current_price >= trigger_price:
+                triggered = True
+            elif condition == "below" and current_price <= trigger_price:
+                triggered = True
+            
+            if triggered:
+                mark_alert_triggered(alert["id"])
+                alert["current_price"] = current_price
+                triggered_alerts.append(alert)
+                print(f"[Scheduler] 🔔 Price alert triggered: {symbol} {condition} ${trigger_price:,.0f} (current: ${current_price:,.0f})")
+        
+        # Call agent for each triggered alert
+        for alert in triggered_alerts:
+            trigger_agent_on_alert(alert)
+            
+    except Exception as e:
+        print(f"[Scheduler] Error in check_price_alerts: {e}")
 
 
 def trigger_agent_on_alert(alert: dict):
