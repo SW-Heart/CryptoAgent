@@ -45,11 +45,16 @@ def get_current_price(symbol: str) -> float:
     binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
     try:
         resp = requests.get(
-            f"{binance_base}/api/v3/ticker/price%ssymbol={symbol.upper()}USDT",
+            f"{binance_base}/api/v3/ticker/price?symbol={symbol.upper()}USDT",
             timeout=5
         )
+        if resp.status_code != 200:
+             print(f"[TradingTools] Price fetch failed {resp.status_code}: {resp.text}")
+             return 0
         return float(resp.json().get("price", 0))
     except Exception as e:
+        print(f"[TradingTools] Price fetch error for {symbol}: {e}")
+        return 0
         print(f"[TradingTools] Price fetch error for {symbol}: {e}")
         return 0
 
@@ -85,10 +90,11 @@ def log_strategy_analysis(
         round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
         
         # Check if a log for the same symbols exists within last 3 minutes (avoid duplicates)
+        # 注意: "timestamp" 是 PostgreSQL 保留字，且可能是 TEXT 类型 (如在旧表中)，需显式转换
         cursor.execute("""
             SELECT 1 FROM strategy_logs 
             WHERE symbols = %s 
-            AND timestamp > NOW() - INTERVAL '3 minutes'
+            AND "timestamp"::timestamp > NOW() - INTERVAL '3 minutes'
         """, (symbols,))
         existing = cursor.fetchone()
         
@@ -785,6 +791,14 @@ def set_price_alert(
     
     if condition == "below" and current_price <= trigger_price:
         return {"error": f"当前价格 ${current_price:,.0f} 已经低于触发价 ${trigger_price:,.0f}，无需设置 below 警报"}
+
+    # 安全缓冲：防止设置过于紧贴当前价格的警报导致死循环触发
+    distance = abs(current_price - trigger_price)
+    distance_pct = distance / current_price * 100
+    MIN_DISTANCE_PCT = 0.2  # 0.2% 最小距离
+
+    if distance_pct < MIN_DISTANCE_PCT:
+         return {"error": f"警报价格距离当前价格过近 ({distance_pct:.2f}% < {MIN_DISTANCE_PCT}%)，请设置更有意义的支撑/阻力位，防止频繁误触"}
     
     # 检查是否已有相同警报
     existing = get_alerts_by_symbol(symbol)
