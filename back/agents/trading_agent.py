@@ -68,11 +68,77 @@ from tools.trading_tools import (
 # Trading Strategy Agent
 # ==========================================
 
+# ========== Token Usage Monitor ==========
+def monitor_tool_usage(func):
+    """Wrapper to log tool input/output sizes for token debugging"""
+    def wrapper(*args, **kwargs):
+        tool_name = func.__name__
+        # Log input size (approx)
+        input_str = str(args) + str(kwargs)
+        print(f"\n[TokenMonitor] 🟢 CALLING {tool_name}...")
+        print(f"[TokenMonitor]    Input Size: {len(input_str)} chars")
+        
+        start_time = time.time()
+        try:
+            result = func(*args, **kwargs)
+            duration = time.time() - start_time
+            
+            # Log output size
+            result_str = str(result)
+            result_len = len(result_str)
+            print(f"[TokenMonitor] 🟡 FINISHED {tool_name} ({duration:.2f}s)")
+            print(f"[TokenMonitor]    Output Size: {result_len} chars")
+            
+            # Alert on massive outputs (>20k chars approx 5k tokens)
+            if result_len > 10000:
+                print(f"[TokenMonitor] ⚠️ HUGE OUTPUT DETECTED (>10k chars) for {tool_name}!")
+                print(f"[TokenMonitor]    Preview: {result_str[:200]}...")
+            
+            return result
+        except Exception as e:
+            print(f"[TokenMonitor] 🔴 ERROR in {tool_name}: {e}")
+            raise e
+    return wrapper
+
+import time
+
+# ========== Token Usage Monitor ==========
+def monitor_tool_usage(func):
+    """Wrapper to log tool input/output sizes for token debugging"""
+    def wrapper(*args, **kwargs):
+        tool_name = func.__name__
+        # Log input size (approx)
+        input_str = str(args) + str(kwargs)
+        print(f"\n[TokenMonitor] 🟢 CALLING {tool_name}...")
+        print(f"[TokenMonitor]    Input Size: {len(input_str)} chars")
+        
+        start_time = time.time()
+        try:
+            result = func(*args, **kwargs)
+            duration = time.time() - start_time
+            
+            # Log output size
+            result_str = str(result)
+            result_len = len(result_str)
+            print(f"[TokenMonitor] 🟡 FINISHED {tool_name} ({duration:.2f}s)")
+            print(f"[TokenMonitor]    Output Size: {result_len} chars")
+            
+            # Alert on massive outputs (>20k chars approx 5k tokens)
+            if result_len > 10000:
+                print(f"[TokenMonitor] ⚠️ HUGE OUTPUT DETECTED (>10k chars) for {tool_name}!")
+                print(f"[TokenMonitor]    Preview: {result_str[:200]}...")
+            
+            return result
+        except Exception as e:
+            print(f"[TokenMonitor] 🔴 ERROR in {tool_name}: {e}")
+            raise e
+    return wrapper
+
 trading_agent = Agent(
     name="TradingStrategy",
     id="trading-strategy-agent",
     model=DeepSeek(id="deepseek-chat", api_key=LLM_KEY),
-    tools=[
+    tools=[monitor_tool_usage(t) for t in [
         # ========== 一站式查询工具 ==========
         get_macro_overview,           # 宏观一站式
         # ========== 聚合技术分析 (核心) ==========
@@ -96,7 +162,7 @@ trading_agent = Agent(
         set_price_alert,              # 设置警报
         cancel_price_alert,           # 取消警报
         log_strategy_analysis,        # 记录策略分析
-    ],
+    ]],
     instructions=["""
 # 交易策略执行 Agent (Trading Strategy Expert)
 
