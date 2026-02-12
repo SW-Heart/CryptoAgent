@@ -861,14 +861,13 @@ def get_price_alerts(symbol: str = None) -> dict:
         distance = abs(current_price - alert["trigger_price"])
         distance_pct = distance / current_price * 100 if current_price > 0 else 0
         
+        # 压缩输出：只保留关键信息
         formatted_alerts.append({
             "id": alert["id"],
             "symbol": alert["symbol"],
             "condition": f"{condition_text} ${alert['trigger_price']:,.0f}",
-            "current_price": current_price,
-            "distance": f"${distance:,.0f} ({distance_pct:.1f}%)",
-            "strategy": alert["strategy_context"][:100] if alert["strategy_context"] else None,
-            "created_at": alert["created_at"]
+            "dist_pct": f"{distance_pct:.1f}%",
+            "strategy": alert["strategy_context"][:50] + "..." if alert["strategy_context"] and len(alert["strategy_context"]) > 50 else alert["strategy_context"]
         })
     
     return {

@@ -145,7 +145,9 @@
             "tradingEnabled": "Trading enabled",
             "tradingDisabled": "Trading disabled",
             "testnetHint": "Testnet uses simulated funds, suitable for testing strategies. Get testnet API keys at https://demo.binance.com/",
-            "securityNotice": "Your API keys are encrypted before storage. Only grant necessary permissions, trading permission is recommended."
+            "securityNotice": "Your API keys are encrypted before storage. Only grant necessary permissions, trading permission is recommended.",
+            "ipWhitelistTitle": "IP Whitelist Required",
+            "ipWhitelistDesc": "Please add the following server IP to your Binance API whitelist. Binance requires API keys to be bound to specific IPs for trading operations."
         }
     },
     "auth": {
@@ -283,6 +285,22 @@
             "readyDesc": "API Key configured. Click the button below to start trading.",
             "startTrading": "Start Trading",
             "stopTrading": "Stop Trading"
+        },
+        "beta": {
+            "title": "Beta Phase",
+            "subtitle": "Trading features are in beta. Enter your invite code to access.",
+            "leaderboard": "Beta Leaderboard",
+            "leaderboardDesc": "Real-time Win Rate Ranking",
+            "participants": "traders",
+            "trades": "trades",
+            "period": "Beta Period",
+            "contactDev": "Contact developer for invite code",
+            "enterCode": "Enter invite code",
+            "enterBeta": "Enter Beta",
+            "verifying": "Verifying...",
+            "inviteOnly": "Beta features are invite-only and subject to change",
+            "noData": "No trading data yet",
+            "beFirst": "Be the first to join the leaderboard!"
         }
     },
     "dailyReport": {
@@ -372,7 +390,27 @@
             "getTrendingTokens": "Trending Tokens",
             "setPriceAlert": "Setting Price Alert",
             "getPriceAlerts": "Checking Price Alerts",
-            "cancelPriceAlert": "Canceling Price Alert"
+            "cancelPriceAlert": "Canceling Price Alert",
+            "getTopGainersCex": "Get CEX Top Gainers",
+            "getOnchainHotGainers": "Get On-chain Hot Gainers",
+            "getWalletTransactions": "Get Wallet Transactions",
+            "analyzeKline": "Analyze Kline Chart",
+            "getBtcHolderDistribution": "BTC Holder Distribution",
+            "getWhaleTransactions": "Monitor Whale Transactions",
+            "getWhaleBalanceChanges": "Whale Balance Changes",
+            "getWhaleSignals": "Whale Buy/Sell Signals",
+            "getMarketOdds": "Check Market Odds",
+            "searchDexPools": "Search DEX Pools",
+            "getDexPoolDetail": "Get DEX Pool Details",
+            "getSolanaBalance": "Get Solana Balance",
+            "getSolanaTransactions": "Get Solana Transactions",
+            "getBitcoinBalance": "Get BTC Balance",
+            "getBitcoinTransactions": "Get BTC Transactions",
+            "getTonBalance": "Get TON Balance",
+            "getSuiBalance": "Get SUI Balance",
+            "getTronBalance": "Get TRON Balance",
+            "getMarketTrends": "Analyze Market Trends",
+            "getMarketMacroMetrics": "Macro Metrics Aggregation"
         }
     },
     "landing": {

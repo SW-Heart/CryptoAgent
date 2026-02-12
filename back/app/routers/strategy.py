@@ -1236,3 +1236,273 @@ def run_strategy_analysis(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============= Beta Access System =============
+# 内测期间: 2026年2月 - 2026年3月
+
+BETA_START_DATE = "2026-02-01"
+BETA_END_DATE = "2026-03-31"
+
+# 预设邀请码 (10个6位码)
+BETA_INVITE_CODES = {
+    "BETA26", "ALPHA8", "NEXUS1", "TRADE9", "SHARK7",
+    "WHALE3", "MOON22", "DEGEN5", "HODL99", "PUMP88"
+}
+
+
+
+def init_beta_fields():
+    """Add beta access fields to user_credits table if not exists."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Add beta_access column
+            cursor.execute("""
+                ALTER TABLE user_credits 
+                ADD COLUMN IF NOT EXISTS beta_access BOOLEAN DEFAULT FALSE
+            """)
+            # Add beta_code_used column
+            cursor.execute("""
+                ALTER TABLE user_credits 
+                ADD COLUMN IF NOT EXISTS beta_code_used TEXT
+            """)
+            # Add beta_activated_at column
+            cursor.execute("""
+                ALTER TABLE user_credits 
+                ADD COLUMN IF NOT EXISTS beta_activated_at TIMESTAMP
+            """)
+            # Add username and avatar_url
+            cursor.execute("""
+                ALTER TABLE user_credits 
+                ADD COLUMN IF NOT EXISTS username TEXT
+            """)
+            cursor.execute("""
+                ALTER TABLE user_credits 
+                ADD COLUMN IF NOT EXISTS avatar_url TEXT
+            """)
+            conn.commit()
+            print("[Beta] Beta access fields initialized")
+    except Exception as e:
+        print(f"[Beta] Migration note: {e}")
+    finally:
+        conn.close()
+
+
+# Run migration on module load
+try:
+    init_beta_fields()
+except Exception as e:
+    print(f"[Beta] Could not run migration: {e}")
+
+
+@router.get("/beta/status")
+def get_beta_status(user_id: str):
+    """
+    获取用户的内测资格状态。
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT beta_access, beta_code_used, beta_activated_at
+                FROM user_credits
+                WHERE user_id = %s
+            """, (user_id,))
+            row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return {
+                "has_beta_access": False,
+                "beta_code_used": None,
+                "beta_activated_at": None,
+                "beta_period": {
+                    "start": BETA_START_DATE,
+                    "end": BETA_END_DATE
+                }
+            }
+        
+        return {
+            "has_beta_access": row["beta_access"] or False,
+            "beta_code_used": row["beta_code_used"],
+            "beta_activated_at": row["beta_activated_at"].isoformat() if row["beta_activated_at"] else None,
+            "beta_period": {
+                "start": BETA_START_DATE,
+                "end": BETA_END_DATE
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/beta/verify")
+def verify_beta_code(user_id: str, code: str, username: str = None, avatar_url: str = None):
+    """
+    验证邀请码并激活内测资格。
+    """
+    if not user_id or not code:
+        raise HTTPException(status_code=400, detail="user_id and code are required")
+    
+    # 转换为大写进行比对
+    code_upper = code.strip().upper()
+    
+    if code_upper not in BETA_INVITE_CODES:
+        return {
+            "success": False,
+            "error": "邀请码无效",
+            "error_en": "Invalid invite code"
+        }
+    
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # 检查用户是否存在，不存在则创建
+            cursor.execute("SELECT user_id FROM user_credits WHERE user_id = %s", (user_id,))
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO user_credits (user_id, credits, beta_access, beta_code_used, beta_activated_at, username, avatar_url)
+                    VALUES (%s, 100, TRUE, %s, CURRENT_TIMESTAMP, %s, %s)
+                """, (user_id, code_upper, username, avatar_url))
+            else:
+                # 更新现有用户
+                cursor.execute("""
+                    UPDATE user_credits 
+                    SET beta_access = TRUE, 
+                        beta_code_used = %s, 
+                        beta_activated_at = CURRENT_TIMESTAMP,
+                        username = COALESCE(%s, username),
+                        avatar_url = COALESCE(%s, avatar_url)
+                    WHERE user_id = %s
+                """, (code_upper, username, avatar_url, user_id))
+            conn.commit()
+        conn.close()
+        
+        return {
+            "success": True,
+            "message": "内测资格已激活！",
+            "message_en": "Beta access activated!"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/beta/profile")
+def update_beta_profile(user_id: str, username: str = None, avatar_url: str = None):
+    """
+    更新用户的头像和昵称（用于排行榜显示）。
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE user_credits 
+                SET username = COALESCE(%s, username),
+                    avatar_url = COALESCE(%s, avatar_url)
+                WHERE user_id = %s
+            """, (username, avatar_url, user_id))
+            conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        print(f"[Beta] Update profile error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/beta/leaderboard")
+def get_beta_leaderboard(limit: int = 10):
+    """
+    获取内测用户胜率排行榜。
+    
+    从 binance_sync_state 表聚合数据，按胜率排序。
+    """
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # 聚合每个用户的交易统计，同时获取 username 和 avatar_url
+            cursor.execute("""
+                SELECT 
+                    bss.user_id,
+                    SUM(bss.total_pnl) as total_pnl,
+                    SUM(bss.total_trades) as total_trades,
+                    SUM(bss.win_trades) as win_trades,
+                    uc.beta_activated_at,
+                    uc.username,
+                    uc.avatar_url
+                FROM binance_sync_state bss
+                LEFT JOIN user_credits uc ON bss.user_id = uc.user_id
+                WHERE uc.beta_access = TRUE
+                GROUP BY bss.user_id, uc.beta_activated_at, uc.username, uc.avatar_url
+                HAVING SUM(bss.total_trades) > 0
+                ORDER BY (SUM(bss.win_trades)::float / NULLIF(SUM(bss.total_trades), 0)) DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cursor.fetchall()
+            
+            # 获取总参与人数
+            cursor.execute("""
+                SELECT COUNT(DISTINCT user_id) 
+                FROM user_credits 
+                WHERE beta_access = TRUE
+            """)
+            total_result = cursor.fetchone()
+            total_participants = total_result[0] if total_result else 0
+            
+        conn.close()
+        
+        leaderboard = []
+        for idx, row in enumerate(rows):
+            total_trades = row["total_trades"] or 0
+            win_trades = row["win_trades"] or 0
+            win_rate = round(win_trades / total_trades * 100, 1) if total_trades > 0 else 0
+            total_pnl = round(row["total_pnl"] or 0, 2)
+            
+            user_id = row["user_id"]
+
+            # 优先使用真实昵称，否则使用脱敏 ID
+            if row["username"]:
+                display_name = row["username"]
+            else:
+                if len(user_id) > 8:
+                    display_name = f"{user_id[:4]}...{user_id[-4:]}"
+                else:
+                    display_name = user_id[:4] + "..."
+            
+            leaderboard.append({
+                "rank": idx + 1,
+                "display_name": display_name,
+                "avatar_url": row["avatar_url"],
+                "win_rate": win_rate,
+                "total_trades": total_trades,
+                "total_pnl": total_pnl,
+                "joined_at": row["beta_activated_at"].isoformat() if row["beta_activated_at"] else None
+            })
+        
+        return {
+            "leaderboard": leaderboard,
+            "total_participants": total_participants,
+            "beta_period": {
+                "start": BETA_START_DATE,
+                "end": BETA_END_DATE
+            },
+            "last_updated": datetime.now().isoformat()
+        }
+    except Exception as e:
+        print(f"[Beta] Leaderboard error: {e}")
+        # 返回空排行榜而不是错误
+        return {
+            "leaderboard": [],
+            "total_participants": 0,
+            "beta_period": {
+                "start": BETA_START_DATE,
+                "end": BETA_END_DATE
+            },
+            "last_updated": datetime.now().isoformat()
+        }
+

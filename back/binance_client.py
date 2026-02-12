@@ -124,9 +124,21 @@ def init_binance_tables():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # User Strategy Config table (for multi-user support)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_strategy_config (
+                user_id TEXT PRIMARY KEY,
+                symbols TEXT DEFAULT 'BTC,ETH,SOL',
+                strategy_enabled BOOLEAN DEFAULT TRUE,
+                max_positions INTEGER DEFAULT 3,
+                risk_per_trade REAL DEFAULT 0.02,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
     conn.close()
-    
 
 
 
@@ -352,6 +364,88 @@ def get_all_active_trading_users() -> List[str]:
     conn.close()
     
     return [row["user_id"] for row in rows]
+
+
+def get_user_strategy_config(user_id: str) -> dict:
+    """
+    Get user's strategy configuration.
+    
+    Returns:
+        dict with symbols, strategy_enabled, max_positions, risk_per_trade
+    """
+    conn = _get_db()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT symbols, strategy_enabled, max_positions, risk_per_trade FROM user_strategy_config WHERE user_id = %s",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        # Return defaults
+        return {
+            "symbols": "BTC,ETH,SOL",
+            "strategy_enabled": True,
+            "max_positions": 3,
+            "risk_per_trade": 0.02
+        }
+    
+    return {
+        "symbols": row["symbols"],
+        "strategy_enabled": bool(row["strategy_enabled"]),
+        "max_positions": row["max_positions"],
+        "risk_per_trade": row["risk_per_trade"]
+    }
+
+
+def save_user_strategy_config(user_id: str, symbols: str = None, strategy_enabled: bool = None, 
+                               max_positions: int = None, risk_per_trade: float = None) -> dict:
+    """
+    Save user's strategy configuration.
+    """
+    conn = _get_db()
+    with conn.cursor() as cursor:
+        # Get current config
+        cursor.execute("SELECT * FROM user_strategy_config WHERE user_id = %s", (user_id,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update specific fields
+            updates = []
+            values = []
+            if symbols is not None:
+                updates.append("symbols = %s")
+                values.append(symbols)
+            if strategy_enabled is not None:
+                updates.append("strategy_enabled = %s")
+                values.append(strategy_enabled)
+            if max_positions is not None:
+                updates.append("max_positions = %s")
+                values.append(max_positions)
+            if risk_per_trade is not None:
+                updates.append("risk_per_trade = %s")
+                values.append(risk_per_trade)
+            
+            if updates:
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                values.append(user_id)
+                cursor.execute(
+                    f"UPDATE user_strategy_config SET {', '.join(updates)} WHERE user_id = %s",
+                    tuple(values)
+                )
+        else:
+            # Insert new config
+            cursor.execute("""
+                INSERT INTO user_strategy_config (user_id, symbols, strategy_enabled, max_positions, risk_per_trade)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (user_id, symbols or "BTC,ETH,SOL", strategy_enabled if strategy_enabled is not None else True,
+                  max_positions or 3, risk_per_trade or 0.02))
+        
+        conn.commit()
+    conn.close()
+    
+    return {"success": True}
 
 
 # ==========================================
@@ -669,7 +763,8 @@ class BinanceFuturesClient:
         symbol: str, 
         side: str, 
         quantity: float,
-        reduce_only: bool = False
+        reduce_only: bool = False,
+        position_side: str = None
     ) -> dict:
         """
         Place a market order.
@@ -679,6 +774,7 @@ class BinanceFuturesClient:
             side: "BUY" or "SELL"
             quantity: Order quantity
             reduce_only: If True, only reduce position
+            position_side: "LONG" or "SHORT" for Hedge Mode (required in Hedge Mode)
         
         Returns:
             Order response
@@ -689,6 +785,10 @@ class BinanceFuturesClient:
             "type": "MARKET",
             "quantity": quantity
         }
+        
+        # Hedge Mode 需要 positionSide 参数
+        if position_side:
+            params["positionSide"] = position_side.upper()
         
         if reduce_only:
             params["reduceOnly"] = "true"
@@ -701,34 +801,43 @@ class BinanceFuturesClient:
         side: str, 
         quantity: float,
         stop_price: float,
-        reduce_only: bool = True
+        reduce_only: bool = True,
+        position_side: str = None
     ) -> dict:
         """
-        Place a stop market order (for stop loss).
+        下止损市价单 (STOP_MARKET) - 使用 Algo Order API。
+        
+        注意: 自 2025/12/9 起，条件订单已迁移到 Algo Order API。
         
         Args:
-            symbol: Trading pair (e.g., "BTCUSDT")
+            symbol: 交易对 (e.g., "BTCUSDT")
             side: "BUY" or "SELL"
-            quantity: Order quantity
-            stop_price: Trigger price
-            reduce_only: If True, only reduce position
+            quantity: 订单数量
+            stop_price: 触发价格
+            reduce_only: 是否仅平仓 (仅 One-Way Mode 有效)
+            position_side: "LONG" or "SHORT" (Hedge Mode 必须指定)
         
         Returns:
-            Order response
+            订单响应
         """
         params = {
+            "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": side.upper(),
             "type": "STOP_MARKET",
             "quantity": quantity,
-            "stopPrice": stop_price
+            "triggerPrice": stop_price  # Algo API 使用 triggerPrice 而非 stopPrice
         }
         
-        if reduce_only:
+        # Hedge Mode: 使用 positionSide，不能使用 reduceOnly
+        # One-Way Mode: 使用 reduceOnly，不需要 positionSide
+        if position_side:
+            params["positionSide"] = position_side.upper()
+        elif reduce_only:
             params["reduceOnly"] = "true"
         
         print(f"[BinanceClient] STOP_MARKET order params: {params}")
-        result = self._request("POST", "/fapi/v1/order", params)
+        result = self._request("POST", "/fapi/v1/algoOrder", params)
         print(f"[BinanceClient] STOP_MARKET order result: {result}")
         return result
     
@@ -738,34 +847,42 @@ class BinanceFuturesClient:
         side: str, 
         quantity: float,
         stop_price: float,
-        reduce_only: bool = True
+        reduce_only: bool = True,
+        position_side: str = None
     ) -> dict:
         """
-        Place a take profit market order.
+        下止盈市价单 (TAKE_PROFIT_MARKET) - 使用 Algo Order API。
+        
+        注意: 自 2025/12/9 起，条件订单已迁移到 Algo Order API。
         
         Args:
-            symbol: Trading pair (e.g., "BTCUSDT")
+            symbol: 交易对 (e.g., "BTCUSDT")
             side: "BUY" or "SELL"
-            quantity: Order quantity
-            stop_price: Trigger price
-            reduce_only: If True, only reduce position
+            quantity: 订单数量
+            stop_price: 触发价格
+            reduce_only: 是否仅平仓 (仅 One-Way Mode 有效)
+            position_side: "LONG" or "SHORT" (Hedge Mode 必须指定)
         
         Returns:
-            Order response
+            订单响应
         """
         params = {
+            "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": side.upper(),
             "type": "TAKE_PROFIT_MARKET",
             "quantity": quantity,
-            "stopPrice": stop_price
+            "triggerPrice": stop_price
         }
         
-        if reduce_only:
+        # Hedge Mode: 使用 positionSide，不能使用 reduceOnly
+        if position_side:
+            params["positionSide"] = position_side.upper()
+        elif reduce_only:
             params["reduceOnly"] = "true"
         
         print(f"[BinanceClient] TAKE_PROFIT_MARKET order params: {params}")
-        result = self._request("POST", "/fapi/v1/order", params)
+        result = self._request("POST", "/fapi/v1/algoOrder", params)
         print(f"[BinanceClient] TAKE_PROFIT_MARKET order result: {result}")
         return result
     
@@ -773,26 +890,26 @@ class BinanceFuturesClient:
         """
         批量下单 - 一次性提交多个订单（最多5个）。
         
-        可用于同时下开仓+止损+止盈订单，实现"一次性带止盈止损开仓"的效果。
+        ⚠️ 重要: 自 2025/12/9 起，此端点不再支持以下订单类型:
+        - STOP_MARKET
+        - TAKE_PROFIT_MARKET
+        - TRAILING_STOP_MARKET
+        这些条件订单必须使用 Algo Order API 单独下单。
+        
+        支持的订单类型:
+        - MARKET: 市价单
+        - LIMIT: 限价单
         
         Args:
-            orders: 订单列表，每个订单是一个 dict，包含:
-                - symbol: 交易对
-                - side: BUY/SELL
-                - type: MARKET/LIMIT/STOP_MARKET/TAKE_PROFIT_MARKET 等
-                - quantity: 数量
-                - 其他参数依据订单类型
+            orders: 订单列表，每个订单是一个 dict
         
         Returns:
             包含所有订单结果的列表
         
         Example:
             orders = [
-                {"symbol": "BTCUSDT", "side": "BUY", "type": "MARKET", "quantity": 0.001},
-                {"symbol": "BTCUSDT", "side": "SELL", "type": "STOP_MARKET", "quantity": 0.001, 
-                 "stopPrice": 85000, "reduceOnly": "true"},
-                {"symbol": "BTCUSDT", "side": "SELL", "type": "TAKE_PROFIT_MARKET", "quantity": 0.001,
-                 "stopPrice": 95000, "reduceOnly": "true"}
+                {"symbol": "BTCUSDT", "side": "BUY", "type": "MARKET", 
+                 "quantity": 0.001, "positionSide": "LONG"}
             ]
             result = client.place_batch_orders(orders)
         """
@@ -801,13 +918,28 @@ class BinanceFuturesClient:
         if len(orders) > 5:
             return {"error": "Maximum 5 orders allowed per batch"}
         
-        # 构建批量订单参数
-        # Binance 要求 batchOrders 参数是 JSON 字符串
+        # 过滤掉条件订单（它们需要单独用 Algo API 下单）
+        conditional_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET", "STOP", "TAKE_PROFIT"}
+        valid_orders = []
+        skipped_orders = []
+        
+        for order in orders:
+            if order.get("type") in conditional_types:
+                skipped_orders.append(order)
+            else:
+                valid_orders.append(order)
+        
+        if skipped_orders:
+            print(f"[BinanceClient] WARNING: Skipped {len(skipped_orders)} conditional orders (must use Algo API)")
+        
+        if not valid_orders:
+            return {"error": "No valid orders (conditional orders must use Algo API separately)"}
+        
         params = {
-            "batchOrders": json_module.dumps(orders)
+            "batchOrders": json_module.dumps(valid_orders)
         }
         
-        print(f"[BinanceClient] Batch orders: {orders}")
+        print(f"[BinanceClient] Batch orders: {valid_orders}")
         result = self._request("POST", "/fapi/v1/batchOrders", params)
         print(f"[BinanceClient] Batch orders result: {result}")
         return result
@@ -853,46 +985,48 @@ class BinanceFuturesClient:
         quantity: float,
         callback_rate: float,
         activation_price: float = None,
-        reduce_only: bool = True
+        reduce_only: bool = True,
+        position_side: str = None
     ) -> dict:
         """
-        下跟踪止损订单 (Trailing Stop Market)。
+        下跟踪止损订单 (TRAILING_STOP_MARKET) - 使用 Algo Order API。
         
-        跟踪止损会根据价格波动自动调整止损价格，
-        锁定利润的同时给予价格波动空间。
+        注意: 自 2025/12/9 起，条件订单已迁移到 Algo Order API。
         
         Args:
             symbol: 交易对
             side: BUY (用于空头平仓) 或 SELL (用于多头平仓)
             quantity: 数量
-            callback_rate: 回调比例 (0.1 = 0.1%, 范围 0.1-5)
+            callback_rate: 回调比例 (0.1-10，1 表示 1%)
             activation_price: 激活价格 (可选，价格达到此点开始跟踪)
-            reduce_only: 是否仅平仓 (默认 True)
+            reduce_only: 是否仅平仓 (仅 One-Way Mode 有效)
+            position_side: "LONG" or "SHORT" (Hedge Mode 必须指定)
         
         Returns:
             订单信息
-        
-        Example:
-            # 多头持仓，设置 1% 回调的跟踪止损
-            client.place_trailing_stop_order("BTCUSDT", "SELL", 0.001, callback_rate=1.0)
-            
-            # 设置激活价格的跟踪止损
-            client.place_trailing_stop_order("BTCUSDT", "SELL", 0.001, 
-                callback_rate=0.5, activation_price=100000)
         """
         params = {
+            "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": side.upper(),
             "type": "TRAILING_STOP_MARKET",
             "quantity": quantity,
-            "callbackRate": callback_rate,
-            "reduceOnly": "true" if reduce_only else "false"
+            "callbackRate": callback_rate
         }
         
-        if activation_price:
-            params["activationPrice"] = activation_price
+        # Hedge Mode: 使用 positionSide，不能使用 reduceOnly
+        if position_side:
+            params["positionSide"] = position_side.upper()
+        elif reduce_only:
+            params["reduceOnly"] = "true"
         
-        return self._request("POST", "/fapi/v1/order", params)
+        if activation_price:
+            params["activatePrice"] = activation_price  # Algo API 使用 activatePrice
+        
+        print(f"[BinanceClient] TRAILING_STOP_MARKET order params: {params}")
+        result = self._request("POST", "/fapi/v1/algoOrder", params)
+        print(f"[BinanceClient] TRAILING_STOP_MARKET order result: {result}")
+        return result
     
     def place_stop_limit_order(
         self,

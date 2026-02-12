@@ -1344,11 +1344,11 @@ function AppContent() {
               e.stopPropagation();
               startNewChat();
             }}
-            className={`w-full flex items-center gap-3 py-3 rounded-lg text-slate-300 hover:bg-slate-800/50 hover:text-white transition-colors ${isSidebarOpen ? 'px-4' : 'lg:justify-center lg:px-0 px-4'}`}
+            className={`w-full flex items-center py-3 rounded-lg text-slate-300 hover:bg-slate-800/50 hover:text-white transition-colors ${isSidebarOpen ? 'gap-3 px-4' : 'lg:justify-center lg:px-0 gap-3 px-4'}`}
             title={t('common.newChat')}
           >
             <Plus className="w-5 h-5 flex-shrink-0" />
-            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('common.newChat')}</span>
+            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:hidden opacity-100 max-w-[200px]'}`}>{t('common.newChat')}</span>
           </button>
         </div>
 
@@ -1356,11 +1356,11 @@ function AppContent() {
         <div className={`${isSidebarOpen ? 'px-2' : 'lg:px-2 px-2'}`}>
           <button
             onClick={() => { setShowStrategyNexus(true); setShowDailyReport(false); setSessionId(null); setMessages([]); }}
-            className={`w-full flex items-center gap-3 py-3 rounded-lg transition-colors ${isSidebarOpen ? 'px-4' : 'lg:justify-center lg:px-0 px-4'} ${showStrategyNexus ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'}`}
+            className={`w-full flex items-center py-3 rounded-lg transition-colors ${isSidebarOpen ? 'gap-3 px-4' : 'lg:justify-center lg:px-0 gap-3 px-4'} ${showStrategyNexus ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'}`}
             title={t('sidebar.strategyNexus')}
           >
             <Activity className={`w-5 h-5 flex-shrink-0 ${showStrategyNexus ? 'text-indigo-400' : ''}`} />
-            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('sidebar.strategyNexus')}</span>
+            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:hidden opacity-100 max-w-[200px]'}`}>{t('sidebar.strategyNexus')}</span>
           </button>
         </div>
 
@@ -1368,11 +1368,11 @@ function AppContent() {
         <div className={`${isSidebarOpen ? 'px-2' : 'lg:px-2 px-2'}`}>
           <button
             onClick={() => { setShowDailyReport(true); setShowStrategyNexus(false); setSessionId(null); setMessages([]); }}
-            className={`w-full flex items-center gap-3 py-3 rounded-lg transition-colors ${isSidebarOpen ? 'px-4' : 'lg:justify-center lg:px-0 px-4'} ${showDailyReport ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'}`}
+            className={`w-full flex items-center py-3 rounded-lg transition-colors ${isSidebarOpen ? 'gap-3 px-4' : 'lg:justify-center lg:px-0 gap-3 px-4'} ${showDailyReport ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'}`}
             title={t('sidebar.dailyReport')}
           >
             <Newspaper className={`w-5 h-5 flex-shrink-0 ${showDailyReport ? 'text-indigo-400' : ''}`} />
-            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:opacity-0 lg:max-w-0 opacity-100 max-w-[200px]'}`}>{t('sidebar.dailyReport')}</span>
+            <span className={`font-medium whitespace-nowrap overflow-hidden transition-all duration-300 ${isSidebarOpen ? 'opacity-100 max-w-[200px]' : 'lg:hidden opacity-100 max-w-[200px]'}`}>{t('sidebar.dailyReport')}</span>
           </button>
         </div>
 
@@ -1517,17 +1517,17 @@ function AppContent() {
                 {/* Avatar - clickable */}
                 <div
                   onClick={() => setShowUserMenu(!showUserMenu)}
-                  className="cursor-pointer hover:opacity-80 transition-opacity"
+                  className="w-8 h-8 flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
                 >
                   {(user.user_metadata?.picture || user.user_metadata?.avatar_url) ? (
                     <img
                       src={user.user_metadata.picture || user.user_metadata.avatar_url}
                       alt="avatar"
-                      className="w-8 h-8 rounded-full flex-shrink-0 object-cover"
+                      className="w-8 h-8 rounded-full object-cover"
                       referrerPolicy="no-referrer"
                     />
                   ) : (
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center text-white text-xs font-bold">
                       {user.user_metadata?.full_name?.[0]?.toUpperCase() || user.user_metadata?.name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase() || 'W'}
                     </div>
                   )}

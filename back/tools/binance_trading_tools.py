@@ -265,114 +265,83 @@ def binance_open_position(
             position_side = "BOTH"
             close_side = "SELL" if direction == "LONG" else "BUY"
         
-        # Build batch orders
-        orders = []
+        # Build main order (MARKET or LIMIT)
+        main_order = {
+            "symbol": symbol,
+            "side": side,
+            "positionSide": position_side,
+            "quantity": str(quantity)
+        }
         
-        # 1. 开仓单 (Main Order)
         if order_type == "LIMIT":
-            # Limit Order
             price = round_price(symbol, price)
-            orders.append({
-                "symbol": symbol,
-                "side": side,
-                "type": "LIMIT",
-                "timeInForce": "GTC", # Good Till Cancel
-                "quantity": str(quantity),
-                "price": str(price),
-                "positionSide": position_side
-            })
-            
-            # NOTE: For Limit orders, we cannot safely attach SL/TP in the same batch 
-            # because the entry might not fill immediately, and reduceOnly orders 
-            # might be rejected or trigger inappropriately.
-            if stop_loss or take_profit:
-                print(f"[BinanceTrading] WARNING: SL/TP ignored for LIMIT order on {symbol}. "
-                      f"Please manage risk manually after fill.")
+            main_order["type"] = "LIMIT"
+            main_order["timeInForce"] = "GTC"
+            main_order["price"] = str(price)
         else:
-            # Market Order
-            orders.append({
-                "symbol": symbol,
-                "side": side,
-                "type": "MARKET",
-                "quantity": str(quantity),
-                "positionSide": position_side
-            })
-            
-            # 2. 止损单 (if specified, only for Market)
-            if stop_loss:
-                stop_loss = round_price(symbol, stop_loss)
-                orders.append({
-                    "symbol": symbol,
-                    "side": close_side,
-                    "type": "STOP_MARKET",
-                    "quantity": str(quantity),
-                    "stopPrice": str(stop_loss),
-                    "positionSide": position_side, # SL orders need positionSide too? Yes.
-                    "closePosition": "true" if is_hedge_mode else "false", # Hedge Mode specific
-                    # Note: For One-Way Mode, closePosition=true is NOT supported in batch? 
-                    # Use reduceOnly=true for One-Way.
-                })
-                # Fix for params:
-                if not is_hedge_mode:
-                     orders[-1]["reduceOnly"] = "true"
-                     del orders[-1]["closePosition"]
-                else:
-                     # For Hedge Mode SL, usually type=STOP_MARKET, closePosition=true works?
-                     # Let's verify. API says "closePosition=true" works for STOP_MARKET.
-                     pass
-            
-            # 3. 止盈单 (if specified, only for Market)
-            if take_profit:
-                take_profit = round_price(symbol, take_profit)
-                orders.append({
-                    "symbol": symbol,
-                    "side": close_side,
-                    "type": "TAKE_PROFIT_MARKET",
-                    "quantity": str(quantity),
-                    "stopPrice": str(take_profit),
-                    "positionSide": position_side,
-                    "closePosition": "true" if is_hedge_mode else "false"
-                })
-                if not is_hedge_mode:
-                     orders[-1]["reduceOnly"] = "true"
-                     del orders[-1]["closePosition"]
+            main_order["type"] = "MARKET"
         
-        print(f"[BinanceTrading] Placing batch orders: {len(orders)} orders (Type: {order_type})")
-        
-        # Use batch orders API for atomic execution
-        batch_result = client.place_batch_orders(orders)
+        # 1. 先下主订单
+        print(f"[BinanceTrading] Placing main {order_type} order: {main_order}")
+        batch_result = client.place_batch_orders([main_order])
         
         if isinstance(batch_result, dict) and "error" in batch_result:
-            return {"error": f"Batch order failed: {batch_result['error']}"}
+            return {"error": f"main order failed: {batch_result['error']}"}
         
-        if not isinstance(batch_result, list):
+        if not isinstance(batch_result, list) or len(batch_result) == 0:
             return {"error": f"Unexpected batch result: {batch_result}"}
         
-        # Parse results
-        order_id = None
+        main_result = batch_result[0]
+        if "error" in main_result or "code" in main_result:
+            return {"error": f"Main order failed: {main_result}"}
+        
+        order_id = main_result.get("orderId")
+        avg_price = float(main_result.get("avgPrice", 0) or 0)
+        executed_qty = float(main_result.get("executedQty", 0) or 0)
+        
+        # 2. 下止损单 (使用 Algo Order API)
         sl_order_id = None
+        if stop_loss and order_type == "MARKET":
+            stop_loss = round_price(symbol, stop_loss)
+            try:
+                sl_result = client.place_stop_market_order(
+                    symbol=symbol,
+                    side=close_side,
+                    quantity=executed_qty if executed_qty > 0 else quantity,
+                    stop_price=stop_loss,
+                    reduce_only=not is_hedge_mode,
+                    position_side=position_side if is_hedge_mode else None
+                )
+                if isinstance(sl_result, dict) and "algoId" in sl_result:
+                    sl_order_id = sl_result.get("algoId")
+                elif isinstance(sl_result, dict) and "orderId" in sl_result:
+                    sl_order_id = sl_result.get("orderId")
+                else:
+                    print(f"[BinanceTrading] SL order result: {sl_result}")
+            except Exception as e:
+                print(f"[BinanceTrading] Failed to place SL: {e}")
+        
+        # 3. 下止盈单 (使用 Algo Order API)
         tp_order_id = None
-        avg_price = 0
-        executed_qty = 0
-        
-        for i, result in enumerate(batch_result):
-            if "error" in result or "code" in result:
-                print(f"[BinanceTrading] Order {i+1} failed: {result}")
-                continue
-            
-            res_type = result.get("type", "")
-            if res_type == "MARKET" or res_type == "LIMIT":
-                order_id = result.get("orderId")
-                avg_price = float(result.get("avgPrice", 0) or 0)
-                executed_qty = float(result.get("executedQty", 0) or 0)
-            elif res_type == "STOP_MARKET":
-                sl_order_id = result.get("orderId")
-            elif res_type == "TAKE_PROFIT_MARKET":
-                tp_order_id = result.get("orderId")
-        
-        # Check if main order succeeded
-        if not order_id:
-            return {"error": "Failed to place order"}
+        if take_profit and order_type == "MARKET":
+            take_profit = round_price(symbol, take_profit)
+            try:
+                tp_result = client.place_take_profit_market_order(
+                    symbol=symbol,
+                    side=close_side,
+                    quantity=executed_qty if executed_qty > 0 else quantity,
+                    stop_price=take_profit,
+                    reduce_only=not is_hedge_mode,
+                    position_side=position_side if is_hedge_mode else None
+                )
+                if isinstance(tp_result, dict) and "algoId" in tp_result:
+                    tp_order_id = tp_result.get("algoId")
+                elif isinstance(tp_result, dict) and "orderId" in tp_result:
+                    tp_order_id = tp_result.get("orderId")
+                else:
+                    print(f"[BinanceTrading] TP order result: {tp_result}")
+            except Exception as e:
+                print(f"[BinanceTrading] Failed to place TP: {e}")
         
         # Calculate fee (estimate)
         fee = notional_value * FEE_RATE
@@ -477,12 +446,31 @@ def binance_close_position(
         close_qty = quantity * (close_percent / 100)
         close_qty = round_quantity(symbol, close_qty)
         
-        # Determine side (opposite of position direction)
-        side = "SELL" if direction == "LONG" else "BUY"
+        # Check Position Mode (One-Way or Hedge)
+        try:
+            mode_resp = client.get_position_mode()
+            is_hedge_mode = mode_resp.get("dualSidePosition", False) if isinstance(mode_resp, dict) else False
+        except Exception as e:
+            print(f"[BinanceTrading] Check position mode failed: {e}")
+            is_hedge_mode = False
+        
+        # Determine side and positionSide based on mode
+        if is_hedge_mode:
+            # Hedge Mode: use positionSide, NOT reduceOnly
+            side = "SELL" if direction == "LONG" else "BUY"
+            position_side = direction  # LONG or SHORT
+            use_reduce_only = False
+        else:
+            # One-Way Mode: use reduceOnly, NOT positionSide
+            side = "SELL" if direction == "LONG" else "BUY"
+            position_side = None
+            use_reduce_only = True
         
         # Place market order to close
         order_result = client.place_market_order(
-            symbol, side, close_qty, reduce_only=True
+            symbol, side, close_qty, 
+            reduce_only=use_reduce_only,
+            position_side=position_side
         )
         
         if "error" in order_result:
@@ -757,14 +745,31 @@ def binance_update_stop_loss(
         direction = position.get("direction")
         quantity = position.get("quantity", 0)
         
+        # Check Position Mode (One-Way or Hedge)
+        try:
+            mode_resp = client.get_position_mode()
+            is_hedge_mode = mode_resp.get("dualSidePosition", False) if isinstance(mode_resp, dict) else False
+        except Exception as e:
+            print(f"[BinanceTrading] Check position mode failed: {e}")
+            is_hedge_mode = False
+        
         # Cancel existing orders
         client.cancel_all_orders(symbol)
         
         # Place new SL order
         new_stop_loss = round_price(symbol, new_stop_loss)
         sl_side = "SELL" if direction == "LONG" else "BUY"
+        
+        # Determine positionSide and reduceOnly based on mode
+        # Hedge Mode: use positionSide, NOT reduceOnly
+        # One-Way Mode: use reduceOnly, NOT positionSide
+        position_side = direction if is_hedge_mode else None
+        use_reduce_only = not is_hedge_mode
+        
         sl_result = client.place_stop_market_order(
-            symbol, sl_side, quantity, new_stop_loss
+            symbol, sl_side, quantity, new_stop_loss,
+            reduce_only=use_reduce_only,
+            position_side=position_side
         )
         
         if "error" in sl_result:
@@ -1442,6 +1447,14 @@ def binance_place_trailing_stop(
         pos_amt = float(position.get("positionAmt", 0))
         is_long = pos_amt > 0
         
+        # Check Position Mode (One-Way or Hedge)
+        try:
+            mode_resp = client.get_position_mode()
+            is_hedge_mode = mode_resp.get("dualSidePosition", False) if isinstance(mode_resp, dict) else False
+        except Exception as e:
+            print(f"[BinanceTrading] Check position mode failed: {e}")
+            is_hedge_mode = False
+        
         # 计算平仓数量
         if quantity:
             close_qty = abs(quantity)
@@ -1453,13 +1466,20 @@ def binance_place_trailing_stop(
         # 多头用 SELL，空头用 BUY
         side = "SELL" if is_long else "BUY"
         
+        # Determine positionSide and reduceOnly based on mode
+        # Hedge Mode: use positionSide, NOT reduceOnly
+        # One-Way Mode: use reduceOnly, NOT positionSide
+        position_side = ("LONG" if is_long else "SHORT") if is_hedge_mode else None
+        use_reduce_only = not is_hedge_mode
+        
         result = client.place_trailing_stop_order(
             symbol=symbol,
             side=side,
             quantity=close_qty,
             callback_rate=callback_rate,
             activation_price=activation_price,
-            reduce_only=True
+            reduce_only=use_reduce_only,
+            position_side=position_side
         )
         
         if isinstance(result, dict) and "error" in result:
@@ -1582,31 +1602,38 @@ def binance_change_position_mode(
 def calculate_position_size(
     symbol: str, 
     stop_loss: float, 
-    risk_percent: float = 1.0, 
+    risk_percent: float = 5.0,  # 提高默认风险比例到 5%
     entry_price: float = None, 
-    leverage: int = 5,
+    leverage: int = 10,  # 提高默认杠杆到 10x
     user_id: str = None,
-    max_risk_amount: float = 200.0,  # 新增：单笔最大亏损金额硬顶 (USD)
-    max_position_leverage: float = 10.0 # 新增：最大允许的有效杠杆 (Effective Leverage)
+    min_risk_amount: float = 10.0,  # 新增：最小风险金额 (USD)，小账户保护
+    max_risk_amount: float = 200.0,  # 单笔最大亏损金额硬顶 (USD)
+    max_position_leverage: float = 15.0 # 提高最大有效杠杆到 15x
 ) -> dict:
     """
-    基于账户权益和风险百分比计算建议仓位大小。
+    基于风险金额计算建议仓位大小（小资金友好）。
     
-    公式: Risk Amount = Equity * (risk_percent / 100)
+    核心逻辑:
+    1. 计算基于百分比的风险金额: Equity * (risk_percent / 100)
+    2. 应用最小/最大风险金额限制: min_risk_amount <= risk <= max_risk_amount
+    3. 小账户时，使用 min_risk_amount 确保仓位有意义
     
-    安全机制:
-    1. Hard Cap: 风险金额不超过 max_risk_amount
-    2. Leverage Check: 有效杠杆不超过 max_position_leverage
+    公式: Position Size = Risk Amount / (Entry Price - Stop Loss)
+    
+    小资金思路:
+    - 不是看百分比亏多少，而是看绝对金额亏多少
+    - 有杠杆放大仓位，小资金也能做出有意义的交易
     
     Args:
         symbol: 交易对
         stop_loss: 止损价格
-        risk_percent: 风险比例 (1%)
+        risk_percent: 风险比例 (默认 5%)
         entry_price: 入场价
-        leverage: 交易所杠杆倍数 (仅用于计算保证金)
+        leverage: 交易所杠杆倍数 (默认 10x)
         user_id: 用户ID
+        min_risk_amount: 风险金额下限 (USD), 默认 $10，确保小账户也能开出有意义的仓位
         max_risk_amount: 风险金额上限 (USD), 默认 $200
-        max_position_leverage: 有效杠杆上限 (防止过窄止损导致仓位过大), 默认 10倍
+        max_position_leverage: 有效杠杆上限 (防止过窄止损导致仓位过大), 默认 15x
     
     Returns:
         dict
@@ -1646,6 +1673,11 @@ def calculate_position_size(
         
     # 3. Calculate Risk Amount (Initial)
     risk_amount = equity * (risk_percent / 100.0)
+    
+    # [小资金保护] 应用最小风险金额
+    # 小账户时，使用 min_risk_amount 确保仓位有意义
+    if risk_amount < min_risk_amount:
+        risk_amount = min_risk_amount
     
     # [SAFETY 1] Apply Max Risk Amount Hard Cap
     if risk_amount > max_risk_amount:

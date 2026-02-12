@@ -11,12 +11,14 @@ from starlette.responses import Response
 import json
 import threading
 
+
+
 # Import both Agents
 # Import agents
 from agents.crypto_agent import crypto_agent
 from agents.trading_agent import trading_agent
 from agents.daily_report_agent import daily_report_agent
-from agents.swap_agent import swap_agent  # A2UI DEX 交易 Agent
+# from agents.swap_agent import swap_agent  # A2UI DEX 交易 Agent (DISABLED - 暂未使用)
 from agno.os import AgentOS
 from fastapi import FastAPI
 
@@ -25,7 +27,7 @@ from tools.trading_tools import set_current_user
 
 # Create AgentOS with all agents
 # Create AgentOS with all agents
-agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent, swap_agent])
+agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent])  # swap_agent disabled
 
 # Import initialization functions
 from app.routers.sessions import init_session_titles_table
@@ -63,6 +65,104 @@ async def lifespan(app: FastAPI):
 
 app = agent_os.get_app()
 app.router.lifespan_context = lifespan
+
+# ============= Rate Limiting Setup =============
+# 限流策略：
+# - Agent 调用: 10 次/分钟 (按用户/IP)
+# - Binance API: 30 次/分钟 (按用户)
+# - 其他 API: 100 次/分钟 (按 IP)
+
+import time
+from collections import defaultdict
+
+# 简单的内存限流器（替代 Redis，适合单实例部署）
+
+def get_remote_address(request: Request) -> str:
+    """获取客户端 IP 地址"""
+    # 检查代理头
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+    
+    # 直连
+    client = request.client
+    if client:
+        return client.host
+    
+    return "unknown"
+
+class SimpleRateLimiter:
+    """内存级别限流器，按路径和调用者进行限流"""
+    
+    def __init__(self):
+        self.requests = defaultdict(list)  # {key: [timestamps]}
+        self.limits = {
+            "agent": (10, 60),    # 10 次/60秒
+            "binance": (30, 60),  # 30 次/60秒
+            "default": (100, 60)  # 100 次/60秒
+        }
+    
+    def _get_category(self, path: str) -> str:
+        """根据路径判断限流类别"""
+        if "/agents/" in path or "/v1/runs" in path:
+            return "agent"
+        elif "/api/strategy/binance" in path or "/trade" in path or "/order" in path:
+            return "binance"
+        return "default"
+    
+    def is_allowed(self, key: str, path: str) -> tuple[bool, str]:
+        """检查请求是否允许"""
+        category = self._get_category(path)
+        limit, window = self.limits[category]
+        
+        now = time.time()
+        cache_key = f"{key}:{category}"
+        
+        # 清理过期请求
+        self.requests[cache_key] = [t for t in self.requests[cache_key] if now - t < window]
+        
+        if len(self.requests[cache_key]) >= limit:
+            remaining = int(window - (now - self.requests[cache_key][0]))
+            return False, f"Rate limit exceeded ({category}: {limit}/min). Retry after {remaining}s"
+        
+        self.requests[cache_key].append(now)
+        return True, ""
+
+rate_limiter = SimpleRateLimiter()
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """基于路径的限流中间件"""
+    
+    async def dispatch(self, request: Request, call_next):
+        # 跳过静态资源和健康检查
+        path = str(request.url.path)
+        if path.startswith("/static") or path == "/health" or path == "/":
+            return await call_next(request)
+        
+        # 获取限流 key
+        user_id = request.query_params.get("user_id")
+        key = user_id[:8] if user_id else get_remote_address(request)
+        
+        # 检查限流
+        allowed, message = rate_limiter.is_allowed(key, path)
+        if not allowed:
+            return Response(
+                content=json.dumps({"error": message, "code": "RATE_LIMITED"}),
+                status_code=429,
+                media_type="application/json"
+            )
+        
+        return await call_next(request)
+
+# 添加限流中间件
+app.add_middleware(RateLimitMiddleware)
+print("[Main] Rate limiting enabled: Agent=10/min, Binance=30/min, Default=100/min")
+
+
 
 # Middleware to set user context for trading tools
 class UserContextMiddleware(BaseHTTPMiddleware):
@@ -219,35 +319,36 @@ app.include_router(daily_report_router)
 from scheduler import start_scheduler
 print("[Main] Strategy scheduler imported")
 
-# Daily Report Scheduler: Always runs automatically (independent from strategy)
-def start_daily_report_scheduler():
-    """Start the daily report scheduler in background thread"""
-    import schedule
-    import time
-    import os
-    
-    # Wait for FastAPI server to fully start
-    time.sleep(5)
-    
-    print("[DailyReportScheduler] Starting...")
-    
-    DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")
-    DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")
-    
-    from scheduler import generate_daily_report, send_daily_report_emails
-    
-    schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
-    schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
-    
-    print(f"[DailyReportScheduler] Daily Report at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR} (local time)")
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # Check every minute
+# ============= Daily Report Scheduler (DISABLED - 功能升级中) =============
+# Daily Report Scheduler: 暂停服务，功能升级中
+# def start_daily_report_scheduler():
+#     """Start the daily report scheduler in background thread"""
+#     import schedule
+#     import time
+#     import os
+#     
+#     # Wait for FastAPI server to fully start
+#     time.sleep(5)
+#     
+#     print("[DailyReportScheduler] Starting...")
+#     
+#     DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")
+#     DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")
+#     
+#     from scheduler import generate_daily_report, send_daily_report_emails
+#     
+#     schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
+#     schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
+#     
+#     print(f"[DailyReportScheduler] Daily Report at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR} (local time)")
+#     
+#     while True:
+#         schedule.run_pending()
+#         time.sleep(60)  # Check every minute
 
-daily_report_thread = threading.Thread(target=start_daily_report_scheduler, daemon=True)
-daily_report_thread.start()
-print("[Main] Daily report scheduler started (always runs)")
+# daily_report_thread = threading.Thread(target=start_daily_report_scheduler, daemon=True)
+# daily_report_thread.start()
+print("[Main] Daily report scheduler DISABLED (功能升级中)")
 
 # ============= Cache Warmup =============
 # Pre-populate dashboard cache on startup to eliminate first-load delay
@@ -256,21 +357,21 @@ print("[Main] Daily report scheduler started (always runs)")
 print("[Main] Cache warmup disabled")
 
 
-# ============= Swap Quote API =============
+# ============= Swap Quote API (DISABLED - 暂未使用) =============
 # 供前端 SwapCard 获取实时报价数据
-from fastapi import Query
-from tools.swap_tools import get_swap_quote
-
-@app.get("/api/swap/quote")
-async def get_quote(
-    from_token: str = Query(..., description="源代币符号"),
-    to_token: str = Query(..., description="目标代币符号"),
-    amount: float = Query(..., description="源代币数量"),
-    network: str = Query("ethereum", description="网络")
-):
-    """获取 DEX 交易报价"""
-    quote = get_swap_quote(from_token, to_token, amount, network)
-    return quote
+# from fastapi import Query
+# from tools.swap_tools import get_swap_quote
+#
+# @app.get("/api/swap/quote")
+# async def get_quote(
+#     from_token: str = Query(..., description="源代币符号"),
+#     to_token: str = Query(..., description="目标代币符号"),
+#     amount: float = Query(..., description="源代币数量"),
+#     network: str = Query("ethereum", description="网络")
+# ):
+#     """获取 DEX 交易报价"""
+#     quote = get_swap_quote(from_token, to_token, amount, network)
+#     return quote
 
 
 

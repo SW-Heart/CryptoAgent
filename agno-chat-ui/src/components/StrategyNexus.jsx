@@ -7,7 +7,8 @@ import {
     Award, Power, Key, Play, Square, AlertCircle, Settings,
     ListFilter, History, Layers
 } from 'lucide-react';
-import TerminalLoader from './TerminalLoader';
+import CryptoLoader from './CryptoLoader';
+import BetaGate from './BetaGate';
 
 import { BASE_URL } from '../services/config';
 
@@ -34,7 +35,7 @@ export default function StrategyNexus({ userId, onBack }) {
     const [activeTab, setActiveTab] = useState('positions');
     const [orderFilter, setOrderFilter] = useState('OPEN'); // 'OPEN' or 'HISTORY'
     const [loading, setLoading] = useState(true);
-    const [showLoader, setShowLoader] = useState(true);
+    const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
     // Scheduler & Binance Status
     const [schedulerRunning, setSchedulerRunning] = useState(false);
@@ -43,7 +44,36 @@ export default function StrategyNexus({ userId, onBack }) {
     const [binanceLoading, setBinanceLoading] = useState(true);
     const [analysisLoading, setAnalysisLoading] = useState(false);
 
+    // Beta Access State
+    const [betaChecking, setBetaChecking] = useState(true);
+    const [hasBetaAccess, setHasBetaAccess] = useState(false);
+
     const isAdmin = userId === ADMIN_USER_ID;
+
+    // Check Beta Access on mount
+    useEffect(() => {
+        if (userId) {
+            checkBetaAccess();
+        }
+    }, [userId]);
+
+    const checkBetaAccess = async () => {
+        setBetaChecking(true);
+        try {
+            const res = await fetch(`${BASE_URL}/api/strategy/beta/status?user_id=${userId}`);
+            const data = await res.json();
+            setHasBetaAccess(data.has_beta_access || false);
+        } catch (e) {
+            console.error('[StrategyNexus] Beta check error:', e);
+            setHasBetaAccess(false);
+        } finally {
+            setBetaChecking(false);
+        }
+    };
+
+    const handleBetaAccessGranted = () => {
+        setHasBetaAccess(true);
+    };
 
     // Initial Status Check
     useEffect(() => {
@@ -210,9 +240,23 @@ export default function StrategyNexus({ userId, onBack }) {
         }
     }, [loadMoreLogs, logsHasMore, logsLoading]);
 
-    // Render Helpers
-    if (showLoader && binanceStatus?.is_configured && binanceStatus?.is_trading_enabled) {
-        return <TerminalLoader fullScreen={false} isReady={!loading} onComplete={() => setShowLoader(false)} />;
+    // 加载状态：binanceLoading 期间或数据加载期间都显示加载动画
+    // 条件1: binanceLoading 还在加载状态
+    // 条件2: binance 已配置且启用交易，但数据还没加载完
+    const showCryptoLoader = binanceLoading ||
+        (loading && binanceStatus?.is_configured && binanceStatus?.is_trading_enabled && !initialLoadComplete);
+
+    // Beta Access Check - Show BetaGate if user doesn't have access
+    if (betaChecking) {
+        return <CryptoLoader isReady={false} onComplete={() => { }} />;
+    }
+
+    if (!hasBetaAccess) {
+        return <BetaGate userId={userId} onAccessGranted={handleBetaAccessGranted} />;
+    }
+
+    if (showCryptoLoader) {
+        return <CryptoLoader isReady={!loading && !binanceLoading} onComplete={() => setInitialLoadComplete(true)} />;
     }
 
     // Not Configured View
@@ -310,7 +354,16 @@ export default function StrategyNexus({ userId, onBack }) {
                     value={`$${(wallet?.equity || 0).toFixed(2)}`} color="indigo" />
                 <StatCard icon={<DollarSign className="w-5 h-5" />} label={t('strategy.realizedPnL')}
                     value={`${(wallet?.total_pnl || 0) >= 0 ? '+' : ''}$${(wallet?.total_pnl || 0).toFixed(2)}`}
-                    subtext={`${((wallet?.total_pnl || 0) / (wallet?.initial_balance || 10000) * 100).toFixed(1)}% Return`}
+                    subtext={(() => {
+                        // 计算投入本金：权益 - 已实现盈亏 - 未实现盈亏
+                        const equity = wallet?.equity || 0;
+                        const realizedPnl = wallet?.total_pnl || 0;
+                        const unrealizedPnl = wallet?.unrealized_pnl || 0;
+                        const principal = equity - realizedPnl - unrealizedPnl;
+                        // 避免除零，且本金必须为正数才有意义
+                        const returnRate = principal > 0 ? (realizedPnl / principal * 100) : 0;
+                        return `${returnRate.toFixed(1)}% Return`;
+                    })()}
                     color={(wallet?.total_pnl || 0) >= 0 ? "green" : "red"} />
                 <StatCard icon={(wallet?.unrealized_pnl || 0) >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
                     label={t('strategy.unrealizedPnL')}

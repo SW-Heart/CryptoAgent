@@ -85,6 +85,9 @@ def _run_scheduler_loop():
     """Internal scheduler loop - runs until stopped (Strategy tasks only)"""
     global _scheduler_running
     
+    # 清除所有旧任务，防止重复注册
+    schedule.clear()
+    
     print("[Scheduler] Starting Strategy Nexus Scheduler...")
     print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
     print("[Scheduler] Position monitor runs every 10 seconds")
@@ -487,18 +490,89 @@ def update_positions_prices():
                     
     except Exception as e:
         print(f"[Scheduler] Error updating positions: {e}")
+# 去重锁：防止同一分钟内重复触发
+_last_strategy_trigger = None
+_strategy_trigger_lock = threading.Lock()
 
 def trigger_strategy(symbols: str = "BTC,ETH,SOL"):
-    """Trigger agent strategy analysis"""
+    """
+    Trigger agent strategy analysis for all active trading users.
+    
+    多用户模式：
+    1. 获取所有启用交易的用户
+    2. 为每个用户独立运行策略分析
+    3. 错开执行时间避免 API 限流
+    
+    使用去重锁防止同一分钟内重复触发。
+    """
+    global _last_strategy_trigger
+    
     round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
+    
+    # 去重检查：同一分钟内只允许触发一次
+    with _strategy_trigger_lock:
+        if _last_strategy_trigger == round_id:
+            print(f"[Scheduler] Strategy already triggered for {round_id}, skipping duplicate")
+            return
+        _last_strategy_trigger = round_id
     
     print(f"\n[Scheduler] ========== Strategy Round: {round_id} ==========")
     print(f"[Scheduler] Analyzing symbols: {symbols}")
     
+    # 获取所有活跃交易用户
+    try:
+        from binance_client import get_all_active_trading_users
+        active_users = get_all_active_trading_users()
+    except Exception as e:
+        print(f"[Scheduler] Error getting active users: {e}")
+        active_users = []
+    
+    # 如果没有活跃用户，使用管理员账户（虚拟交易模式）
+    if not active_users:
+        print(f"[Scheduler] No active trading users, using admin account for virtual trading")
+        active_users = [SCHEDULER_USER_ID]
+    else:
+        print(f"[Scheduler] Found {len(active_users)} active trading user(s)")
+    
+    # 为每个用户运行策略
+    for idx, user_id in enumerate(active_users):
+        try:
+            # 错开执行时间（每个用户间隔 2 秒）
+            if idx > 0:
+                time.sleep(2)
+            
+            _run_strategy_for_user(user_id, symbols, round_id)
+            
+        except Exception as e:
+            print(f"[Scheduler] Error running strategy for user {user_id[:8]}...: {e}")
+    
+    print(f"[Scheduler] ========== Round Complete ({len(active_users)} users) ==========\n")
+
+
+def _run_strategy_for_user(user_id: str, symbols: str, round_id: str):
+    """为单个用户运行策略分析"""
+    
+    # 获取用户策略配置
+    try:
+        from binance_client import get_user_strategy_config
+        config = get_user_strategy_config(user_id)
+        
+        # 检查用户是否启用策略
+        if not config.get("strategy_enabled", True):
+            print(f"[Scheduler] Strategy disabled for user {user_id[:8]}..., skipping")
+            return
+        
+        # 使用用户自定义币种列表
+        user_symbols = config.get("symbols", symbols)
+    except Exception as e:
+        print(f"[Scheduler] Error getting config for {user_id[:8]}: {e}")
+        user_symbols = symbols
+    
+    print(f"[Scheduler] Running strategy for user: {user_id[:8]}... (symbols: {user_symbols})")
+    
     try:
         # Call the Agent API with form-urlencoded (matching frontend format)
-        # Prompt includes full strategy execution: open/close positions, adjust SL/TP
-        strategy_prompt = f"""构建合约交易策略，分析币种({symbols})：
+        strategy_prompt = f"""构建合约交易策略，分析币种({user_symbols})：
 
 1. 分析市场多维共振信号（技术面、宏观面、消息面）
 2. 检查当前持仓状态和盈亏情况
@@ -514,25 +588,22 @@ def trigger_strategy(symbols: str = "BTC,ETH,SOL"):
             f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
             data={
                 "message": strategy_prompt,
-                "user_id": SCHEDULER_USER_ID,
-                "session_id": f"strategy-{SCHEDULER_USER_ID[:8]}_{round_id.replace(':', '-')}",
+                "user_id": user_id,
+                "session_id": f"strategy-{user_id[:8]}_{round_id.replace(':', '-')}",
                 "stream": "False"
             },
             timeout=120  # 2 minutes timeout for full analysis
         )
         
         if response.status_code == 200:
-            print(f"[Scheduler] Strategy completed successfully")
-            # Agent已经通过log_strategy_analysis记录日志，这里不再重复记录
+            print(f"[Scheduler] Strategy completed for user {user_id[:8]}...")
         else:
-            print(f"[Scheduler] Error: {response.status_code} - {response.text}")
+            print(f"[Scheduler] Error for {user_id[:8]}: {response.status_code} - {response.text[:200]}")
             log_strategy_round(round_id, symbols, {"content": f"Error: {response.status_code}"})
             
     except Exception as e:
-        print(f"[Scheduler] Exception during strategy: {e}")
+        print(f"[Scheduler] Exception for {user_id[:8]}: {e}")
         log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"})
-    
-    print(f"[Scheduler] ========== Round Complete ==========\n")
 
 
 # ============= Price Alert Monitoring =============

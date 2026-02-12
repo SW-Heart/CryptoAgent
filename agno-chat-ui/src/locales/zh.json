@@ -145,7 +145,9 @@
             "tradingEnabled": "交易已开启",
             "tradingDisabled": "交易已停止",
             "testnetHint": "测试网使用模拟资金，适合测试策略。访问 https://demo.binance.com/ 获取测试网 API Key。",
-            "securityNotice": "您的 API 密钥将被加密存储。请确保只授予必要的权限，建议仅开启交易权限。"
+            "securityNotice": "您的 API 密钥将被加密存储。请确保只授予必要的权限，建议仅开启交易权限。",
+            "ipWhitelistTitle": "必须配置 IP 白名单",
+            "ipWhitelistDesc": "请在 Binance API 管理页面将以下服务器 IP 添加到白名单。Binance 要求 API Key 必须绑定 IP 才能进行交易操作。"
         }
     },
     "auth": {
@@ -283,6 +285,22 @@
             "readyDesc": "API Key 已配置完成，点击下方按钮开始交易。",
             "startTrading": "开始交易",
             "stopTrading": "停止交易"
+        },
+        "beta": {
+            "title": "内测阶段",
+            "subtitle": "交易功能目前处于内测阶段，请输入邀请码进入",
+            "leaderboard": "内测精英榜",
+            "leaderboardDesc": "实时胜率排名",
+            "participants": "人参与",
+            "trades": "笔交易",
+            "period": "内测期间",
+            "contactDev": "邀请码请联系开发者获取",
+            "enterCode": "请输入邀请码",
+            "enterBeta": "进入内测",
+            "verifying": "验证中...",
+            "inviteOnly": "内测功能仅对受邀用户开放，功能可能存在变动",
+            "noData": "暂无交易数据",
+            "beFirst": "成为第一个上榜的交易者！"
         }
     },
     "dailyReport": {
@@ -372,7 +390,27 @@
             "getTrendingTokens": "热门代币排行",
             "setPriceAlert": "设置价格警报",
             "getPriceAlerts": "查看价格警报",
-            "cancelPriceAlert": "取消价格警报"
+            "cancelPriceAlert": "取消价格警报",
+            "getTopGainersCex": "获取 CEX 涨幅榜",
+            "getOnchainHotGainers": "获取链上热点异动",
+            "getWalletTransactions": "查询钱包交易记录",
+            "analyzeKline": "分析 K 线图",
+            "getBtcHolderDistribution": "BTC 持币分布",
+            "getWhaleTransactions": "监控巨鲸转账",
+            "getWhaleBalanceChanges": "鲸鱼余额变动",
+            "getWhaleSignals": "鲸鱼买卖信号",
+            "getMarketOdds": "查看市场预测赔率",
+            "searchDexPools": "搜索 DEX 池子",
+            "getDexPoolDetail": "查看 DEX 池详情",
+            "getSolanaBalance": "查询 Solana 余额",
+            "getSolanaTransactions": "查询 Solana 交易",
+            "getBitcoinBalance": "查询 BTC 余额",
+            "getBitcoinTransactions": "查询 BTC 交易",
+            "getTonBalance": "查询 TON 余额",
+            "getSuiBalance": "查询 SUI 余额",
+            "getTronBalance": "查询 TRON 余额",
+            "getMarketTrends": "分析市场趋势聚合",
+            "getMarketMacroMetrics": "宏观指标聚合"
         }
     },
     "landing": {

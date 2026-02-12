@@ -14,7 +14,6 @@ const toolKeyMap = {
     'get_eth_btc_ratio': 'getEthBtcRatio',
     'get_eth_gas_price': 'getEthGasPrice',
     'get_wallet_balance': 'getWalletBalance',
-    'get_wallet_transactions': 'getWalletBalance',
     'get_defi_tvl_ranking': 'getDefiTvlRanking',
     'get_protocol_tvl': 'getProtocolTvl',
     'get_chain_tvl': 'getChainTvl',
@@ -65,7 +64,28 @@ const toolKeyMap = {
     'detect_chart_patterns': 'detectChartPatterns',
     'analyze_wave_structure': 'analyzeWaveStructure',
     'get_indicator_reliability_all_timeframes': 'getIndicatorReliability',
-    'get_indicator_reliability': 'getIndicatorReliability'
+    'get_indicator_reliability': 'getIndicatorReliability',
+    // New Tools Mappings
+    'get_top_gainers_cex': 'getTopGainersCex',
+    'get_onchain_hot_gainers': 'getOnchainHotGainers',
+    'get_wallet_transactions': 'getWalletTransactions',
+    'analyze_kline': 'analyzeKline',
+    'get_btc_holder_distribution': 'getBtcHolderDistribution',
+    'get_whale_transactions': 'getWhaleTransactions',
+    'get_whale_balance_changes': 'getWhaleBalanceChanges',
+    'get_whale_signals': 'getWhaleSignals',
+    'get_market_odds': 'getMarketOdds',
+    'search_dex_pools': 'searchDexPools',
+    'get_dex_pool_detail': 'getDexPoolDetail',
+    'get_solana_balance': 'getSolanaBalance',
+    'get_solana_transactions': 'getSolanaTransactions',
+    'get_bitcoin_balance': 'getBitcoinBalance',
+    'get_bitcoin_transactions': 'getBitcoinTransactions',
+    'get_ton_balance': 'getTonBalance',
+    'get_sui_balance': 'getSuiBalance',
+    'get_tron_balance': 'getTronBalance',
+    'get_market_trends': 'getMarketTrends',
+    'get_market_macro_metrics': 'getMarketMacroMetrics'
 };
 
 // Icon mapping (unchanged)
@@ -132,7 +152,28 @@ const toolIconMap = {
     'get_trendlines': 'trend',
     'detect_chart_patterns': 'chart',
     'analyze_wave_structure': 'trend',
-    'get_indicator_reliability': 'chart'
+    'get_indicator_reliability': 'chart',
+    // New Tools Icons
+    'get_top_gainers_cex': 'trend',
+    'get_onchain_hot_gainers': 'fire',
+    'get_wallet_transactions': 'activity',
+    'analyze_kline': 'chart',
+    'get_btc_holder_distribution': 'chart',
+    'get_whale_transactions': 'activity',
+    'get_whale_balance_changes': 'activity',
+    'get_whale_signals': 'news',
+    'get_market_odds': 'trend',
+    'search_dex_pools': 'search',
+    'get_dex_pool_detail': 'chart',
+    'get_solana_balance': 'activity',
+    'get_solana_transactions': 'activity',
+    'get_bitcoin_balance': 'activity',
+    'get_bitcoin_transactions': 'activity',
+    'get_ton_balance': 'activity',
+    'get_sui_balance': 'activity',
+    'get_tron_balance': 'activity',
+    'get_market_trends': 'trend',
+    'get_market_macro_metrics': 'globe'
 };
 
 // Tool name to display info mapping

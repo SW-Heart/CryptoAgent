@@ -411,7 +411,6 @@ function UsageContent({ credits, history, currentPage, totalPages, onPageChange,
 function ExchangeContent({ userId, t }) {
     const [apiKey, setApiKey] = useState('');
     const [apiSecret, setApiSecret] = useState('');
-    const [isTestnet, setIsTestnet] = useState(true);
     const [showSecret, setShowSecret] = useState(false);
     const [status, setStatus] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -454,7 +453,7 @@ function ExchangeContent({ userId, t }) {
                 body: JSON.stringify({
                     api_key: apiKey,
                     api_secret: apiSecret,
-                    is_testnet: isTestnet
+                    is_testnet: false
                 })
             });
             const data = await response.json();
@@ -555,31 +554,6 @@ function ExchangeContent({ userId, t }) {
                 <div className="bg-[#131722] rounded-xl p-4 border border-slate-700/50 space-y-4">
                     <h3 className="text-white font-medium">{t('settings.exchange.configureKeys')}</h3>
 
-                    {/* Network Toggle */}
-                    <div className="flex items-center justify-between">
-                        <span className="text-slate-400 text-sm">{t('settings.exchange.network')}</span>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => setIsTestnet(true)}
-                                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${isTestnet
-                                    ? 'bg-indigo-600 text-white'
-                                    : 'bg-slate-800/50 text-slate-400 hover:text-white'
-                                    }`}
-                            >
-                                {t('settings.exchange.testnet')}
-                            </button>
-                            <button
-                                onClick={() => setIsTestnet(false)}
-                                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${!isTestnet
-                                    ? 'bg-indigo-600 text-white'
-                                    : 'bg-slate-800/50 text-slate-400 hover:text-white'
-                                    }`}
-                            >
-                                {t('settings.exchange.mainnet')}
-                            </button>
-                        </div>
-                    </div>
-
                     {/* API Key Input */}
                     <div>
                         <label className="block text-sm text-slate-500 mb-1.5">API Key</label>
@@ -613,6 +587,19 @@ function ExchangeContent({ userId, t }) {
                         </div>
                     </div>
 
+                    {/* IP Whitelist Notice */}
+                    <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-lg p-3">
+                        <p className="text-indigo-400 text-sm font-medium mb-1">
+                            📋 {t('settings.exchange.ipWhitelistTitle')}
+                        </p>
+                        <p className="text-slate-400 text-xs mb-2">
+                            {t('settings.exchange.ipWhitelistDesc')}
+                        </p>
+                        <code className="block bg-slate-800/50 rounded px-2 py-1.5 text-indigo-300 text-sm font-mono select-all">
+                            47.79.241.49
+                        </code>
+                    </div>
+
                     {/* Error Message */}
                     {error && (
                         <p className="text-red-400 text-sm">{error}</p>
@@ -626,13 +613,6 @@ function ExchangeContent({ userId, t }) {
                     >
                         {saving ? t('settings.exchange.saving') : t('settings.exchange.save')}
                     </button>
-
-                    {/* Testnet Instructions */}
-                    {isTestnet && (
-                        <p className="text-slate-500 text-xs">
-                            {t('settings.exchange.testnetHint')}
-                        </p>
-                    )}
                 </div>
             ) : (
                 /* Keys Configured - Show Delete Option */
