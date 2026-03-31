@@ -198,6 +198,14 @@
     },
     "strategy": {
         "title": "Strategy Nexus",
+        "settings": {
+            "title": "Personal Strategy Settings",
+            "symbols": "Trading Symbols (BTC,ETH,SOL)",
+            "tradingInterval": "Trading Frequency (Minutes)",
+            "maxPositions": "Max Positions",
+            "riskPerTrade": "Risk Per Trade (%)",
+            "agentRequirements": "Agent Instructions & Preferences"
+        },
         "live": "LIVE",
         "autoRefresh": "Auto-refresh every 10s",
         "equity": "Equity",
@@ -271,21 +279,17 @@
             "loadMore": "Load More",
             "noMore": "No more logs"
         },
-        "scheduler": {
-            "running": "Running",
-            "stopped": "Stopped",
-            "start": "Start",
-            "stop": "Stop"
-        },
         "binance": {
             "setupTitle": "Configure Trading Account",
             "setupDesc": "Please configure your Binance API Key in settings to start trading.",
             "goToSettings": "Go to Settings",
             "readyToTrade": "Ready to Trade",
             "readyDesc": "API Key configured. Click the button below to start trading.",
-            "startTrading": "Start Trading",
+            "startTrading": "Start Auto-Trading",
             "stopTrading": "Stop Trading"
         },
+        "runAnalysis": "Debug Trigger",
+        "analyzing": "Analyzing...",
         "beta": {
             "title": "Beta Phase",
             "subtitle": "Trading features are in beta. Enter your invite code to access.",

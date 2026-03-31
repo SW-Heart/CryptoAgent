@@ -89,17 +89,15 @@ def _run_scheduler_loop():
     schedule.clear()
     
     print("[Scheduler] Starting Strategy Nexus Scheduler...")
-    print("[Scheduler] Strategy triggers HOURLY at :30 (every hour)")
+    print("[Scheduler] Strategy checks EVERY MINUTE (individual per-user intervals)")
     print("[Scheduler] Position monitor runs every 10 seconds")
     print("[Scheduler] Binance position sync runs every 30 seconds")
     print("[Scheduler] Price alert check runs every 60 seconds")
     print("[Scheduler] Note: Daily Report runs independently (not controlled here)")
     print()
     
-    # Schedule strategy at fixed times (every 1 hour, at :30)
-    for hour in range(24):
-        time_str = f"{hour:02d}:30"
-        schedule.every().day.at(time_str).do(trigger_strategy)
+    # Schedule strategy EVERY MINUTE (checks user-specific intervals)
+    schedule.every(1).minutes.do(trigger_strategy)
     
     # Schedule position price updates every 10 seconds (for virtual trading)
     schedule.every(10).seconds.do(update_positions_prices)
@@ -537,43 +535,78 @@ def trigger_strategy(symbols: str = "BTC,ETH,SOL"):
     # 为每个用户运行策略
     for idx, user_id in enumerate(active_users):
         try:
+            # 1. 获取用户策略配置（包含 interval 和 last_analyzed_at）
+            from binance_client import get_user_strategy_config
+            config = get_user_strategy_config(user_id)
+            
+            # 如果是管理员且没有配置，按默认 60 分钟运行
+            interval_min = config.get("trading_interval", 60)
+            last_analyzed = config.get("last_analyzed_at")
+            
+            should_run = False
+            if not last_analyzed:
+                # 初始化时间到当前，防止启动时的“幻觉式触发”
+                from binance_client import update_last_analyzed_at
+                update_last_analyzed_at(user_id)
+                print(f"[Scheduler] User {user_id[:8]}... initialized last_analyzed_at to now, skipping phantom run")
+                continue
+            else:
+                last_dt = datetime.fromisoformat(last_analyzed)
+                time_diff = (datetime.now() - last_dt).total_seconds() / 60
+                # 如果时间到了，或者跨过了整点（兼容旧逻辑感官）
+                if time_diff >= (interval_min - 0.5): # 允许 30 秒误差
+                    should_run = True
+            
+            if not should_run:
+                # 仅对启用策略的用户打印跳过日志（避免刷屏）
+                if config.get("strategy_enabled", True) and idx % 10 == 0: # 抽样打印
+                    pass 
+                continue
+
             # 错开执行时间（每个用户间隔 2 秒）
             if idx > 0:
-                time.sleep(2)
+                time.sleep(1)
             
-            _run_strategy_for_user(user_id, symbols, round_id)
+            _run_strategy_for_user(user_id, symbols, round_id, config)
             
         except Exception as e:
             print(f"[Scheduler] Error running strategy for user {user_id[:8]}...: {e}")
     
-    print(f"[Scheduler] ========== Round Complete ({len(active_users)} users) ==========\n")
+    # print(f"[Scheduler] ========== Round Complete ==========\n")
 
 
-def _run_strategy_for_user(user_id: str, symbols: str, round_id: str):
+def _run_strategy_for_user(user_id: str, symbols: str, round_id: str, config: dict = None):
     """为单个用户运行策略分析"""
     
-    # 获取用户策略配置
-    try:
-        from binance_client import get_user_strategy_config
-        config = get_user_strategy_config(user_id)
-        
-        # 检查用户是否启用策略
-        if not config.get("strategy_enabled", True):
-            print(f"[Scheduler] Strategy disabled for user {user_id[:8]}..., skipping")
-            return
-        
-        # 使用用户自定义币种列表
-        user_symbols = config.get("symbols", symbols)
-    except Exception as e:
-        print(f"[Scheduler] Error getting config for {user_id[:8]}: {e}")
-        user_symbols = symbols
+    # 如果没传入 config 则获取
+    if config is None:
+        try:
+            from binance_client import get_user_strategy_config
+            config = get_user_strategy_config(user_id)
+        except Exception as e:
+            print(f"[Scheduler] Error getting config for {user_id[:8]}: {e}")
+            config = {}
+    
+    # 检查用户是否启用策略
+    if not config.get("strategy_enabled", True):
+        return
+    
+    # 使用用户自定义币种列表
+    user_symbols = config.get("symbols", symbols)
     
     print(f"[Scheduler] Running strategy for user: {user_id[:8]}... (symbols: {user_symbols})")
     
     try:
+        # Get custom instructions from config
+        agent_reqs = config.get("agent_requirements", "Focus on trend following strategy with strict risk management.")
+        
         # Call the Agent API with form-urlencoded (matching frontend format)
         strategy_prompt = f"""构建合约交易策略，分析币种({user_symbols})：
 
+**我的交易要求和偏好**:
+{agent_reqs}
+
+**目标执行流程**:
 1. 分析市场多维共振信号（技术面、宏观面、消息面）
 2. 检查当前持仓状态和盈亏情况
 3. 根据分析结果执行策略：
@@ -597,6 +630,20 @@ def _run_strategy_for_user(user_id: str, symbols: str, round_id: str):
         
         if response.status_code == 200:
             print(f"[Scheduler] Strategy completed for user {user_id[:8]}...")
+            
+            # 更新最后分析时间
+            try:
+                from binance_client import get_db_connection
+                conn = get_db_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE user_strategy_config SET last_analyzed_at = %s WHERE user_id = %s",
+                        (datetime.now(), user_id)
+                    )
+                    conn.commit()
+                conn.close()
+            except Exception as db_e:
+                print(f"[Scheduler] Failed to update last_analyzed_at for {user_id[:8]}: {db_e}")
         else:
             print(f"[Scheduler] Error for {user_id[:8]}: {response.status_code} - {response.text[:200]}")
             log_strategy_round(round_id, symbols, {"content": f"Error: {response.status_code}"})

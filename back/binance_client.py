@@ -133,10 +133,43 @@ def init_binance_tables():
                 strategy_enabled BOOLEAN DEFAULT TRUE,
                 max_positions INTEGER DEFAULT 3,
                 risk_per_trade REAL DEFAULT 0.02,
+                agent_requirements TEXT DEFAULT 'Focus on trend following strategy with strict risk management.',
+                trading_interval INTEGER DEFAULT 60, -- minutes
+                last_analyzed_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migration: Add agent_requirements column
+        try:
+            cursor.execute("SELECT agent_requirements FROM user_strategy_config LIMIT 1")
+        except Exception:
+            conn.rollback()
+            print("[BinanceClient] Migrating user_strategy_config: Adding agent_requirements column")
+            with conn.cursor() as migration_cursor:
+                migration_cursor.execute("ALTER TABLE user_strategy_config ADD COLUMN agent_requirements TEXT DEFAULT 'Focus on trend following strategy with strict risk management.'")
+                conn.commit()
+
+        # Migration: Add trading_interval column
+        try:
+            cursor.execute("SELECT trading_interval FROM user_strategy_config LIMIT 1")
+        except Exception:
+            conn.rollback()
+            print("[BinanceClient] Migrating user_strategy_config: Adding trading_interval column")
+            with conn.cursor() as migration_cursor:
+                migration_cursor.execute("ALTER TABLE user_strategy_config ADD COLUMN trading_interval INTEGER DEFAULT 60")
+                conn.commit()
+        
+        # Migration: Add last_analyzed_at column
+        try:
+            cursor.execute("SELECT last_analyzed_at FROM user_strategy_config LIMIT 1")
+        except Exception:
+            conn.rollback()
+            print("[BinanceClient] Migrating user_strategy_config: Adding last_analyzed_at column")
+            with conn.cursor() as migration_cursor:
+                migration_cursor.execute("ALTER TABLE user_strategy_config ADD COLUMN last_analyzed_at TIMESTAMP")
+                conn.commit()
+
         conn.commit()
     conn.close()
 
@@ -371,12 +404,12 @@ def get_user_strategy_config(user_id: str) -> dict:
     Get user's strategy configuration.
     
     Returns:
-        dict with symbols, strategy_enabled, max_positions, risk_per_trade
+        dict with symbols, strategy_enabled, max_positions, risk_per_trade, agent_requirements
     """
     conn = _get_db()
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT symbols, strategy_enabled, max_positions, risk_per_trade FROM user_strategy_config WHERE user_id = %s",
+            "SELECT symbols, strategy_enabled, max_positions, risk_per_trade, agent_requirements, trading_interval, last_analyzed_at FROM user_strategy_config WHERE user_id = %s",
             (user_id,)
         )
         row = cursor.fetchone()
@@ -388,19 +421,39 @@ def get_user_strategy_config(user_id: str) -> dict:
             "symbols": "BTC,ETH,SOL",
             "strategy_enabled": True,
             "max_positions": 3,
-            "risk_per_trade": 0.02
+            "risk_per_trade": 0.02,
+            "agent_requirements": "Focus on trend following strategy with strict risk management.",
+            "trading_interval": 60,
+            "last_analyzed_at": None
         }
     
     return {
         "symbols": row["symbols"],
         "strategy_enabled": bool(row["strategy_enabled"]),
         "max_positions": row["max_positions"],
-        "risk_per_trade": row["risk_per_trade"]
+        "risk_per_trade": row["risk_per_trade"],
+        "agent_requirements": row["agent_requirements"],
+        "trading_interval": row["trading_interval"],
+        "last_analyzed_at": row["last_analyzed_at"].isoformat() if row["last_analyzed_at"] else None
     }
 
 
+def update_last_analyzed_at(user_id: str):
+    """Update last_analyzed_at to current timestamp for a user."""
+    from datetime import datetime
+    conn = _get_db()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE user_strategy_config SET last_analyzed_at = %s WHERE user_id = %s",
+            (datetime.now(), user_id)
+        )
+        conn.commit()
+    conn.close()
+
+
 def save_user_strategy_config(user_id: str, symbols: str = None, strategy_enabled: bool = None, 
-                               max_positions: int = None, risk_per_trade: float = None) -> dict:
+                              max_positions: int = None, risk_per_trade: float = None, 
+                              agent_requirements: str = None, trading_interval: int = None) -> dict:
     """
     Save user's strategy configuration.
     """
@@ -426,6 +479,12 @@ def save_user_strategy_config(user_id: str, symbols: str = None, strategy_enable
             if risk_per_trade is not None:
                 updates.append("risk_per_trade = %s")
                 values.append(risk_per_trade)
+            if agent_requirements is not None:
+                updates.append("agent_requirements = %s")
+                values.append(agent_requirements)
+            if trading_interval is not None:
+                updates.append("trading_interval = %s")
+                values.append(trading_interval)
             
             if updates:
                 updates.append("updated_at = CURRENT_TIMESTAMP")
@@ -437,10 +496,11 @@ def save_user_strategy_config(user_id: str, symbols: str = None, strategy_enable
         else:
             # Insert new config
             cursor.execute("""
-                INSERT INTO user_strategy_config (user_id, symbols, strategy_enabled, max_positions, risk_per_trade)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO user_strategy_config (user_id, symbols, strategy_enabled, max_positions, risk_per_trade, agent_requirements)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (user_id, symbols or "BTC,ETH,SOL", strategy_enabled if strategy_enabled is not None else True,
-                  max_positions or 3, risk_per_trade or 0.02))
+                  max_positions or 3, risk_per_trade or 0.02, 
+                  agent_requirements or "Focus on trend following strategy with strict risk management."))
         
         conn.commit()
     conn.close()

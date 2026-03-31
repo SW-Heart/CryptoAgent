@@ -1238,11 +1238,54 @@ def run_strategy_analysis(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============= Beta Access System =============
-# 内测期间: 2026年2月 - 2026年3月
+# ============= Strategy Configuration =============
 
-BETA_START_DATE = "2026-02-01"
-BETA_END_DATE = "2026-03-31"
+@router.get("/config")
+def get_user_strategy_settings(user_id: str):
+    """Get user-specific strategy configuration."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        from binance_client import get_user_strategy_config
+        return get_user_strategy_config(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/config/set")
+def save_user_strategy_settings(user_id: str, config: dict):
+    """Save user-specific strategy configuration."""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        from binance_client import save_user_strategy_config
+        
+        # Extract fields from config dict
+        symbols = config.get("symbols")
+        strategy_enabled = config.get("strategy_enabled")
+        max_positions = config.get("max_positions")
+        risk_per_trade = config.get("risk_per_trade")
+        agent_requirements = config.get("agent_requirements")
+        trading_interval = config.get("trading_interval")
+        
+        res = save_user_strategy_config(
+            user_id=user_id,
+            symbols=symbols,
+            strategy_enabled=strategy_enabled,
+            max_positions=max_positions,
+            risk_per_trade=risk_per_trade,
+            agent_requirements=agent_requirements,
+            trading_interval=trading_interval
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============= Beta Access System =============
+# 内测期间: 2026年4月 - 2026年5月
+
+BETA_START_DATE = "2026-04-01"
+BETA_END_DATE = "2026-05-31"
 
 # 预设邀请码 (10个6位码)
 BETA_INVITE_CODES = {

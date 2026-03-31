@@ -37,7 +37,7 @@ export default function BetaGate({ userId, onAccessGranted }) {
             const res = await fetch(`${BASE_URL}/api/strategy/beta/leaderboard`);
             const data = await res.json();
             setLeaderboard(data.leaderboard || []);
-            setBetaPeriod(data.beta_period || { start: '2026-02-01', end: '2026-03-31' });
+            setBetaPeriod(data.beta_period || { start: '2026-04-01', end: '2026-05-31' });
             setTotalParticipants(data.total_participants || 0);
         } catch (e) {
             console.error('Failed to fetch leaderboard:', e);

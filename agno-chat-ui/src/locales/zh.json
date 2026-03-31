@@ -198,6 +198,14 @@
     },
     "strategy": {
         "title": "策略中心",
+        "settings": {
+            "title": "个性化策略设置",
+            "symbols": "监控币种 (逗号分隔，如 BTC,ETH,SOL)",
+            "tradingInterval": "策略触发频率 (分钟)",
+            "maxPositions": "最大持仓数",
+            "riskPerTrade": "单笔风险比例 (%)",
+            "agentRequirements": "Agent 交易指令 & 偏好要求"
+        },
         "live": "实时",
         "autoRefresh": "每10秒自动刷新",
         "equity": "总权益",
@@ -271,21 +279,17 @@
             "loadMore": "加载更多",
             "noMore": "没有更多日志了"
         },
-        "scheduler": {
-            "running": "运行中",
-            "stopped": "已停止",
-            "start": "启动",
-            "stop": "停止"
-        },
         "binance": {
             "setupTitle": "配置交易账户",
             "setupDesc": "请先在设置中配置您的 Binance API Key，即可开始交易。",
             "goToSettings": "前往设置",
             "readyToTrade": "已准备就绪",
             "readyDesc": "API Key 已配置完成，点击下方按钮开始交易。",
-            "startTrading": "开始交易",
+            "startTrading": "开始周期交易",
             "stopTrading": "停止交易"
         },
+        "runAnalysis": "调试触发",
+        "analyzing": "分析中...",
         "beta": {
             "title": "内测阶段",
             "subtitle": "交易功能目前处于内测阶段，请输入邀请码进入",

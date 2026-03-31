@@ -9,11 +9,9 @@ import {
 } from 'lucide-react';
 import CryptoLoader from './CryptoLoader';
 import BetaGate from './BetaGate';
+import StrategySettingsModal from './StrategySettingsModal';
 
 import { BASE_URL } from '../services/config';
-
-// Admin user ID - must match backend STRATEGY_ADMIN_USER_ID
-const ADMIN_USER_ID = 'ee20fa53-5ac2-44bc-9237-41b308e291d8';
 
 // Main Component
 export default function StrategyNexus({ userId, onBack }) {
@@ -33,13 +31,12 @@ export default function StrategyNexus({ userId, onBack }) {
 
     // UI state
     const [activeTab, setActiveTab] = useState('positions');
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [orderFilter, setOrderFilter] = useState('OPEN'); // 'OPEN' or 'HISTORY'
     const [loading, setLoading] = useState(true);
     const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
-    // Scheduler & Binance Status
-    const [schedulerRunning, setSchedulerRunning] = useState(false);
-    const [schedulerLoading, setSchedulerLoading] = useState(false);
+    // Binance Status
     const [binanceStatus, setBinanceStatus] = useState(null);
     const [binanceLoading, setBinanceLoading] = useState(true);
     const [analysisLoading, setAnalysisLoading] = useState(false);
@@ -47,8 +44,6 @@ export default function StrategyNexus({ userId, onBack }) {
     // Beta Access State
     const [betaChecking, setBetaChecking] = useState(true);
     const [hasBetaAccess, setHasBetaAccess] = useState(false);
-
-    const isAdmin = userId === ADMIN_USER_ID;
 
     // Check Beta Access on mount
     useEffect(() => {
@@ -78,7 +73,6 @@ export default function StrategyNexus({ userId, onBack }) {
     // Initial Status Check
     useEffect(() => {
         fetchBinanceStatus();
-        fetchSchedulerStatus();
         // Listener for setting changes
         const handleStatusChanged = () => {
             console.log('[StrategyNexus] Binance status changed, refreshing...');
@@ -97,29 +91,6 @@ export default function StrategyNexus({ userId, onBack }) {
         }
     }, [binanceStatus?.is_configured, binanceStatus?.is_trading_enabled, orderFilter]); // Rerun if orderFilter changes
 
-    const fetchSchedulerStatus = async () => {
-        try {
-            const res = await fetch(`${BASE_URL}/api/strategy/scheduler/status`);
-            const data = await res.json();
-            setSchedulerRunning(data.running || false);
-        } catch (e) {
-            console.error('Scheduler status error:', e);
-        }
-    };
-
-    const toggleScheduler = async () => {
-        if (!isAdmin || schedulerLoading) return;
-        setSchedulerLoading(true);
-        try {
-            const endpoint = schedulerRunning ? 'stop' : 'start';
-            await fetch(`${BASE_URL}/api/strategy/scheduler/${endpoint}?user_id=${userId}`, { method: 'POST' });
-            setSchedulerRunning(!schedulerRunning);
-        } catch (e) {
-            console.error('Scheduler toggle error:', e);
-        } finally {
-            setSchedulerLoading(false);
-        }
-    };
 
     const fetchBinanceStatus = async () => {
         if (!userId) return;
@@ -278,31 +249,6 @@ export default function StrategyNexus({ userId, onBack }) {
         );
     }
 
-    // Not Started View
-    if (binanceStatus?.is_configured && !binanceStatus?.is_trading_enabled && !binanceLoading) {
-        return (
-            <div className="flex-1 flex flex-col items-center justify-center bg-[#0d1117] p-8">
-                <div className="bg-[#131722] rounded-2xl p-8 max-w-md w-full border border-slate-700/50 text-center">
-                    <div className="w-16 h-16 rounded-full bg-green-500/20 flex items-center justify-center mx-auto mb-6">
-                        <Play className="w-8 h-8 text-green-400" />
-                    </div>
-                    <h2 className="text-xl font-semibold text-white mb-2">{t('strategy.binance.readyToTrade')}</h2>
-                    <p className="text-slate-400 text-sm mb-2">{t('strategy.binance.readyDesc')}</p>
-                    {binanceStatus?.balance && (
-                        <div className="text-sm mb-6">
-                            <p className="text-green-400">
-                                {t('settings.exchange.balance')}: ${binanceStatus.balance.available_balance?.toFixed(2)}
-                            </p>
-                        </div>
-                    )}
-                    <button onClick={toggleTrading} disabled={binanceLoading}
-                        className="w-full py-3 rounded-xl bg-green-600 hover:bg-green-700 text-white font-medium flex items-center justify-center gap-2">
-                        <Play className="w-5 h-5" /> {binanceLoading ? t('common.loading') : t('strategy.binance.startTrading')}
-                    </button>
-                </div>
-            </div>
-        );
-    }
 
     return (
         <div className="flex-1 flex flex-col bg-[#0d1117] overflow-hidden">
@@ -311,40 +257,37 @@ export default function StrategyNexus({ userId, onBack }) {
                 <div className="flex items-center gap-3">
                     <Activity className="w-6 h-6 text-indigo-400" />
                     <h1 className="text-xl font-semibold text-white">{t('strategy.title')}</h1>
-                    <span className={`px-2 py-0.5 text-xs rounded-full ${schedulerRunning ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/20 text-slate-400'}`}>
-                        {schedulerRunning ? t('strategy.scheduler.running') : t('strategy.scheduler.stopped')}
-                    </span>
                 </div>
                 <div className="flex items-center gap-3">
-                    {/* Manual Trigger Button */}
-                    <button onClick={runAnalysis} disabled={analysisLoading}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30`}>
-                        <Play className={`w-4 h-4 ${analysisLoading ? 'animate-spin' : ''}`} />
-                        {analysisLoading ? t('strategy.analyzing', 'Analyzing...') : t('strategy.runAnalysis', 'Run Analysis')}
+                    {/* Strategy Settings Button */}
+                    <button
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20"
+                    >
+                        <Settings className="w-3.5 h-3.5" />
+                        {t('strategy.settings.title', 'Trading Settings')}
                     </button>
 
-                    {/* Trading Toggle */}
+                    {/* Manual Trigger Button (Debug) */}
+                    <button 
+                        onClick={runAnalysis} 
+                        disabled={analysisLoading}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-800/50 text-slate-400 hover:text-white border border-slate-700/50"
+                    >
+                        <Settings className={`w-3.5 h-3.5 ${analysisLoading ? 'animate-spin' : ''}`} />
+                        {analysisLoading ? 'Analyzing...' : 'Debug Analysis'}
+                    </button>
+
+                    {/* Main Trading Toggle */}
                     <button onClick={toggleTrading} disabled={binanceLoading}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${binanceStatus?.is_trading_enabled
-                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                            : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-lg hover:scale-[1.02] active:scale-95 ${binanceStatus?.is_trading_enabled
+                            ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/20'
+                            : 'bg-green-600 hover:bg-green-700 text-white shadow-green-500/20'
                             }`}>
                         {binanceStatus?.is_trading_enabled
-                            ? <><Square className="w-4 h-4" /> {t('strategy.binance.stopTrading')}</>
-                            : <><Play className="w-4 h-4" /> {t('strategy.binance.startTrading')}</>}
+                            ? <><Square className="w-4 h-4 fill-current" /> {t('strategy.binance.stopTrading')}</>
+                            : <><Play className="w-4 h-4 fill-current" /> {t('strategy.binance.startTrading')}</>}
                     </button>
-                    {/* Admin Scheduler Toggle */}
-                    {isAdmin && (
-                        <button onClick={toggleScheduler} disabled={schedulerLoading}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${schedulerRunning
-                                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
-                                }`}>
-                            <Power className={`w-4 h-4 ${schedulerLoading ? 'animate-pulse' : ''}`} />
-                            {schedulerRunning ? t('strategy.scheduler.stop') : t('strategy.scheduler.start')}
-                        </button>
-                    )}
-                    <span className="text-xs text-slate-500">{t('strategy.autoRefresh')}</span>
                 </div>
             </div>
 
@@ -441,6 +384,13 @@ export default function StrategyNexus({ userId, onBack }) {
                     </div>
                 </div>
             </div>
+
+            {/* Settings Modal */}
+            <StrategySettingsModal 
+                isOpen={isSettingsOpen} 
+                onClose={() => setIsSettingsOpen(false)} 
+                userId={userId} 
+            />
         </div>
     );
 }
