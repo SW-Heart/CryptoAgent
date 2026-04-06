@@ -13,9 +13,9 @@ i18n
             en: { translation: en },
             zh: { translation: zh }
         },
-        fallbackLng: 'en',
+        fallbackLng: 'zh',
         detection: {
-            order: ['localStorage', 'navigator'],
+            order: ['localStorage'],
             caches: ['localStorage'],
             lookupLocalStorage: 'language'
         },

@@ -4,39 +4,25 @@ OG Agent Backend - Main Entry Point
 This is the FastAPI application entry point.
 Run with: fastapi dev main.py
 """
+import os
+import json
+import asyncio
+import time
+from collections import defaultdict
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, Response, Form
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
-import json
-import threading
 
-
-
-# Import both Agents
-# Import agents
-from agents.crypto_agent import crypto_agent
-from agents.trading_agent import trading_agent
-from agents.daily_report_agent import daily_report_agent
-# from agents.swap_agent import swap_agent  # A2UI DEX 交易 Agent (DISABLED - 暂未使用)
-from agno.os import AgentOS
-from fastapi import FastAPI
-
-# Import user context setter
+# Import dynamic agent factory
+from agents.trading_agent import get_trading_agent
 from tools.trading_tools import set_current_user
 
-# Create AgentOS with all agents
-# Create AgentOS with all agents
-agent_os = AgentOS(agents=[crypto_agent, trading_agent, daily_report_agent])  # swap_agent disabled
-
 # Import initialization functions
-from app.routers.sessions import init_session_titles_table
-from app.routers.credits import init_credits_table
 from app.routers.strategy import init_strategy_tables
-from app.routers.daily_report import init_daily_report_tables
+from app.services.workspace_service import init_workspace_tables
 from binance_client import init_binance_tables
-
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,110 +30,75 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize tables
     print("[Main] Initializing database tables...")
     try:
-        init_session_titles_table()
-        init_credits_table()
         init_strategy_tables()
         init_binance_tables()
-        init_daily_report_tables()
+        init_workspace_tables()
         print("[Main] Tables initialized successfully")
         
         # Auto-start strategy scheduler
+        from scheduler import start_scheduler
         print("[Main] Auto-starting Strategy Scheduler...")
         start_scheduler()
     except Exception as e:
         print(f"[Main] Error initializing tables: {e}")
-        # Don't raise, allow app to start even if DB is flaky
     
     yield
-    
-    # Shutdown logic if needed
     print("[Main] Shutting down...")
 
-app = agent_os.get_app()
-app.router.lifespan_context = lifespan
+app = FastAPI(lifespan=lifespan)
 
 # ============= Rate Limiting Setup =============
-# 限流策略：
-# - Agent 调用: 10 次/分钟 (按用户/IP)
-# - Binance API: 30 次/分钟 (按用户)
-# - 其他 API: 100 次/分钟 (按 IP)
-
-import time
-from collections import defaultdict
-
-# 简单的内存限流器（替代 Redis，适合单实例部署）
 
 def get_remote_address(request: Request) -> str:
     """获取客户端 IP 地址"""
-    # 检查代理头
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    
     real_ip = request.headers.get("X-Real-IP")
     if real_ip:
         return real_ip
-    
-    # 直连
     client = request.client
     if client:
         return client.host
-    
     return "unknown"
 
 class SimpleRateLimiter:
-    """内存级别限流器，按路径和调用者进行限流"""
-    
     def __init__(self):
-        self.requests = defaultdict(list)  # {key: [timestamps]}
+        self.requests = defaultdict(list)
         self.limits = {
-            "agent": (10, 60),    # 10 次/60秒
-            "binance": (30, 60),  # 30 次/60秒
-            "default": (100, 60)  # 100 次/60秒
+            "agent": (10, 60),
+            "binance": (30, 60),
+            "default": (100, 60)
         }
     
     def _get_category(self, path: str) -> str:
-        """根据路径判断限流类别"""
-        if "/agents/" in path or "/v1/runs" in path:
+        if "/agents/" in path or "/runs" in path:
             return "agent"
         elif "/api/strategy/binance" in path or "/trade" in path or "/order" in path:
             return "binance"
         return "default"
     
     def is_allowed(self, key: str, path: str) -> tuple[bool, str]:
-        """检查请求是否允许"""
         category = self._get_category(path)
         limit, window = self.limits[category]
-        
         now = time.time()
         cache_key = f"{key}:{category}"
-        
-        # 清理过期请求
         self.requests[cache_key] = [t for t in self.requests[cache_key] if now - t < window]
-        
         if len(self.requests[cache_key]) >= limit:
             remaining = int(window - (now - self.requests[cache_key][0]))
             return False, f"Rate limit exceeded ({category}: {limit}/min). Retry after {remaining}s"
-        
         self.requests[cache_key].append(now)
         return True, ""
 
 rate_limiter = SimpleRateLimiter()
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """基于路径的限流中间件"""
-    
     async def dispatch(self, request: Request, call_next):
-        # 跳过静态资源和健康检查
         path = str(request.url.path)
         if path.startswith("/static") or path == "/health" or path == "/":
             return await call_next(request)
-        
-        # 获取限流 key
         user_id = request.query_params.get("user_id")
         key = user_id[:8] if user_id else get_remote_address(request)
-        
-        # 检查限流
         allowed, message = rate_limiter.is_allowed(key, path)
         if not allowed:
             return Response(
@@ -155,137 +106,44 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 status_code=429,
                 media_type="application/json"
             )
-        
         return await call_next(request)
 
-# 添加限流中间件
 app.add_middleware(RateLimitMiddleware)
-print("[Main] Rate limiting enabled: Agent=10/min, Binance=30/min, Default=100/min")
 
+# ============= User Context Middleware =============
 
-
-# Middleware to set user context for trading tools
 class UserContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Extract user_id from request for agent runs
-        if "/v1/runs" in str(request.url) or "/agent" in str(request.url):
+        if "/runs" in str(request.url) or "/agent" in str(request.url):
             user_id = None
             try:
-                # Try to get user_id from query params first
                 user_id = request.query_params.get("user_id")
-                print(f"[UserContext] Query param user_id: {user_id}")
-                
-                # If not in query, try to read from body (for POST requests)
                 if not user_id and request.method == "POST":
                     body = await request.body()
                     if body:
                         content_type = request.headers.get("content-type", "")
-                        print(f"[UserContext] Content-Type: {content_type}")
-                        print(f"[UserContext] Body preview: {body[:200]}")
-                        
-                        # Handle JSON format
                         if "application/json" in content_type:
                             try:
                                 data = json.loads(body)
                                 user_id = data.get("user_id")
-                            except:
-                                pass
-                        
-                        # Handle form-data format (multipart or urlencoded)
+                            except: pass
                         elif "form" in content_type or "urlencoded" in content_type:
                             try:
-                                # Parse as form data
                                 from urllib.parse import parse_qs
                                 form_data = parse_qs(body.decode("utf-8"))
                                 user_id = form_data.get("user_id", [None])[0]
-                                print(f"[UserContext] Parsed form user_id: {user_id}")
-                            except Exception as pe:
-                                print(f"[UserContext] Parse error: {pe}")
-                        
-                        # Reset body for downstream handlers
+                            except: pass
                         request._body = body
-                
                 if user_id:
                     set_current_user(user_id)
-                    print(f"[UserContext] Set user: {user_id[:8]}...")
-                else:
-                    print(f"[UserContext] No user_id found in request")
             except Exception as e:
                 print(f"[UserContext] Error: {e}")
-        
-        response = await call_next(request)
-        return response
+        return await call_next(request)
 
 app.add_middleware(UserContextMiddleware)
 
-# Token Credit Middleware - 扣除 agent token 消耗积分
-from app.routers.credits import deduct_token_credits
+# ============= CORS =============
 
-class TokenCreditMiddleware(BaseHTTPMiddleware):
-    """拦截 agent runs 响应，统计 token 并扣除积分
-    
-    规则：5万 token = 1积分，向上取整
-    仅处理非流式响应（stream=false）
-    """
-    
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        
-        # 只处理 agent runs 端点
-        url_path = str(request.url.path)
-        if "/agents/" in url_path and "/runs" in url_path and request.method == "POST":
-            # 检查是否为非流式响应（JSON 类型）
-            content_type = response.headers.get("content-type", "")
-            if "application/json" in content_type:
-                try:
-                    # 读取响应体
-                    body = b""
-                    async for chunk in response.body_iterator:
-                        body += chunk
-                    
-                    data = json.loads(body.decode())
-                    
-                    # 提取 metrics 和 user_id
-                    metrics = data.get("metrics", {})
-                    total_tokens = metrics.get("total_tokens", 0)
-                    user_id = data.get("user_id")
-                    session_id = data.get("session_id")
-                    
-                    if total_tokens > 0 and user_id:
-                        # 扣除积分
-                        result = deduct_token_credits(user_id, total_tokens, session_id)
-                        print(f"[TokenCredit] User {user_id}: {total_tokens:,} tokens -> -{result['deducted']} credits")
-                        
-                        # 可选：注入积分扣除信息到响应
-                        data["credits_deducted"] = result
-                        body = json.dumps(data).encode()
-                    
-                    # 重新构建响应 - 不复制原始 Content-Length，让框架自动计算
-                    new_headers = {k: v for k, v in response.headers.items() 
-                                   if k.lower() != "content-length"}
-                    return Response(
-                        content=body,
-                        status_code=response.status_code,
-                        headers=new_headers,
-                        media_type=response.media_type
-                    )
-                except Exception as e:
-                    print(f"[TokenCreditMiddleware] Error processing response: {e}")
-                    # 如果处理失败，返回原始响应体
-                    new_headers = {k: v for k, v in response.headers.items() 
-                                   if k.lower() != "content-length"}
-                    return Response(
-                        content=body if 'body' in locals() else b"",
-                        status_code=response.status_code,
-                        headers=new_headers,
-                        media_type=response.media_type
-                    )
-        
-        return response
-
-app.add_middleware(TokenCreditMiddleware)
-
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -294,85 +152,53 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import and include routers
-from app.routers.dashboard import router as dashboard_router
-from app.routers.sessions import router as sessions_router
-from app.routers.credits import router as credits_router
+# ============= Agent Routes (Manual Implementation) =============
+
+@app.post("/agents/{agent_id}/runs")
+async def run_agent(
+    agent_id: str,
+    message: str = Form(...),
+    user_id: str = Form(...),
+    session_id: str = Form(None),
+    trader_instance_id: int = Form(None),
+    stream: bool = Form(False)
+):
+    """
+    Manual implementation of Agno Agent runs to support dynamic user-specific LLM settings.
+    """
+    if agent_id != "trading-strategy-agent":
+        return Response(content=json.dumps({"error": "Agent not found"}), status_code=404)
+    
+    # 1. Get dynamic agent for this user (optionally scoped to a specific trader instance)
+    agent = get_trading_agent(user_id, trader_instance_id=trader_instance_id)
+    if not agent:
+        return Response(content=json.dumps({"error": "Failed to initialize agent for user. Please check LLM configuration."}), status_code=400)
+    
+    # 2. Run the agent
+    # Note: For now we only support non-streaming to simplify the migration
+    try:
+        instance_label = f" (trader #{trader_instance_id})" if trader_instance_id else ""
+        print(f"[Main] Running dynamic agent for user {user_id[:8]}{instance_label}...")
+        # 使用 asyncio.to_thread 在线程池中运行同步的 agent.run()，
+        # 避免阻塞事件循环，确保其他 HTTP 请求（前端轮询等）不被卡住
+        run_response = await asyncio.to_thread(agent.run, input=message, session_id=session_id)
+        
+        # 3. Format response to match Agno's standard (useful for frontend compatibility)
+        return {
+            "content": run_response.content,
+            "session_id": run_response.session_id,
+            "user_id": user_id,
+            "metrics": run_response.metrics
+        }
+    except Exception as e:
+        print(f"[Main] Agent run error: {e}")
+        return Response(content=json.dumps({"error": str(e)}), status_code=500)
+
+# ============= Standard Routers =============
+
 from app.routers.strategy import router as strategy_router
-from app.routers.daily_report import router as daily_report_router
-
-app.include_router(dashboard_router)
-app.include_router(sessions_router)
-app.include_router(credits_router)
+from app.routers.workspace import router as workspace_router
 app.include_router(strategy_router)
-app.include_router(daily_report_router)
+app.include_router(workspace_router)
 
-# Initialize database tables - MOVED TO LIFESPAN
-# init_session_titles_table()
-# init_credits_table()
-# init_strategy_tables()
-# init_binance_tables()
-
-
-# ============= Scheduler Integration =============
-# Strategy Scheduler: Strategy scheduler is now auto-started!
-from scheduler import start_scheduler
-print("[Main] Strategy scheduler imported")
-
-# ============= Daily Report Scheduler (DISABLED - 功能升级中) =============
-# Daily Report Scheduler: 暂停服务，功能升级中
-# def start_daily_report_scheduler():
-#     """Start the daily report scheduler in background thread"""
-#     import schedule
-#     import time
-#     import os
-#     
-#     # Wait for FastAPI server to fully start
-#     time.sleep(5)
-#     
-#     print("[DailyReportScheduler] Starting...")
-#     
-#     DAILY_REPORT_HOUR = os.getenv("DAILY_REPORT_HOUR", "08:00")
-#     DAILY_EMAIL_HOUR = os.getenv("DAILY_EMAIL_HOUR", "08:05")
-#     
-#     from scheduler import generate_daily_report, send_daily_report_emails
-#     
-#     schedule.every().day.at(DAILY_REPORT_HOUR).do(generate_daily_report)
-#     schedule.every().day.at(DAILY_EMAIL_HOUR).do(send_daily_report_emails)
-#     
-#     print(f"[DailyReportScheduler] Daily Report at {DAILY_REPORT_HOUR} / Emails at {DAILY_EMAIL_HOUR} (local time)")
-#     
-#     while True:
-#         schedule.run_pending()
-#         time.sleep(60)  # Check every minute
-
-# daily_report_thread = threading.Thread(target=start_daily_report_scheduler, daemon=True)
-# daily_report_thread.start()
-print("[Main] Daily report scheduler DISABLED (功能升级中)")
-
-# ============= Cache Warmup =============
-# Pre-populate dashboard cache on startup to eliminate first-load delay
-# from app.services.cache_warmup import start_warmup_thread
-# warmup_thread = start_warmup_thread()
-print("[Main] Cache warmup disabled")
-
-
-# ============= Swap Quote API (DISABLED - 暂未使用) =============
-# 供前端 SwapCard 获取实时报价数据
-# from fastapi import Query
-# from tools.swap_tools import get_swap_quote
-#
-# @app.get("/api/swap/quote")
-# async def get_quote(
-#     from_token: str = Query(..., description="源代币符号"),
-#     to_token: str = Query(..., description="目标代币符号"),
-#     amount: float = Query(..., description="源代币数量"),
-#     network: str = Query("ethereum", description="网络")
-# ):
-#     """获取 DEX 交易报价"""
-#     quote = get_swap_quote(from_token, to_token, amount, network)
-#     return quote
-
-
-
-
+print("[Main] CryptoAgent Backend Streamlined - Focus: Pure Strategy Trading with Multi-LLM Support")

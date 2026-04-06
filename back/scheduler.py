@@ -92,10 +92,6 @@ def _run_scheduler_loop():
     print("[Scheduler] Strategy checks EVERY MINUTE (individual per-user intervals)")
     print("[Scheduler] Position monitor runs every 10 seconds")
     print("[Scheduler] Binance position sync runs every 30 seconds")
-    print("[Scheduler] Price alert check runs every 60 seconds")
-    print("[Scheduler] Note: Daily Report runs independently (not controlled here)")
-    print()
-    
     # Schedule strategy EVERY MINUTE (checks user-specific intervals)
     schedule.every(1).minutes.do(trigger_strategy)
     
@@ -104,12 +100,6 @@ def _run_scheduler_loop():
     
     # Schedule Binance position sync every 30 seconds (for real trading users)
     schedule.every(30).seconds.do(sync_binance_users_positions)
-    
-    # Schedule price alert checks every 60 seconds
-    schedule.every(60).seconds.do(check_price_alerts)
-    
-    # NOTE: Daily Report is now scheduled independently in main.py
-    # It runs automatically regardless of strategy scheduler status
     
     # Run position update immediately
     update_positions_prices()
@@ -323,8 +313,8 @@ def log_strategy_round(round_id: str, symbols: str, response: dict):
                 return
             
             cursor.execute("""
-                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp")
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000]))
             
             conn.commit()
@@ -361,7 +351,7 @@ def update_positions_prices():
                 try:
                     import os
                     binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
-                    resp = requests.get(f"{binance_base}/api/v3/ticker/price%ssymbol={symbol}USDT", timeout=5)
+                    resp = requests.get(f"{binance_base}/api/v3/ticker/price?symbol={symbol}USDT", timeout=5)
                     current_price = float(resp.json().get("price", 0))
                 except:
                     continue
@@ -492,475 +482,142 @@ def update_positions_prices():
 _last_strategy_trigger = None
 _strategy_trigger_lock = threading.Lock()
 
-def trigger_strategy(symbols: str = "BTC,ETH,SOL"):
+def trigger_strategy():
     """
-    Trigger agent strategy analysis for all active trading users.
+    Trigger agent strategy analysis for all RUNNING trader instances.
     
-    多用户模式：
-    1. 获取所有启用交易的用户
-    2. 为每个用户独立运行策略分析
-    3. 错开执行时间避免 API 限流
-    
-    使用去重锁防止同一分钟内重复触发。
+    核心改动 (2026-04-06):
+    - 改为基于 trader_instances (status=RUNNING) 触发，而非 strategy_profiles (is_enabled=TRUE)
+    - 这样用户在 UI 上停止 trader 后，策略真正停止执行
+    - 每个 trader_instance 绑定了特定的 strategy_profile + llm_config + exchange_account
     """
     global _last_strategy_trigger
-    
     round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
     
-    # 去重检查：同一分钟内只允许触发一次
+    # Skip if already run this minute
     with _strategy_trigger_lock:
         if _last_strategy_trigger == round_id:
-            print(f"[Scheduler] Strategy already triggered for {round_id}, skipping duplicate")
             return
         _last_strategy_trigger = round_id
     
-    print(f"\n[Scheduler] ========== Strategy Round: {round_id} ==========")
-    print(f"[Scheduler] Analyzing symbols: {symbols}")
+    print(f"\n[Scheduler] ========== Automated Strategy Round: {round_id} ==========")
     
-    # 获取所有活跃交易用户
     try:
-        from binance_client import get_all_active_trading_users
-        active_users = get_all_active_trading_users()
+        conn = get_db()
+        with conn.cursor() as cursor:
+            # 查询所有 RUNNING 状态的 trader_instances，JOIN 其绑定的 strategy_profile
+            cursor.execute("""
+                SELECT 
+                    ti.id AS trader_instance_id,
+                    ti.user_id,
+                    ti.llm_config_id,
+                    sp.id AS strategy_profile_id,
+                    sp.symbols,
+                    sp.timeframes,
+                    sp.trading_interval,
+                    sp.prompt_template,
+                    sp.last_analyzed_at
+                FROM trader_instances ti
+                INNER JOIN strategy_profiles sp ON sp.id = ti.strategy_profile_id
+                WHERE ti.status = 'RUNNING'
+                  AND ti.is_enabled = TRUE
+                  AND sp.is_enabled = TRUE
+            """)
+            active_traders = cursor.fetchall()
+        conn.close()
     except Exception as e:
-        print(f"[Scheduler] Error getting active users: {e}")
-        active_users = []
-    
-    # 如果没有活跃用户，使用管理员账户（虚拟交易模式）
-    if not active_users:
-        print(f"[Scheduler] No active trading users, using admin account for virtual trading")
-        active_users = [SCHEDULER_USER_ID]
-    else:
-        print(f"[Scheduler] Found {len(active_users)} active trading user(s)")
-    
-    # 为每个用户运行策略
-    for idx, user_id in enumerate(active_users):
-        try:
-            # 1. 获取用户策略配置（包含 interval 和 last_analyzed_at）
-            from binance_client import get_user_strategy_config
-            config = get_user_strategy_config(user_id)
-            
-            # 如果是管理员且没有配置，按默认 60 分钟运行
-            interval_min = config.get("trading_interval", 60)
-            last_analyzed = config.get("last_analyzed_at")
-            
-            should_run = False
-            if not last_analyzed:
-                # 初始化时间到当前，防止启动时的“幻觉式触发”
-                from binance_client import update_last_analyzed_at
-                update_last_analyzed_at(user_id)
-                print(f"[Scheduler] User {user_id[:8]}... initialized last_analyzed_at to now, skipping phantom run")
-                continue
-            else:
-                last_dt = datetime.fromisoformat(last_analyzed)
-                time_diff = (datetime.now() - last_dt).total_seconds() / 60
-                # 如果时间到了，或者跨过了整点（兼容旧逻辑感官）
-                if time_diff >= (interval_min - 0.5): # 允许 30 秒误差
-                    should_run = True
-            
-            if not should_run:
-                # 仅对启用策略的用户打印跳过日志（避免刷屏）
-                if config.get("strategy_enabled", True) and idx % 10 == 0: # 抽样打印
-                    pass 
-                continue
-
-            # 错开执行时间（每个用户间隔 2 秒）
-            if idx > 0:
-                time.sleep(1)
-            
-            _run_strategy_for_user(user_id, symbols, round_id, config)
-            
-        except Exception as e:
-            print(f"[Scheduler] Error running strategy for user {user_id[:8]}...: {e}")
-    
-    # print(f"[Scheduler] ========== Round Complete ==========\n")
-
-
-def _run_strategy_for_user(user_id: str, symbols: str, round_id: str, config: dict = None):
-    """为单个用户运行策略分析"""
-    
-    # 如果没传入 config 则获取
-    if config is None:
-        try:
-            from binance_client import get_user_strategy_config
-            config = get_user_strategy_config(user_id)
-        except Exception as e:
-            print(f"[Scheduler] Error getting config for {user_id[:8]}: {e}")
-            config = {}
-    
-    # 检查用户是否启用策略
-    if not config.get("strategy_enabled", True):
+        print(f"[Scheduler] Database error: {e}")
         return
-    
-    # 使用用户自定义币种列表
-    user_symbols = config.get("symbols", symbols)
-    
-    print(f"[Scheduler] Running strategy for user: {user_id[:8]}... (symbols: {user_symbols})")
-    
-    try:
-        # Get custom instructions from config
-        agent_reqs = config.get("agent_requirements", "Focus on trend following strategy with strict risk management.")
-        
-        # Call the Agent API with form-urlencoded (matching frontend format)
-        strategy_prompt = f"""构建合约交易策略，分析币种({user_symbols})：
 
-**我的交易要求和偏好**:
-{agent_reqs}
-
-**目标执行流程**:
-1. 分析市场多维共振信号（技术面、宏观面、消息面）
-2. 检查当前持仓状态和盈亏情况
-3. 根据分析结果执行策略：
-   - 如有明确开仓信号，使用 open_position 开仓（开仓时必须确定止损止盈）
-   - 如需平仓，使用 close_position 平仓
-   - 如果 TP1 已触发，使用 update_stop_loss_take_profit 移动止损到开仓价保本
-4. 记录策略分析结果
-
-⚠️ 铁律：开仓后不得频繁调整止损止盈！除非 TP1 触发需要保本，或发生重大事件影响趋势。3162→3163 这种微调是韭菜行为，严禁！"""
+    print(f"[Scheduler] Found {len(active_traders)} running trader instance(s)")
+    
+    for idx, trader in enumerate(active_traders):
+        user_id = trader["user_id"]
+        interval_min = trader["trading_interval"] or 60
+        last_analyzed = trader["last_analyzed_at"]
         
-        response = requests.post(
-            f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
-            data={
-                "message": strategy_prompt,
-                "user_id": user_id,
-                "session_id": f"strategy-{user_id[:8]}_{round_id.replace(':', '-')}",
-                "stream": "False"
-            },
-            timeout=120  # 2 minutes timeout for full analysis
-        )
-        
-        if response.status_code == 200:
-            print(f"[Scheduler] Strategy completed for user {user_id[:8]}...")
-            
-            # 更新最后分析时间
-            try:
-                from binance_client import get_db_connection
-                conn = get_db_connection()
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "UPDATE user_strategy_config SET last_analyzed_at = %s WHERE user_id = %s",
-                        (datetime.now(), user_id)
-                    )
-                    conn.commit()
-                conn.close()
-            except Exception as db_e:
-                print(f"[Scheduler] Failed to update last_analyzed_at for {user_id[:8]}: {db_e}")
+        should_run = False
+        if not last_analyzed:
+            should_run = True # Initial run
         else:
-            print(f"[Scheduler] Error for {user_id[:8]}: {response.status_code} - {response.text[:200]}")
-            log_strategy_round(round_id, symbols, {"content": f"Error: {response.status_code}"})
-            
-    except Exception as e:
-        print(f"[Scheduler] Exception for {user_id[:8]}: {e}")
-        log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"})
+            # Calculate time difference
+            time_diff = (datetime.now() - last_analyzed).total_seconds() / 60
+            if time_diff >= (interval_min - 0.5): # 30s buffer
+                should_run = True
+        
+        if not should_run:
+            continue
+
+        # Throttling to avoid API rate limits
+        if idx > 0:
+            time.sleep(2)
+        
+        _run_trader_instance(trader, round_id)
 
 
-# ============= Price Alert Monitoring =============
-
-def check_price_alerts():
-    """Check if any price alerts have been triggered and call agent"""
-    try:
-        from price_alerts import get_pending_alerts, mark_alert_triggered
-        from tools.trading_tools import get_current_price
-        
-        pending_alerts = get_pending_alerts()
-        
-        if not pending_alerts:
-            return
-        
-        # Get current prices for all symbols with alerts
-        symbols = list(set(alert["symbol"] for alert in pending_alerts))
-        current_prices = {symbol: get_current_price(symbol) for symbol in symbols}
-        
-        triggered_alerts = []
-        
-        for alert in pending_alerts:
-            symbol = alert["symbol"]
-            current_price = current_prices.get(symbol, 0)
-            
-            if current_price <= 0:
-                continue
-            
-            trigger_price = alert["trigger_price"]
-            condition = alert["trigger_condition"]
-            
-            triggered = False
-            
-            if condition == "above" and current_price >= trigger_price:
-                triggered = True
-            elif condition == "below" and current_price <= trigger_price:
-                triggered = True
-            
-            if triggered:
-                mark_alert_triggered(alert["id"])
-                alert["current_price"] = current_price
-                triggered_alerts.append(alert)
-                print(f"[Scheduler] 🔔 Price alert triggered: {symbol} {condition} ${trigger_price:,.0f} (current: ${current_price:,.0f})")
-        
-        # Call agent for each triggered alert
-        for alert in triggered_alerts:
-            trigger_agent_on_alert(alert)
-            
-    except Exception as e:
-        print(f"[Scheduler] Error in check_price_alerts: {e}")
-
-
-def trigger_agent_on_alert(alert: dict):
-    """Trigger agent to analyze when a price alert is triggered"""
-    symbol = alert["symbol"]
-    trigger_price = alert["trigger_price"]
-    condition = alert["trigger_condition"]
-    strategy_context = alert.get("strategy_context", "")
-    current_price = alert.get("current_price", 0)
+def _run_trader_instance(trader: dict, round_id: str):
+    """Execution logic for a specific running trader instance."""
+    user_id = trader["user_id"]
+    trader_instance_id = trader["trader_instance_id"]
+    profile_id = trader["strategy_profile_id"]
+    symbols = trader["symbols"]
+    prompt = trader["prompt_template"]
     
-    condition_text = "突破" if condition == "above" else "跌破"
-    
-    print(f"[Scheduler] Calling agent for triggered alert: {symbol}")
+    print(f"[Scheduler] Executing Trader #{trader_instance_id} (Profile #{profile_id}) for User {user_id[:8]}... (Interval: {trader['trading_interval']}m)")
     
     try:
-        # Construct alert context prompt
-        alert_prompt = f"""⚠️ 价格警报触发！
-
-**警报信息**:
-- 币种: {symbol}
-- 触发条件: {condition_text} ${trigger_price:,.0f}
-- 当前价格: ${current_price:,.0f}
-- 原策略上下文: {strategy_context}
-
-**你需要做的**:
-1. 验证价格走势是否符合原策略预期
-2. 重新分析当前市场状况
-3. 决定是否执行开仓/平仓操作
-4. 如不符合预期，可以放弃或设置新的警报
-
-请执行完整分析后做出决策。"""
+        # Build the individualized prompt - simplified since analysis framework is now
+        # built into the Agent's System Prompt via L0 core instructions
+        full_message = f"""执行策略扫描：{symbols}
+分析周期：{trader.get('timeframes', '1h,4h')}
+请按照标准分析流程执行，完成后记录日志。"""
         
         response = requests.post(
             f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
             data={
-                "message": alert_prompt,
-                "user_id": SCHEDULER_USER_ID,
-                "session_id": f"alert-{alert['id']}-{datetime.now().strftime('%H%M')}",
+                "message": full_message,
+                "user_id": user_id,
+                "trader_instance_id": str(trader_instance_id),
+                "session_id": f"auto-t{trader_instance_id}-{round_id.replace(':', '-')}",
                 "stream": "False"
             },
             timeout=120
         )
         
         if response.status_code == 200:
-            print(f"[Scheduler] Alert analysis completed for {symbol}")
-        else:
-            print(f"[Scheduler] Alert analysis error: {response.status_code}")
+            print(f"[Scheduler] Trader #{trader_instance_id} completed successfully")
             
-    except Exception as e:
-        print(f"[Scheduler] Exception during alert analysis: {e}")
-
-
-# ============= Daily Report Generation =============
-
-def clean_report_content(content: str) -> str:
-    """Clean daily report content by removing preamble/thinking text.
-    
-    Removes any text before the actual report header (### 📅).
-    This ensures stable output regardless of LLM behavioral variations.
-    """
-    import re
-    
-    if not content:
-        return content
-    
-    # Find the actual report header (### 📅 Alpha情报局 or ### 📅 Alpha Intelligence)
-    # Pattern matches: ### 📅 followed by any text
-    header_pattern = r'(###\s*📅\s*(%s:Alpha情报局|Alpha Intelligence)[\s\S]*)'
-    
-    match = re.search(header_pattern, content, re.DOTALL)
-    
-    if match:
-        cleaned = match.group(1).strip()
-        if len(cleaned) < len(content):
-            print(f"[DailyReport] Cleaned preamble: removed {len(content) - len(cleaned)} characters")
-        return cleaned
-    
-    # Fallback: try to find any markdown header starting with ###
-    fallback_pattern = r'(###\s*[^\n]+[\s\S]*)'
-    fallback_match = re.search(fallback_pattern, content, re.DOTALL)
-    
-    if fallback_match:
-        cleaned = fallback_match.group(1).strip()
-        print(f"[DailyReport] Cleaned using fallback pattern: removed {len(content) - len(cleaned)} characters")
-        return cleaned
-    
-    # If no header found, return original content
-    return content
-
-
-def save_report_to_db(report_date: str, content: str, language: str):
-    """Save daily report directly to database"""
-    from datetime import datetime
-    
-    conn = get_db()
-    with conn.cursor() as cursor:
-        
-        # Ensure table exists
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS daily_reports (
-                id SERIAL PRIMARY KEY,
-                report_date TEXT NOT NULL,
-                language TEXT DEFAULT 'en',
-                content TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(report_date, language)
-            )
-        """)
-        
-        # Insert or replace report
-        cursor.execute("""
-            INSERT INTO daily_reports (report_date, language, content, created_at)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (report_date, language) DO UPDATE SET
-            content = EXCLUDED.content,
-            created_at = EXCLUDED.created_at
-        """, (report_date, language, content, datetime.now().isoformat()))
-        
-        conn.commit()
-    conn.close()
-
-def generate_daily_report():
-    """Generate daily crypto report by calling the agent"""
-    from datetime import date
-    import traceback
-    
-    report_date = str(date.today())
-    
-    print(f"\n[DailyReport] ========== Starting Report Generation ==========")
-    print(f"[DailyReport] Date: {report_date}")
-    print(f"[DailyReport] Agent API URL: {AGENT_API_URL}")
-    print(f"[DailyReport] DB Path: {DB_PATH}")
-    
-    # Generate reports in both languages
-    for language in ["en", "zh"]:
-        try:
-            print(f"\n[DailyReport] Generating {language} report...")
-            
-            if language == "en":
-                prompt = "Generate today's Crypto Daily Brief following the standard 'Alpha Intelligence' format."
-            else:
-                prompt = "请按照【Alpha情报局】的标准格式生成今日加密早报。"
-            
-            # Call agent API - routes to DailyReportAgent
-            # Uses multipart/form-data format
-            agent_id = "daily-report-agent"
-            api_url = f"{AGENT_API_URL}/agents/{agent_id}/runs"
-            print(f"[DailyReport] Calling {api_url} ...")
-            response = requests.post(
-                api_url,
-                data={
-                    "message": prompt,
-                    "user_id": SCHEDULER_USER_ID,
-                    "stream": "false"
-                },
-                timeout=180  # Increased timeout to 3 minutes
-            )
-            
-            print(f"[DailyReport] Response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                content = data.get("content", "")
-                
-                if content:
-                    print(f"[DailyReport] Got content, length: {len(content)} chars")
-                    # Clean the content to remove any preamble/thinking text
-                    content = clean_report_content(content)
-                    # Save directly to database (avoid FastAPI import issues)
-                    save_report_to_db(report_date, content, language)
-                    print(f"[DailyReport] ✓ {language} report saved successfully")
-                    
-                    # Generate suggested questions based on the report
-                    try:
-                        from agents.suggested_questions_agent import generate_suggested_questions
-                        from app.routers.daily_report import save_suggested_questions
-                        
-                        print(f"[DailyReport] Generating suggested questions for {language}...")
-                        questions = generate_suggested_questions(content, language)
-                        save_suggested_questions(report_date, questions, language)
-                        print(f"[DailyReport] ✓ {len(questions)} suggested questions saved for {language}")
-                    except Exception as e:
-                        print(f"[DailyReport] ✗ Error generating suggested questions: {e}")
-                else:
-                    print(f"[DailyReport] ✗ Agent returned empty content")
-                    print(f"[DailyReport] Full response: {data}")
-            else:
-                print(f"[DailyReport] ✗ Agent API error: {response.status_code}")
-                print(f"[DailyReport] Response text: {response.text[:500]}")
-                
-        except requests.exceptions.Timeout:
-            print(f"[DailyReport] ✗ Request timeout for {language} report")
-        except requests.exceptions.ConnectionError as e:
-            print(f"[DailyReport] ✗ Connection error for {language}: {e}")
-        except Exception as e:
-            print(f"[DailyReport] ✗ Error generating {language} report: {e}")
-            traceback.print_exc()
-    
-    print(f"[DailyReport] ========== Report Generation Complete ==========")
-
-
-def send_daily_report_emails():
-    """Send daily report emails to all subscribers"""
-    from datetime import date
-    report_date = str(date.today())
-    
-    print(f"\n[DailyReport] Sending emails for {report_date}...")
-    
-    try:
-        from app.routers.daily_report import get_all_subscribers, get_db
-        from services.email_service import send_daily_report_email
-        
-        subscribers = get_all_subscribers()
-        
-        if not subscribers:
-            print("[DailyReport] No subscribers to send to")
-            return
-        
-        # Get reports for both languages
-        conn = get_db()
-        with conn.cursor() as cursor:
-            for sub in subscribers:
-                lang = sub.get("language", "en")
-                
-                # Get report content for this language
-                cursor.execute("""
-                    SELECT content FROM daily_reports 
-                    WHERE report_date = %s AND language = %s
-                """, (report_date, lang))
-                row = cursor.fetchone()
-                
-                if row:
-                    success = send_daily_report_email(
-                        to_email=sub["email"],
-                        report_date=report_date,
-                        content=row["content"],
-                        unsubscribe_token=sub["token"],
-                        language=lang
+            # Update last_analyzed_at on the strategy profile
+            try:
+                conn = get_db()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE strategy_profiles SET last_analyzed_at = %s WHERE id = %s",
+                        (datetime.now(), profile_id)
                     )
-                    if success:
-                        print(f"[DailyReport] Email sent to {sub['email']}")
-        
-        conn.close()
-        print(f"[DailyReport] Email sending completed")
-        
+                    conn.commit()
+                conn.close()
+            except Exception as db_e:
+                print(f"[Scheduler] Failed to update last_analyzed_at for Profile #{profile_id}: {db_e}")
+        else:
+            print(f"[Scheduler] Error for Trader #{trader_instance_id}: {response.status_code} - {response.text[:200]}")
+            log_strategy_round(round_id, symbols, {"content": f"Error: {response.status_code}"})
+            
     except Exception as e:
-        print(f"[DailyReport] Error sending emails: {e}")
+        print(f"[Scheduler] Exception executing Trader #{trader_instance_id}: {e}")
+        log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"})
+
 
 
 def main():
-    """Standalone scheduler entry point (for running as independent process)"""
+    """Standalone scheduler entry point"""
     global _scheduler_running
     _scheduler_running = True
-    
     try:
         _run_scheduler_loop()
     except KeyboardInterrupt:
-        print("\n[Scheduler] Stopped by user (Ctrl+C)")
+        print("\n[Scheduler] Stopped by user")
         _scheduler_running = False
 
 if __name__ == "__main__":
     main()
-

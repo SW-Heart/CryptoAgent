@@ -97,7 +97,7 @@
         "tabs": {
             "general": "通用",
             "account": "账户",
-            "usage": "使用记录",
+            "llm": "大模型",
             "exchange": "交易所"
         },
         "general": {
@@ -109,17 +109,18 @@
         },
         "account": {
             "title": "账户",
-            "credits": "积分",
-            "freeCredits": "免费积分",
             "signOut": "退出登录"
         },
-        "usage": {
-            "title": "使用历史",
-            "credits": "积分",
-            "date": "日期",
-            "action": "操作",
-            "creditsChange": "积分变化",
-            "noHistory": "暂无使用记录"
+        "llm": {
+            "title": "大模型配置",
+            "provider": "服务商",
+            "model": "模型",
+            "apiKey": "API Key",
+            "save": "保存配置",
+            "saving": "保存中...",
+            "success": "保存成功",
+            "error": "保存失败",
+            "desc": "配置您的大模型 API 以驱动交易 Agent。您的密钥将被加密存储。"
         },
         "exchange": {
             "configureKeys": "配置 API 密钥",

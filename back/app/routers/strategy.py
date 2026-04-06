@@ -171,64 +171,172 @@ def migrate_tables():
 def get_wallet(user_id: str = None):
     """Get wallet status with real-time equity.
     
-    If user has Binance trading enabled, returns real Binance data.
+    If user has a Workspace instance linked to a real exchange account,
+    returns real data from that exchange.
     Otherwise returns virtual trading data (demo mode).
     """
-    import requests
-    
-    # 如果用户启用了 Binance 交易，使用 Binance 数据
-    if user_id:
-        try:
-            from tools.binance_trading_tools import binance_get_positions_summary
-            from binance_client import get_user_trading_status
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+        
+    try:
+        from app.services.workspace_service import list_trader_instances, list_exchange_accounts, _normalize_json
+        from tools.binance_trading_tools import binance_get_positions_summary
+        from binance_client import BinanceFuturesClient, has_user_api_keys
+        
+        # 1. 尝试从 Workspace 查找当前的实盘账户绑定
+        instances = list_trader_instances(user_id)
+        primary = next((i for i in instances if i["slug"] == "primary-runtime"), None)
+        if not primary:
+            primary = instances[0] if instances else None
+        
+        exchange_account_id = primary.get("exchange_account_id") if primary else None
+        
+        # 如果有关联的交易所账户，尝试获取真实余额
+        if exchange_account_id:
+            result = None
+            last_exchange_error = None
             
-            status = get_user_trading_status(user_id)
-            if status.get("is_configured") and status.get("is_trading_enabled"):
+            # 路径 A: 优先尝试旧版 Binance 密钥（user_binance_keys 表）
+            if has_user_api_keys(user_id):
                 result = binance_get_positions_summary(user_id)
-                if "error" not in result:
-                    # Fetch synced stats from DB
-                    conn = get_db_connection()
-                    total_pnl = 0
-                    total_trades = 0
-                    win_trades = 0
+                if "error" in result:
+                    last_exchange_error = result.get("error")
+                    result = None
+            
+            # 路径 B: 回退到 Workspace 交易所账户凭证（exchange_accounts.metadata_json）
+            if result is None:
+                try:
+                    # 直接从数据库读取原始凭证（可能已加密），而非通过脱敏的 list 接口
+                    conn_ws = get_db_connection()
                     try:
-                        with conn.cursor() as cursor:
-                            cursor.execute("""
-                                SELECT SUM(total_pnl), SUM(total_trades), SUM(win_trades)
-                                FROM binance_sync_state
-                                WHERE user_id = %s
-                            """, (user_id,))
-                            row = cursor.fetchone()
-                            if row and row[0] is not None:
-                                total_pnl = row[0]
-                                total_trades = row[1]
-                                win_trades = row[2]
-                    except Exception as db_e:
-                        print(f"[Strategy] Error fetching stats: {db_e}")
+                        with conn_ws.cursor() as ws_cursor:
+                            ws_cursor.execute(
+                                "SELECT metadata_json, environment FROM exchange_accounts WHERE id = %s AND user_id = %s",
+                                (exchange_account_id, user_id)
+                            )
+                            ea_row = ws_cursor.fetchone()
                     finally:
-                        conn.close()
+                        conn_ws.close()
+                    
+                    if ea_row:
+                        meta = _normalize_json(ea_row["metadata_json"]) if ea_row["metadata_json"] else {}
+                        raw_key = meta.get("api_key", "")
+                        raw_secret = meta.get("api_secret", "")
+                        environment = ea_row.get("environment", "demo")
+                        is_testnet = environment in ("testnet", "demo")
+                        
+                        # 解密凭证（如果已加密）
+                        api_key = raw_key
+                        api_secret = raw_secret
+                        if raw_key and raw_key.startswith("gAAAA"):
+                            try:
+                                from binance_client import decrypt_value
+                                api_key = decrypt_value(raw_key)
+                            except Exception as dec_e:
+                                print(f"[Strategy] Failed to decrypt api_key for account {exchange_account_id}: {dec_e}")
+                                api_key = ""
+                        if raw_secret and raw_secret.startswith("gAAAA"):
+                            try:
+                                from binance_client import decrypt_value
+                                api_secret = decrypt_value(raw_secret)
+                            except Exception as dec_e:
+                                print(f"[Strategy] Failed to decrypt api_secret for account {exchange_account_id}: {dec_e}")
+                                api_secret = ""
+                        
+                        if api_key and api_secret:
+                            client = BinanceFuturesClient(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                testnet=is_testnet
+                            )
+                            balance = client.get_usdt_balance()
+                            if "error" not in balance:
+                                positions = client.get_positions()
+                                open_positions = positions if isinstance(positions, list) else []
+                                total_margin = 0
+                                total_unrealized = balance.get("unrealized_pnl", 0)
+                                for pos in open_positions:
+                                    entry_price = pos.get("entry_price", 0)
+                                    quantity = pos.get("quantity", 0)
+                                    leverage = pos.get("leverage", 10)
+                                    notional = quantity * entry_price
+                                    margin = notional / leverage if leverage > 0 else notional
+                                    total_margin += margin
+                                
+                                result = {
+                                    "wallet_balance": balance.get("wallet_balance", 0),
+                                    "margin_balance": balance.get("margin_balance", 0),
+                                    "available_balance": balance.get("available_balance", 0),
+                                    "unrealized_pnl": total_unrealized,
+                                    "equity": balance.get("margin_balance", 0),
+                                    "margin_in_use": round(total_margin, 2),
+                                    "balance_breakdown": balance.get("assets", [])
+                                }
+                            else:
+                                last_exchange_error = balance.get('error')
+                                print(f"[Strategy] Workspace exchange balance error: {last_exchange_error}")
+                        else:
+                            last_exchange_error = f"Workspace exchange account {exchange_account_id} has no API credentials in metadata"
+                            print(f"[Strategy] {last_exchange_error}")
+                except Exception as ws_e:
+                    last_exchange_error = str(ws_e)
+                    print(f"[Strategy] Workspace exchange fallback error: {ws_e}")
+            
+            if result and "error" not in result:
+                # 获取数据库记录的累计盈亏统计
+                conn = get_db_connection()
+                total_pnl = 0
+                total_trades = 0
+                win_trades = 0
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT SUM(total_pnl), SUM(total_trades), SUM(win_trades)
+                            FROM binance_sync_state
+                            WHERE user_id = %s
+                        """, (user_id,))
+                        row = cursor.fetchone()
+                        if row and row[0] is not None:
+                            total_pnl = row[0]
+                            total_trades = row[1]
+                            win_trades = row[2]
+                except Exception as db_e:
+                    print(f"[Strategy] Error fetching stats: {db_e}")
+                finally:
+                    conn.close()
 
-                    win_rate = 0
-                    if total_trades > 0:
-                        win_rate = round(win_trades / total_trades * 100, 1)
+                win_rate = 0
+                if total_trades > 0:
+                    win_rate = round(win_trades / total_trades * 100, 1)
 
-                    return {
-                        "source": "binance",
-                        "initial_balance": None,  # Binance 不跟踪初始余额
-                        "current_balance": result.get("available_balance", 0),
-                        "margin_in_use": result.get("margin_in_use", 0),
-                        "unrealized_pnl": result.get("unrealized_pnl", 0),
-                        "equity": result.get("equity", 0),
-                        "total_pnl": round(total_pnl, 2),
-                        "total_trades": total_trades,
-                        "win_trades": win_trades,
-                        "win_rate": win_rate,
-                        "balance_breakdown": result.get("balance_breakdown", [])
-                    }
-        except Exception as e:
-            print(f"[Strategy] Binance wallet error: {e}")
-    
-    # 虚拟交易模式（Demo）
+                return {
+                    "source": "binance",
+                    "initial_balance": None,
+                    "current_balance": result.get("wallet_balance", 0),
+                    "available_balance": result.get("available_balance", 0),
+                    "margin_in_use": result.get("margin_in_use", 0),
+                    "unrealized_pnl": result.get("unrealized_pnl", 0),
+                    "equity": result.get("equity", 0),
+                    "total_pnl": round(total_pnl, 2),
+                    "total_trades": total_trades,
+                    "win_trades": win_trades,
+                    "win_rate": win_rate,
+                    "balance_breakdown": result.get("balance_breakdown", [])
+                }
+            
+            # 真实交易所已配置但临时无法获取数据 → 不要跌落到虚拟钱包！
+            # 返回错误状态，让前端保持上次已知的余额
+            if last_exchange_error:
+                print(f"[Strategy] Exchange configured but temporarily unavailable, NOT falling back to virtual wallet")
+                return {
+                    "source": "binance_error",
+                    "error": last_exchange_error,
+                    "message": "Exchange temporarily unavailable, please retry"
+                }
+    except Exception as e:
+        print(f"[Strategy] Wallet check error: {e}")
+
+    # 2. 虚拟交易模式（Demo）- 作为最终回退方案
     try:
         conn = get_db_connection()
         # Use user_id to match trading_tools.py logic
@@ -1226,8 +1334,8 @@ def run_strategy_analysis(
     try:
         from scheduler import trigger_strategy
         
-        # Add task to background queue
-        background_tasks.add_task(trigger_strategy, symbols=symbols)
+        # Add task to background queue (trigger_strategy reads profiles from DB)
+        background_tasks.add_task(trigger_strategy)
         
         return {
             "status": "success",
@@ -1538,7 +1646,6 @@ def get_beta_leaderboard(limit: int = 10):
         }
     except Exception as e:
         print(f"[Beta] Leaderboard error: {e}")
-        # 返回空排行榜而不是错误
         return {
             "leaderboard": [],
             "total_participants": 0,
@@ -1549,3 +1656,162 @@ def get_beta_leaderboard(limit: int = 10):
             "last_updated": datetime.now().isoformat()
         }
 
+# ============= LLM Configuration Endpoints =============
+
+@router.get("/llm-config")
+def get_llm_config(user_id: str):
+    """获取用户的大模型配置（API Key 脱敏）"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+        
+    try:
+        from binance_client import get_user_strategy_config
+        config = get_user_strategy_config(user_id)
+        
+        has_key = False
+        if config.get("llm_api_key_encrypted"):
+            has_key = True
+            
+        return {
+            "llm_provider": config.get("llm_provider", "deepseek"),
+            "llm_model": config.get("llm_model", "deepseek-chat"),
+            "has_api_key": has_key
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/llm-config")
+def update_llm_config(
+    user_id: str,
+    llm_provider: str,
+    llm_model: str,
+    llm_api_key: str = None
+):
+    """更新用户的大模型配置，并在保存前进行连通性测试"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+        
+    try:
+        from binance_client import encrypt_value, decrypt_value, get_user_strategy_config
+        from agents.trading_agent import test_llm_connectivity
+        import concurrent.futures
+        
+        # 1. Determine which API Key to use for testing
+        test_api_key = None
+        if llm_api_key and not llm_api_key.startswith("****"):
+            test_api_key = llm_api_key
+        else:
+            # Try to get existing key for testing if changed model but kept same key
+            config = get_user_strategy_config(user_id)
+            if config.get("llm_api_key_encrypted"):
+                test_api_key = decrypt_value(config["llm_api_key_encrypted"])
+        
+        if not test_api_key:
+             raise HTTPException(status_code=400, detail="API Key is required for connectivity test")
+
+        # 2. Perform Connectivity Test with 10s timeout
+        print(f"[LLMConfig] Testing connectivity for {llm_provider}/{llm_model}...")
+        try:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(test_llm_connectivity, llm_provider, llm_model, test_api_key)
+                success, error_msg = future.result(timeout=10)
+                
+                if not success:
+                    raise HTTPException(status_code=400, detail=f"LLM Connectivity Test Failed: {error_msg}")
+        except concurrent.futures.TimeoutError:
+            raise HTTPException(status_code=408, detail="LLM Connectivity Test Timed Out (10s)")
+        except Exception as e:
+            if isinstance(e, HTTPException): raise e
+            raise HTTPException(status_code=400, detail=f"Connectivity test error: {str(e)}")
+
+        # 3. Encrypt API Key if provided
+        encrypted_key = None
+        if llm_api_key and not llm_api_key.startswith("****"):
+            encrypted_key = encrypt_value(llm_api_key)
+        
+        # 4. Update DB
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            if encrypted_key:
+                cursor.execute("""
+                    INSERT INTO user_strategy_config (user_id, llm_provider, llm_model, llm_api_key_encrypted)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        llm_provider = EXCLUDED.llm_provider,
+                        llm_model = EXCLUDED.llm_model,
+                        llm_api_key_encrypted = EXCLUDED.llm_api_key_encrypted,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (user_id, llm_provider, llm_model, encrypted_key))
+            else:
+                cursor.execute("""
+                    INSERT INTO user_strategy_config (user_id, llm_provider, llm_model)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        llm_provider = EXCLUDED.llm_provider,
+                        llm_model = EXCLUDED.llm_model,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (user_id, llm_provider, llm_model))
+            conn.commit()
+        conn.close()
+        
+        return {"success": True, "message": "LLM configuration updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Strategy] Error updating LLM config: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update LLM config")
+
+@router.get("/ready-check")
+def ready_check(user_id: str):
+    """聚合校验用户是否已准备好开启自动交易"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+        
+    try:
+        from binance_client import get_user_strategy_config
+        
+        # 结果容器
+        checks = {
+            "ready": True,
+            "details": {
+                "binance": {"ok": False, "message": "未配置交易所密钥", "tab": "exchange"},
+                "llm": {"ok": False, "message": "未配置大模型密钥", "tab": "llm"},
+                "strategy": {"ok": False, "message": "未配置策略参数", "tab": "strategy"}
+            }
+        }
+        
+        # 1. 检查 LLM 和部分策略配置
+        config = get_user_strategy_config(user_id)
+        if config:
+            # LLM 检查
+            if config.get("llm_api_key_encrypted"):
+                checks["details"]["llm"]["ok"] = True
+                checks["details"]["llm"]["message"] = f"已就绪 ({config.get('llm_model', 'Default')})"
+            
+            # 策略参数检查 (有默认值，如果为空则自动补全)
+            symbols = config.get("symbols")
+            if not symbols:
+                symbols = "BTC,ETH,SOL" # 使用默认值补全
+                
+            checks["details"]["strategy"]["ok"] = True
+            checks["details"]["strategy"]["message"] = f"已就绪 ({symbols})"
+        
+        # 2. 检查 Binance 密钥
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT user_id FROM user_binance_keys WHERE user_id = %s", (user_id,))
+            if cursor.fetchone():
+                checks["details"]["binance"]["ok"] = True
+                checks["details"]["binance"]["message"] = "已就绪"
+        conn.close()
+        
+        # 计算总体 Ready 状态
+        for key in checks["details"]:
+            if not checks["details"][key]["ok"]:
+                checks["ready"] = False
+                break
+                
+        return checks
+    except Exception as e:
+        print(f"[ReadyCheck] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -5,7 +5,7 @@ import {
     ChevronDown, ChevronRight, Activity, Wallet,
     ArrowUpCircle, ArrowDownCircle, Clock, Percent,
     Award, Power, Key, Play, Square, AlertCircle, Settings,
-    ListFilter, History, Layers
+    ListFilter, History, Layers, RefreshCw, CheckCircle, XCircle, X, Cpu
 } from 'lucide-react';
 import CryptoLoader from './CryptoLoader';
 import BetaGate from './BetaGate';
@@ -14,7 +14,7 @@ import StrategySettingsModal from './StrategySettingsModal';
 import { BASE_URL } from '../services/config';
 
 // Main Component
-export default function StrategyNexus({ userId, onBack }) {
+export default function StrategyNexus({ userId, onOpenSettings }) {
     const { t } = useTranslation();
     const [wallet, setWallet] = useState(null);
     const [positions, setPositions] = useState([]);
@@ -44,6 +44,10 @@ export default function StrategyNexus({ userId, onBack }) {
     // Beta Access State
     const [betaChecking, setBetaChecking] = useState(true);
     const [hasBetaAccess, setHasBetaAccess] = useState(false);
+
+    // Validation State
+    const [validationData, setValidationData] = useState(null);
+    const [showValidationModal, setShowValidationModal] = useState(false);
 
     // Check Beta Access on mount
     useEffect(() => {
@@ -106,7 +110,23 @@ export default function StrategyNexus({ userId, onBack }) {
     };
 
     const toggleTrading = async () => {
-        if (binanceLoading || !binanceStatus?.is_configured) return;
+        if (binanceLoading) return;
+        
+        // 如果是要 开启 (从 disable 变 enable)，先做 ready-check
+        if (!binanceStatus?.is_trading_enabled) {
+            try {
+                const res = await fetch(`${BASE_URL}/api/strategy/ready-check?user_id=${userId}`);
+                const data = await res.json();
+                if (!data.ready) {
+                    setValidationData(data);
+                    setShowValidationModal(true);
+                    return; // 拦截，不执行开启操作
+                }
+            } catch (e) {
+                console.error('[Strategy] Ready check failed:', e);
+            }
+        }
+
         setBinanceLoading(true);
         try {
             const endpoint = binanceStatus.is_trading_enabled ? 'disable' : 'enable';
@@ -169,7 +189,10 @@ export default function StrategyNexus({ userId, onBack }) {
                 setHistoryOrders(historyOrdersRes.orders || []);
             }
 
-            setWallet(walletRes);
+            // 如果后端返回 binance_error（交易所临时不可用），保持上次有效数据
+            if (!walletRes?.source?.includes('error')) {
+                setWallet(walletRes);
+            }
             setPositions(posRes.positions || []);
             setTradeHistory(Array.isArray(historyRes) ? historyRes : (historyRes.trades || []));
             setOpenOrders(openOrdersRes.orders || []);
@@ -265,7 +288,7 @@ export default function StrategyNexus({ userId, onBack }) {
                         className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20"
                     >
                         <Settings className="w-3.5 h-3.5" />
-                        {t('strategy.settings.title', 'Trading Settings')}
+                        {t('strategy.settings.title', '交易设置')}
                     </button>
 
                     {/* Manual Trigger Button (Debug) */}
@@ -275,7 +298,7 @@ export default function StrategyNexus({ userId, onBack }) {
                         className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-slate-800/50 text-slate-400 hover:text-white border border-slate-700/50"
                     >
                         <Settings className={`w-3.5 h-3.5 ${analysisLoading ? 'animate-spin' : ''}`} />
-                        {analysisLoading ? 'Analyzing...' : 'Debug Analysis'}
+                        {analysisLoading ? '分析中...' : '调试分析'}
                     </button>
 
                     {/* Main Trading Toggle */}
@@ -305,7 +328,7 @@ export default function StrategyNexus({ userId, onBack }) {
                         const principal = equity - realizedPnl - unrealizedPnl;
                         // 避免除零，且本金必须为正数才有意义
                         const returnRate = principal > 0 ? (realizedPnl / principal * 100) : 0;
-                        return `${returnRate.toFixed(1)}% Return`;
+                        return `${returnRate.toFixed(1)}% 回报`;
                     })()}
                     color={(wallet?.total_pnl || 0) >= 0 ? "green" : "red"} />
                 <StatCard icon={(wallet?.unrealized_pnl || 0) >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
@@ -314,7 +337,7 @@ export default function StrategyNexus({ userId, onBack }) {
                     color={(wallet?.unrealized_pnl || 0) >= 0 ? "green" : "red"} />
                 <StatCard icon={<Award className="w-5 h-5" />} label={t('strategy.winRate')}
                     value={`${wallet?.win_rate || 0}%`}
-                    subtext={`${wallet?.win_trades || 0}/${wallet?.total_trades || 0} Trades`} color="amber" />
+                    subtext={`${wallet?.win_trades || 0}/${wallet?.total_trades || 0} 笔`} color="amber" />
             </div>
 
             {/* Main Content */}
@@ -349,11 +372,11 @@ export default function StrategyNexus({ userId, onBack }) {
                                 <div className="flex border-b border-slate-700/50 px-4">
                                     <button onClick={() => setOrderFilter('OPEN')}
                                         className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${orderFilter === 'OPEN' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500 hover:text-white'}`}>
-                                        {t('strategy.orders.current', 'Open Orders')}
+                                        {t('strategy.orders.current', '当前委托')}
                                     </button>
                                     <button onClick={() => setOrderFilter('HISTORY')}
                                         className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${orderFilter === 'HISTORY' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-500 hover:text-white'}`}>
-                                        {t('strategy.orders.history', 'Order History')}
+                                        {t('strategy.orders.history', '历史委托')}
                                     </button>
                                 </div>
                                 <OrdersTable orders={orderFilter === 'OPEN' ? openOrders : historyOrders} isHistory={orderFilter === 'HISTORY'} t={t} />
@@ -374,13 +397,12 @@ export default function StrategyNexus({ userId, onBack }) {
                             logs.map((log, idx) => (
                                 <LogEntry key={log.id || idx} log={log}
                                     isExpanded={expandedLog === (log.id || idx)}
-                                    onToggle={() => setExpandedLog(expandedLog === (log.id || idx) ? null : (log.id || idx))}
-                                    t={t} />
+                                    onToggle={() => setExpandedLog(expandedLog === (log.id || idx) ? null : (log.id || idx))} />
                             ))
                         ) : (
                             <div className="text-center text-slate-500 py-8 text-sm">{t('strategy.logs.noLogs')}</div>
                         )}
-                        {logsLoading && <div className="text-center text-slate-500 py-2 text-xs">Loading...</div>}
+                        {logsLoading && <div className="text-center text-slate-500 py-2 text-xs">加载中...</div>}
                     </div>
                 </div>
             </div>
@@ -390,6 +412,15 @@ export default function StrategyNexus({ userId, onBack }) {
                 isOpen={isSettingsOpen} 
                 onClose={() => setIsSettingsOpen(false)} 
                 userId={userId} 
+            />
+
+            {/* Validation Modal */}
+            <ValidationModal 
+                isOpen={showValidationModal} 
+                onClose={() => setShowValidationModal(false)} 
+                data={validationData}
+                onGoToSettings={onOpenSettings}
+                onOpenQuickSettings={() => setIsSettingsOpen(true)}
             />
         </div>
     );
@@ -506,7 +537,7 @@ function HistoryTable({ trades, t }) {
                                 <td className="p-3 font-semibold text-white">{trade.symbol}</td>
                                 <td className="p-3">
                                     <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${isBuy ? 'text-green-400 bg-green-500/10' : 'text-red-400 bg-red-500/10'}`}>
-                                        {isBuy ? 'BUY' : 'SELL'} {trade.position_side && trade.position_side !== 'BOTH' ? trade.position_side : ''}
+                                        {isBuy ? '买入' : '卖出'} {trade.position_side && trade.position_side !== 'BOTH' ? trade.position_side : ''}
                                     </span>
                                 </td>
                                 <td className="p-3 text-right font-mono text-slate-300">{parseFloat(trade.price).toFixed(2)}</td>
@@ -545,7 +576,7 @@ function OrdersTable({ orders, isHistory, t }) {
                         <th className="p-3 bg-[#131722]">{t('strategy.orders.direction')}</th>
                         <th className="p-3 bg-[#131722] text-right">{t('strategy.orders.price')}</th>
                         <th className="p-3 bg-[#131722] text-right">{t('strategy.orders.quantity')}</th>
-                        <th className="p-3 bg-[#131722] text-right">{isHistory ? 'Filled' : 'Filled/Total'}</th>
+                        <th className="p-3 bg-[#131722] text-right">{isHistory ? '已成交' : '成交/总量'}</th>
                         <th className="p-3 bg-[#131722] text-right">{t('strategy.history.status')}</th>
                     </tr>
                 </thead>
@@ -562,10 +593,10 @@ function OrdersTable({ orders, isHistory, t }) {
                                 <td className="p-3 text-xs text-slate-300">{order.type?.replace('_', ' ')}</td>
                                 <td className="p-3">
                                     <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${isBuy ? 'text-green-400 bg-green-500/10' : 'text-red-400 bg-red-500/10'}`}>
-                                        {isBuy ? 'BUY' : 'SELL'}
+                                        {isBuy ? '买入' : '卖出'}
                                     </span>
                                 </td>
-                                <td className="p-3 text-right font-mono text-white">{order.price > 0 ? parseFloat(order.price).toFixed(2) : 'Market'}</td>
+                                <td className="p-3 text-right font-mono text-white">{order.price > 0 ? parseFloat(order.price).toFixed(2) : '市价'}</td>
                                 <td className="p-3 text-right font-mono text-slate-300">{parseFloat(total).toFixed(3)}</td>
                                 <td className="p-3 text-right font-mono text-slate-400 text-xs">
                                     {isHistory ? filled.toFixed(3) : `${filled.toFixed(3)} / ${total.toFixed(3)}`}
@@ -587,7 +618,7 @@ function OrdersTable({ orders, isHistory, t }) {
     );
 }
 
-function LogEntry({ log, isExpanded, onToggle, t }) {
+function LogEntry({ log, isExpanded, onToggle }) {
     return (
         <div className="bg-slate-800/30 rounded-lg overflow-hidden border border-slate-700/30">
             <button onClick={onToggle} className="w-full p-3 flex items-start gap-2 text-left hover:bg-slate-700/30 transition-colors">
@@ -621,6 +652,91 @@ function EmptyState({ text }) {
                 <ListFilter className="w-6 h-6 text-slate-600" />
             </div>
             <span className="text-sm">{text}</span>
+        </div>
+    );
+}
+function ValidationModal({ isOpen, onClose, data, onGoToSettings, onOpenQuickSettings }) {
+    if (!isOpen) return null;
+
+
+    const checks = [
+        { key: 'binance', label: '交易所接口（Binance）', icon: <Key className="w-4 h-4" />, tab: 'exchange' },
+        { key: 'llm', label: '大模型配置（API Key）', icon: <Cpu className="w-4 h-4" />, tab: 'llm' },
+        { key: 'strategy', label: '策略参数配置', icon: <Target className="w-4 h-4" />, 
+          tab: 'quick-settings' // 特殊处理，用于打开组件内部的配置弹窗
+        }
+    ];
+
+    const details = data?.details || {};
+
+    return (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md px-4 py-8 animate-in fade-in duration-300">
+            <div className="bg-[#1a1f2e] border border-white/10 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl">
+                <div className="p-6">
+                    <div className="flex items-center justify-between mb-6 text-left">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+                                <AlertCircle className="w-6 h-6 text-red-400" />
+                            </div>
+                            <h2 className="text-xl font-bold text-white">启动限制</h2>
+                        </div>
+                        <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5">
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
+
+                    <p className="text-slate-400 text-sm mb-6 leading-relaxed text-left">
+                        在开启系统自动执行前，我们需要确保以下所有前置条件已正确配置：
+                    </p>
+
+                    <div className="space-y-3 mb-8">
+                        {checks.map(check => {
+                            const status = details[check.key];
+                            return (
+                                <div key={check.key} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/5 group hover:bg-white/10 transition-colors">
+                                    <div className="flex items-center gap-3 text-left">
+                                        <div className={`p-2 rounded-lg ${status?.ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                                            {check.icon}
+                                        </div>
+                                        <div>
+                                            <span className="text-xs text-slate-500 block uppercase font-bold tracking-wider">{check.label}</span>
+                                            <span className={`text-sm font-medium ${status?.ok ? 'text-emerald-300' : 'text-red-300'}`}>
+                                                {status?.message || '未知状态'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        {status?.ok ? (
+                                            <CheckCircle className="w-5 h-5 text-emerald-500" />
+                                        ) : (
+                                            <button 
+                                                onClick={() => {
+                                                    onClose();
+                                                    if (check.tab === 'quick-settings') {
+                                                        onOpenQuickSettings?.();
+                                                    } else {
+                                                        onGoToSettings(check.tab);
+                                                    }
+                                                }}
+                                                className="text-[10px] bg-red-500/20 hover:bg-red-500/40 text-red-300 px-2 py-1 rounded transition-all border border-red-500/20"
+                                            >
+                                                去配置
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    <button 
+                        onClick={onClose}
+                        className="w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold transition-all border border-slate-700 active:scale-95"
+                    >
+                        知道了
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }

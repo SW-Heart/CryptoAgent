@@ -97,7 +97,7 @@
         "tabs": {
             "general": "General",
             "account": "Account",
-            "usage": "Usage",
+            "llm": "AI Model",
             "exchange": "Exchange"
         },
         "general": {
@@ -109,17 +109,18 @@
         },
         "account": {
             "title": "Account",
-            "credits": "Credits",
-            "freeCredits": "Free credits",
             "signOut": "Sign Out"
         },
-        "usage": {
-            "title": "Usage History",
-            "credits": "Credits",
-            "date": "Date",
-            "action": "Action",
-            "creditsChange": "Credits change",
-            "noHistory": "No usage history"
+        "llm": {
+            "title": "LLM Configuration",
+            "provider": "Provider",
+            "model": "Model",
+            "apiKey": "API Key",
+            "save": "Save Configuration",
+            "saving": "Saving...",
+            "success": "Saved successfully",
+            "error": "Failed to save",
+            "desc": "Configure your own LLM provider to power the trading agent. Your API keys are encrypted and stored securely."
         },
         "exchange": {
             "configureKeys": "Configure API Keys",

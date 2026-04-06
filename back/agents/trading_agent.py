@@ -1,71 +1,43 @@
 """
-Trading Strategy Agent - Lightweight agent for automated strategy execution
+Trading Strategy Agent - 专业加密货币合约交易 Agent
 
-This agent is designed specifically for scheduler-triggered strategy analysis.
-It has a streamlined System Prompt to reduce token consumption while maintaining
-full analytical capabilities.
+该 Agent 具备完整的内置分析框架和执行规范，通过 build_strategy_context()
+一次性获取所有分析数据，再根据内置的决策流程做出交易决定。
+
+架构分层：
+  L0 内核 — 分析流程、下单规范、风控红线 (固定不变)
+  L1 策略 — 用户自定义的策略偏好 prompt_template (可定制)
+  L2 参数 — 标的、周期、风险比例、启用的分析模块 (可定制)
 """
 import os
 from dotenv import load_dotenv
 from os import getenv
 from agno.agent import Agent
-# from agno.db.sqlite import SqliteDb
 from custom_db import WalSqliteDb as SqliteDb
-from agno.models.deepseek import DeepSeek
-#from agno.os import AgentOS
-
 
 # Load environment variables
 load_dotenv()
 
-LLM_KEY = getenv("OPENAI_API_KEY")
+# 统一数据引擎 (唯一的数据入口)
+from tools.strategy_context import build_strategy_context
 
-# 导入合并工具 (减少 token 消耗) - 已整合到 technical_aggregator
-# get_macro_overview 已整合到 get_all_technical_indicators(include_account=True)
-
-# 导入聚合技术指标工具
-from tools.technical_aggregator import get_all_technical_indicators
-
-# 导入 K 线图视觉分析工具
-from kline_analysis import analyze_kline
-
-# 导入ETF工具 (宏观参考)
-from tools.etf_tools import get_etf_daily
-# 导入Polymarket工具 (市场预测/宏观)
-from tools.polymarket import get_market_odds
-
-# 导入交易执行工具
-# 注意：使用 Binance 版本进行真实交易，同时保留虚拟版本的一些工具
+# 交易执行工具 (精简集)
 from tools.binance_trading_tools import (
     binance_open_position as open_position,
     binance_close_position as close_position,
-    binance_get_positions_summary as get_positions_summary,
-    binance_get_current_price as get_current_price,
     binance_update_stop_loss as update_stop_loss,
-    # Phase 2-4 新增工具
-    binance_place_trailing_stop as place_trailing_stop,  # 跟踪止损
-    binance_get_funding_rate as get_funding_rate,        # 资金费率
-    binance_get_adl_risk as get_adl_risk,                # ADL风险
-    calculate_position_size,                             # 动态仓位 (Phase 5)
+    binance_place_trailing_stop as place_trailing_stop,
 )
 
-# 虚拟交易版本的日志和警报工具（这些不涉及 Binance）
+# 日志工具
 from tools.trading_tools import (
     log_strategy_analysis,
-    # 价格警报工具
-    set_price_alert,
-    get_price_alerts,
-    cancel_price_alert,
 )
-
-
-# ==========================================
-# Trading Strategy Agent
-# ==========================================
 
 import time
 import functools
 import asyncio
+from typing import Optional
 
 # ==========================================
 # 🔍 Token Usage Monitor & Utility
@@ -78,7 +50,6 @@ def monitor_tool_usage(func):
         tool_name = func.__name__
         input_str = str(args) + str(kwargs)
         print(f"\n[TokenMonitor] 🟢 CALLING {tool_name}...")
-        print(f"[TokenMonitor]    Input Size: {len(input_str)} chars")
         
         start_time = time.time()
         try:
@@ -87,13 +58,7 @@ def monitor_tool_usage(func):
             
             result_str = str(result)
             result_len = len(result_str)
-            print(f"[TokenMonitor] 🟡 FINISHED {tool_name} ({duration:.2f}s)")
-            print(f"[TokenMonitor]    Output Size: {result_len} chars")
-            
-            # Alert on massive outputs (>10k chars approx 2.5k tokens)
-            if result_len > 10000:
-                print(f"[TokenMonitor] ⚠️ HUGE OUTPUT DETECTED (>10k chars) for {tool_name}!")
-                print(f"[TokenMonitor]    Preview: {result_str[:200]}...")
+            print(f"[TokenMonitor] 🟡 FINISHED {tool_name} ({duration:.2f}s) Output: {result_len} chars")
             
             return result
         except Exception as e:
@@ -101,125 +66,361 @@ def monitor_tool_usage(func):
             raise e
     return wrapper
 
-trading_agent = Agent(
-    name="TradingStrategy",
-    id="trading-strategy-agent",
-    model=DeepSeek(id="deepseek-chat", api_key=LLM_KEY),
-    tools=[monitor_tool_usage(t) for t in [
-        # ========== 超级聚合工具 (核心 - 只调用这一个) ==========
-        get_all_technical_indicators, # 包含: 趋势、宏观、持仓、支撑阻力 (用 include_account=True)
-        # ========== K 线视觉分析 (按需) ==========
-        analyze_kline,                 # K 线图视觉形态分析 (仅关键时刻使用)
+# ==========================================
+# 🤖 Agent Factory
+# ==========================================
+
+def get_model_instance(provider: str, model_name: str, api_key: str = None, base_url: str = None):
+    """Utility to create an Agno model instance based on provider and model name"""
+    try:
+        if provider == "openai":
+            from agno.models.openai import OpenAIChat
+            return OpenAIChat(id=model_name or "gpt-4o", api_key=api_key, base_url=base_url)
+        elif provider == "deepseek":
+            from agno.models.deepseek import DeepSeek
+            return DeepSeek(id=model_name or "deepseek-chat", api_key=api_key, base_url=base_url)
+        elif provider == "anthropic":
+            from agno.models.anthropic import Claude
+            return Claude(id=model_name or "claude-4.6-sonnet", api_key=api_key)
+        elif provider == "google":
+            from agno.models.google import Gemini
+            return Gemini(id=model_name or "gemini-3.1-pro", api_key=api_key)
+        else:
+            # Fallback to DeepSeek for custom or unknown
+            from agno.models.deepseek import DeepSeek
+            return DeepSeek(id="deepseek-chat", api_key=api_key, base_url=base_url)
+    except Exception as e:
+        print(f"[ModelFactory] Initialization error: {e}")
+        return None
+
+def test_llm_connectivity(provider: str, model_name: str, api_key: str) -> tuple[bool, Optional[str]]:
+    """
+    Tests if the provided LLM configuration is valid by making a minimal call.
+    Returns (True, None) if successful, (False, ErrorMessage) otherwise.
+    """
+    model_instance = get_model_instance(provider, model_name, api_key)
+    if not model_instance:
+        return False, "Failed to initialize model instance locally"
         
-        # ========== 风险监控 ==========
-        get_adl_risk,                 # ADL 风险等级 (仅持仓后检查)
+    try:
+        print(f"[LLMTest] Testing {provider}/{model_name}...")
 
-        # ========== 交易执行 ==========
-        open_position,                # Binance 开仓
-        close_position,               # Binance 平仓
-        update_stop_loss,             # Binance 更新止损
-        place_trailing_stop,          # Binance 跟踪止损 (Phase 4)
-        get_funding_rate,             # Binance 资金费率 (Phase 2)
-        calculate_position_size,      # 动态仓位计算 (Phase 5)
+        # Use a minimal Agent.run call for compatibility across model providers.
+        probe_agent = Agent(
+            name="LLMConnectivityProbe",
+            model=model_instance,
+            tools=[],
+            instructions=["Reply with 'ok' only."],
+            add_history_to_context=False,
+            num_history_runs=0,
+            markdown=False,
+        )
+        run_response = probe_agent.run("ok")
+        content = getattr(run_response, "content", None)
+
+        if content and len(str(content).strip()) > 0:
+            print(f"[LLMTest] Success: {content}")
+            return True, None
+        return False, "Received empty response from LLM"
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[LLMTest] Connectivity failure: {error_msg}")
+        # Clean up common error messages for better UI display
+        if "401" in error_msg or "Unauthorized" in error_msg:
+            return False, "Invalid API Key"
+        if "404" in error_msg or "not found" in error_msg.lower():
+            return False, f"Model '{model_name}' not found by provider"
+        if "Rate limit" in error_msg:
+            return False, "Rate limit exceeded"
+        return False, error_msg
+
+def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[Agent]:
+    """
+    Factory to create a personalized Trading Agent for a specific user.
+    
+    如果传入 trader_instance_id，则精确使用该实例绑定的 LLM 和策略配置。
+    否则回退到用户的默认 LLM 配置和最新启用的策略（兼容旧调用方式）。
+    """
+    from binance_client import decrypt_value
+    from app.database import get_db_connection as get_db
+    import json as _json
+    
+    llm_config = None
+    strategy = None
+    strategy_config = {}  # config_json 中的额外配置（含 enabled_modules）
+    
+    # 1. Fetch LLM & Strategy Profile configurations
+    conn = get_db()
+    try:
+        with conn.cursor() as cursor:
+            if trader_instance_id is not None:
+                # ===== 精确模式：从 trader_instance 绑定的关系查询 =====
+                cursor.execute("""
+                    SELECT 
+                        lc.provider, lc.model, lc.api_key, lc.base_url,
+                        sp.symbols, sp.timeframes, sp.risk_per_trade, 
+                        sp.prompt_template, sp.trading_interval, sp.config_json,
+                        ti.llm_provider AS ti_llm_provider, ti.llm_model AS ti_llm_model
+                    FROM trader_instances ti
+                    LEFT JOIN llm_configs lc ON lc.id = ti.llm_config_id
+                    LEFT JOIN strategy_profiles sp ON sp.id = ti.strategy_profile_id
+                    WHERE ti.id = %s AND ti.user_id = %s
+                """, (trader_instance_id, user_id))
+                row = cursor.fetchone()
+                
+                if row:
+                    # LLM 配置
+                    if row.get("provider") and row.get("api_key"):
+                        llm_config = {
+                            "provider": row["provider"],
+                            "model": row["model"],
+                            "api_key": row["api_key"],
+                            "base_url": row.get("base_url"),
+                        }
+                    else:
+                        print(f"[AgentFactory] Trader #{trader_instance_id}: No bound llm_config, falling back to user default")
+                        cursor.execute("""
+                            SELECT provider, model, api_key, base_url
+                            FROM llm_configs 
+                            WHERE user_id = %s AND is_default = TRUE
+                            LIMIT 1
+                        """, (user_id,))
+                        llm_config = cursor.fetchone()
+                    
+                    # 策略配置
+                    if row.get("symbols"):
+                        strategy = {
+                            "symbols": row["symbols"],
+                            "timeframes": row["timeframes"],
+                            "risk_per_trade": row["risk_per_trade"],
+                            "prompt_template": row["prompt_template"],
+                            "trading_interval": row["trading_interval"],
+                        }
+                        # 解析 config_json 中的 enabled_modules
+                        raw_config = row.get("config_json")
+                        if raw_config:
+                            if isinstance(raw_config, str):
+                                try:
+                                    strategy_config = _json.loads(raw_config)
+                                except Exception:
+                                    strategy_config = {}
+                            elif isinstance(raw_config, dict):
+                                strategy_config = raw_config
+                else:
+                    print(f"[AgentFactory] Trader instance #{trader_instance_id} not found for user {user_id[:8]}")
+            
+            # ===== 回退模式 =====
+            if not llm_config:
+                cursor.execute("""
+                    SELECT provider, model, api_key, base_url
+                    FROM llm_configs 
+                    WHERE user_id = %s AND is_default = TRUE
+                    LIMIT 1
+                """, (user_id,))
+                llm_config = cursor.fetchone()
+            
+            if not strategy:
+                cursor.execute("""
+                    SELECT symbols, timeframes, risk_per_trade, prompt_template, 
+                           trading_interval, config_json
+                    FROM strategy_profiles
+                    WHERE user_id = %s AND is_enabled = TRUE
+                    ORDER BY updated_at DESC LIMIT 1
+                """, (user_id,))
+                fallback = cursor.fetchone()
+                if fallback:
+                    strategy = dict(fallback)
+                    raw_config = fallback.get("config_json")
+                    if raw_config:
+                        if isinstance(raw_config, str):
+                            try:
+                                strategy_config = _json.loads(raw_config)
+                            except Exception:
+                                strategy_config = {}
+                        elif isinstance(raw_config, dict):
+                            strategy_config = raw_config
+    except Exception as e:
+        print(f"[AgentFactory] Database error: {e}")
+        return None
+    finally:
+        conn.close()
         
-        set_price_alert,              # 设置警报
-        cancel_price_alert,           # 取消警报
-        log_strategy_analysis,        # 记录策略分析
-    ]],
-    instructions=["""
-# 交易策略执行 Agent
+    if not llm_config:
+        print(f"[AgentFactory] No LLM config found for user {user_id[:8]} (trader_instance={trader_instance_id})")
+        return None
 
-你是专业的加密货币合约交易员，遵循本金安全原则，顺大逆小原则。
+    # Handle missing strategy with defaults
+    if not strategy:
+        strategy = {
+            "symbols": "BTC,ETH",
+            "timeframes": "1h,4h",
+            "risk_per_trade": 0.02,
+            "prompt_template": "Focus on trend following strategy with strict risk management.",
+            "trading_interval": 60,
+        }
+        
+    provider = llm_config.get("provider", "deepseek")
+    model_name = llm_config.get("model", "deepseek-chat")
+    api_key_raw = llm_config.get("api_key")
+    base_url = llm_config.get("base_url")
+    
+    # Decrypt key
+    api_key = api_key_raw
+    if api_key_raw and api_key_raw.startswith("gAAAA"):
+        try:
+            api_key = decrypt_value(api_key_raw)
+        except Exception as e:
+            print(f"[AgentFactory] Decryption failed for user {user_id}: {e}")
+    
+    # 2. Get model instance
+    model_instance = get_model_instance(provider, model_name, api_key, base_url)
+    if not model_instance:
+        print(f"[AgentFactory] Failed to create model instance for {provider}")
+        return None
 
----
+    # 3. 从 config_json 中获取启用的分析模块
+    from tools.strategy_context import get_default_enabled_modules
+    enabled_modules = strategy_config.get("enabled_modules", get_default_enabled_modules())
+    modules_str = ",".join(enabled_modules) if isinstance(enabled_modules, list) else str(enabled_modules)
 
-## 标准流程
+    symbols = strategy.get("symbols", "BTC,ETH")
+    timeframes = strategy.get("timeframes", "1h,4h")
+    risk_pct = strategy.get("risk_per_trade", 0.02)
 
-### 第一步: 获取数据 (One-Shot)
+    # 4. 构建完整 System Prompt（L0 内核 + L1 用户策略 + L2 参数）
+    dynamic_instructions = [f"""
+# 加密货币合约交易 Agent
+
+你是一个专业的加密货币合约交易 Agent。你擅长技术分析和风险管理，
+能够自主地分析市场数据并做出交易决策。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## L2 — 当前实例参数 [强制执行]
+- **监控标的**: {symbols}
+- **分析周期**: {timeframes}
+- **单笔风险**: {risk_pct * 100}% of Balance
+- **启用模块**: {modules_str}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## L0 — 标准分析流程 [必须按顺序执行]
+
+### Step 1: 获取全部数据
+调用唯一的数据工具，一次性获取所有分析数据：
 ```
-get_all_technical_indicators(symbols, output_format="compact", include_account=True)
-```
-
-### 第二步: 分析决策
-基于返回数据判断：
-- `trend.direction`: 趋势方向
-- `trend.ema_aligned`: 多周期EMA排列
-- `macro.fng`: 恐惧贪婪指数
-- `account.balance/positions`: 账户状态
-
-### 第三步: 执行交易
-`calculate_position_size` → `open_position` / `close_position`
-
----
-
-## 入场条件 (必须满足)
-
-1. **趋势明确**: `trend.direction` ≠ neutral
-2. **多周期共振**: 至少2个周期 EMA 排列一致
-3. **顺大逆小**: 顺应大趋势，逆小趋势（大周期空头，小级别反弹到压力位时做空；大周期多头，小级别回调到支撑位时做多）
-4. **盈亏比 ≥ 2:1**: TP1止盈距离 / 止损距离 ≥ 2
-5. **盈利金额**: TP1至少盈利 $20, 才可以开单
-6. **手续费过滤**: 预期净利润必须显著覆盖手续费，否则不交易
-7. **有明确支撑/阻力**: 入场点靠近关键位，只在关键位置开仓
-
----
-
-## 仓位管理
-
-| 规则 | 限制 |
-|------|------|
-| 单笔最高风险金额 | $10 |
-| 止损距离 | 至少 1% |
-| 止盈距离 | 至少 2% |
-| 最大同时持仓 | 5 个 |
-| 最大杠杆 | 20x |
-| 加仓条件 | 仅当原持仓盈利，且方向明确时可加仓 |
-
-**小资金思路**: 
-- 合约有杠杆放大仓位，小资金也能做大仓位
-- 关注止盈止损的**绝对金额**，而不是百分比
-- 每单风险 $10, 盈利目标 $20 才有价值
-
----
-
-## 分批止盈
-
-| 阶段 | 比例 | 动作 |
-|------|------|------|
-| TP1 | 50% | 平仓50%，止损移至开仓价 |
-| TP2 | 30% | 再平30%，开启跟踪止损 |
-| TP3 | 20% | 跟踪止损自动止盈 |
-
----
-
-## 熔断机制
-
-- **单日亏损 ≥ 5%** → 当日停止开新仓
-- **连续3笔亏损** → 暂停开仓，只允许平仓
-
----
-
-## 禁止
-
-- 禁止重复调用数据工具
-- 禁止向亏损方向移动止损
-- 禁止盈亏比 < 2 的交易
-- 禁止满仓操作
-"""],
-    db=SqliteDb(session_table="test_agent", db_file="tmp/trading_agent.db"), # 必须启用db否则报错，但用add_history_to_context=False禁用历史
-    add_history_to_context=False, # 每次运行都是独立会话，关闭历史以节省Token
-    num_history_runs=0,
-    markdown=True,
-    add_datetime_to_context=True,
-    timezone_identifier="Etc/UTC",
-    debug_mode=True, # 开启调试日志
+build_strategy_context(
+    symbols="{symbols}",
+    timeframes="{timeframes}",
+    enabled_modules="{modules_str}"
 )
+```
+返回的 JSON 中包含：account(余额)、positions(持仓)、macro(宏观)、
+funding(费率) 以及各标的的技术指标数据。
 
-# agent_os = AgentOS(
-#     agents=[trading_agent],
-# )
+### Step 2: 确认账户状态
+- 检查 account.available (可用余额)
+- 检查 positions.list (已有持仓及方向)
+- 如果已有同方向同标的仓位 → 不重复开仓，考虑调整止损
 
-# app = agent_os.get_app()
+### Step 3: 多维度信号评估
+对每个标的，综合以下维度判断：
+- **趋势**: trend.direction + trend.strength (多周期EMA/Vegas/MACD)
+- **关键位**: levels.nearest_support / nearest_resistance (距离%)
+- **量能**: volume.ratio + volume.divergence + volume.flow
+- **形态**: pattern.name + pattern.bias (如有)
+- **波动**: volatility.status (决定仓位大小和止损宽度)
 
-# if __name__ == "__main__":
-#     agent_os.serve(app="trading_agent:app", reload=True)
+### Step 4: 信号强度评估
+
+🟢 **强信号** (可按风险比例正常开仓):
+- trend.direction 一致且 strength="strong"
+- 价格接近关键支撑/阻力位 (dist_pct < 2%)
+- volume.flow 配合方向 (做多时 inflow / 做空时 outflow)
+- 3个以上维度方向一致
+
+🟡 **中等信号** (减半仓位):
+- 2个维度方向一致
+- 价格接近但未到关键位
+
+🔴 **弱信号 / 无信号** (不开仓，记录 HOLD):
+- 趋势 direction="neutral" 或各维度矛盾
+- 量能 divergence="bearish" 与趋势冲突
+- 价格远离所有关键位
+
+### Step 5: 下单执行规范
+
+1. **仓位计算**:
+   - margin = account.available × {risk_pct}
+   - 绝对不超过 available 的 20%
+   - 高波动 (volatility.status="extreme_high") 时再减半
+
+2. **止损设置 [强制]**:
+   - LONG: 止损 = nearest_support.price × 0.995 (支撑位下方0.5%)
+   - SHORT: 止损 = nearest_resistance.price × 1.005 (阻力位上方0.5%)
+   - 如果没有明确的支撑/阻力位 → 使用 volatility.sl_suggest
+   - **没有止损 = 不开仓**
+
+3. **止盈参考**:
+   - LONG 止盈: nearest_resistance.price 附近
+   - SHORT 止盈: nearest_support.price 附近
+
+4. **开仓调用**:
+   open_position(symbol=标的, direction=方向, margin=计算值,
+                 leverage=10, stop_loss=止损价, take_profit=止盈价)
+
+### Step 6: 持仓管理
+
+已有持仓时的处理规则：
+- **同方向已有仓**: 不重复开仓，检查是否应移动止损
+  - 盈利 > 1倍风险 → update_stop_loss 到成本价 (保本)
+  - 盈利 > 2倍风险 → update_stop_loss 到 +1R 位置
+- **反方向强信号**: 先 close_position 平现仓，再开新仓
+- **持仓亏损中**: 只要未触及止损线则持有，不手动平仓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## L1 — 用户自定义策略偏好
+{strategy.get('prompt_template', 'Focus on trend following strategy with strict risk management.')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 日志记录 [每次执行必须]
+
+无论是否有操作，都必须调用 log_strategy_analysis() 记录：
+- market_analysis: 趋势判断 + 关键价位 + 量能状态
+- position_check: 当前持仓 + 余额
+- strategy_decision: 完整的决策逻辑推理过程
+- action_taken: HOLD / OPEN_LONG / OPEN_SHORT / CLOSE / ADJUST_SL
+
+## 禁止行为 [红线]
+- ❌ 禁止在 {symbols} 以外的标的开仓
+- ❌ 禁止不设止损的开仓
+- ❌ 禁止单笔 margin 超过可用余额的 20%
+- ❌ 禁止忽略已有持仓直接反向开仓（必须先平仓）
+- ❌ 禁止在 trend.direction="neutral" 且无明确信号时开仓
+"""]
+
+    # 5. Create Agent instance
+    return Agent(
+        name="TradingStrategy",
+        id=f"ts-{user_id[:8]}",
+        model=model_instance,
+        tools=[monitor_tool_usage(t) for t in [
+            build_strategy_context,   # 📥 唯一数据入口
+            open_position,            # 📤 开仓
+            close_position,           # 📤 平仓
+            update_stop_loss,         # 📤 调整止损
+            place_trailing_stop,      # 📤 追踪止损
+            log_strategy_analysis,    # 📝 日志记录
+        ]],
+        instructions=dynamic_instructions,
+        db=SqliteDb(session_table=f"ts_{user_id[:8]}", db_file=f"tmp/ts_{user_id[:8]}.db"),
+        add_history_to_context=False,
+        num_history_runs=0,
+        markdown=True,
+        add_datetime_to_context=True,
+        timezone_identifier="Etc/UTC",
+        debug_mode=True,
+    )
+

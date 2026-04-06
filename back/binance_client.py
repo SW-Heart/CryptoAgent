@@ -135,30 +135,32 @@ def init_binance_tables():
                 risk_per_trade REAL DEFAULT 0.02,
                 agent_requirements TEXT DEFAULT 'Focus on trend following strategy with strict risk management.',
                 trading_interval INTEGER DEFAULT 60, -- minutes
+                llm_provider TEXT DEFAULT 'deepseek',
+                llm_model TEXT DEFAULT 'deepseek-chat',
+                llm_api_key_encrypted TEXT,
                 last_analyzed_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Migration: Add agent_requirements column
-        try:
-            cursor.execute("SELECT agent_requirements FROM user_strategy_config LIMIT 1")
-        except Exception:
-            conn.rollback()
-            print("[BinanceClient] Migrating user_strategy_config: Adding agent_requirements column")
-            with conn.cursor() as migration_cursor:
-                migration_cursor.execute("ALTER TABLE user_strategy_config ADD COLUMN agent_requirements TEXT DEFAULT 'Focus on trend following strategy with strict risk management.'")
-                conn.commit()
-
-        # Migration: Add trading_interval column
-        try:
-            cursor.execute("SELECT trading_interval FROM user_strategy_config LIMIT 1")
-        except Exception:
-            conn.rollback()
-            print("[BinanceClient] Migrating user_strategy_config: Adding trading_interval column")
-            with conn.cursor() as migration_cursor:
-                migration_cursor.execute("ALTER TABLE user_strategy_config ADD COLUMN trading_interval INTEGER DEFAULT 60")
-                conn.commit()
+        # Migration: Add columns one by one if they don't exist
+        columns_to_add = [
+            ("agent_requirements", "TEXT DEFAULT 'Focus on trend following strategy.'"),
+            ("trading_interval", "INTEGER DEFAULT 60"),
+            ("llm_provider", "TEXT DEFAULT 'deepseek'"),
+            ("llm_model", "TEXT DEFAULT 'deepseek-chat'"),
+            ("llm_api_key_encrypted", "TEXT")
+        ]
+        
+        for col_name, col_def in columns_to_add:
+            try:
+                cursor.execute(f"SELECT {col_name} FROM user_strategy_config LIMIT 1")
+            except Exception:
+                conn.rollback()
+                print(f"[BinanceClient] Migrating user_strategy_config: Adding {col_name} column")
+                with conn.cursor() as migration_cursor:
+                    migration_cursor.execute(f"ALTER TABLE user_strategy_config ADD COLUMN {col_name} {col_def}")
+                    conn.commit()
         
         # Migration: Add last_analyzed_at column
         try:
@@ -247,11 +249,13 @@ def delete_user_api_keys(user_id: str) -> dict:
 def has_user_api_keys(user_id: str) -> bool:
     """Check if user has configured API keys."""
     conn = _get_db()
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT 1 FROM user_binance_keys WHERE user_id = %s", (user_id,))
-        row = cursor.fetchone()
-    conn.close()
-    return row is not None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM user_binance_keys WHERE user_id = %s", (user_id,))
+            row = cursor.fetchone()
+        return row is not None
+    finally:
+        conn.close()
 
 
 def get_user_api_keys(user_id: str) -> Optional[Dict[str, Any]]:
@@ -265,13 +269,15 @@ def get_user_api_keys(user_id: str) -> Optional[Dict[str, Any]]:
         dict with api_key, api_secret, is_testnet or None if not found
     """
     conn = _get_db()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT api_key_encrypted, api_secret_encrypted, is_testnet FROM user_binance_keys WHERE user_id = %s",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT api_key_encrypted, api_secret_encrypted, is_testnet FROM user_binance_keys WHERE user_id = %s",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
     
     if not row:
         return None
@@ -301,13 +307,15 @@ def get_user_trading_status(user_id: str) -> dict:
     is_configured = has_user_api_keys(user_id)
     
     conn = _get_db()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT is_trading_enabled, enabled_at, disabled_at FROM user_trading_status WHERE user_id = %s",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT is_trading_enabled, enabled_at, disabled_at FROM user_trading_status WHERE user_id = %s",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
     
     if not row:
         return {
@@ -407,13 +415,15 @@ def get_user_strategy_config(user_id: str) -> dict:
         dict with symbols, strategy_enabled, max_positions, risk_per_trade, agent_requirements
     """
     conn = _get_db()
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT symbols, strategy_enabled, max_positions, risk_per_trade, agent_requirements, trading_interval, last_analyzed_at FROM user_strategy_config WHERE user_id = %s",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT symbols, strategy_enabled, max_positions, risk_per_trade, agent_requirements, trading_interval, last_analyzed_at, llm_provider, llm_model, llm_api_key_encrypted FROM user_strategy_config WHERE user_id = %s",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
     
     if not row:
         # Return defaults
@@ -424,7 +434,8 @@ def get_user_strategy_config(user_id: str) -> dict:
             "risk_per_trade": 0.02,
             "agent_requirements": "Focus on trend following strategy with strict risk management.",
             "trading_interval": 60,
-            "last_analyzed_at": None
+            "last_analyzed_at": None,
+            "is_default": True
         }
     
     return {
@@ -434,7 +445,10 @@ def get_user_strategy_config(user_id: str) -> dict:
         "risk_per_trade": row["risk_per_trade"],
         "agent_requirements": row["agent_requirements"],
         "trading_interval": row["trading_interval"],
-        "last_analyzed_at": row["last_analyzed_at"].isoformat() if row["last_analyzed_at"] else None
+        "last_analyzed_at": row["last_analyzed_at"].isoformat() if row["last_analyzed_at"] else None,
+        "llm_provider": row["llm_provider"],
+        "llm_model": row["llm_model"],
+        "llm_api_key_encrypted": row["llm_api_key_encrypted"]
     }
 
 
@@ -538,6 +552,12 @@ class BinanceFuturesClient:
             "Content-Type": "application/x-www-form-urlencoded"
         })
         
+        # Proxy support: auto-detect from env vars for regions with restricted access
+        proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or os.getenv("https_proxy") or os.getenv("http_proxy")
+        if proxy_url:
+            self.session.proxies = {"https": proxy_url, "http": proxy_url}
+            print(f"[BinanceClient] Using proxy: {proxy_url[:30]}...")
+        
         # SSL 验证：正式网必须验证 SSL，测试网可选择跳过
         if testnet:
             # 测试网在某些网络环境下可能有 SSL 证书问题，允许跳过验证
@@ -578,7 +598,7 @@ class BinanceFuturesClient:
         signed: bool = True
     ) -> dict:
         """
-        Send API request.
+        Send API request with automatic retry for transient errors.
         
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
@@ -590,63 +610,71 @@ class BinanceFuturesClient:
             Response JSON
         """
         url = f"{self.base_url}{endpoint}"
-        params = params or {}
+        original_params = dict(params or {})
         
-        if signed:
-            # Set recvWindow to 60000 (60 seconds) to tolerate clock skew and network latency
-            if "recvWindow" not in params:
-                params["recvWindow"] = 60000
-                
-            params["timestamp"] = self._get_timestamp()
-            params["signature"] = self._sign(params)
+        max_retries = 2
+        last_error = None
         
-        try:
-            if method.upper() == "GET":
-                response = self.session.get(url, params=params, timeout=15)
-            elif method.upper() == "POST":
-                response = self.session.post(url, data=params, timeout=15)
-            elif method.upper() == "PUT":
-                response = self.session.put(url, data=params, timeout=15)
-            elif method.upper() == "DELETE":
-                response = self.session.delete(url, params=params, timeout=15)
-            else:
-                return {"error": f"Unsupported HTTP method: {method}"}
+        for attempt in range(max_retries + 1):
+            # 每次重试需要重新生成 timestamp 和 signature
+            params = dict(original_params)
             
-            # Handle rate limits
-            if response.status_code == 429:
-                return {"error": "Rate limit exceeded", "code": 429}
+            if signed:
+                if "recvWindow" not in params:
+                    params["recvWindow"] = 60000
+                params["timestamp"] = self._get_timestamp()
+                params["signature"] = self._sign(params)
             
-            # Check for empty response
-            if not response.text or len(response.text.strip()) == 0:
-                return {"error": f"Empty response from API (status: {response.status_code})"}
-            
-            # Try to parse JSON
             try:
-                data = response.json()
-            except ValueError as e:
-                # 响应不是有效 JSON，可能是 HTML 错误页面
-                print(f"[BinanceClient] Invalid JSON response: {response.text[:200]}")
-                return {"error": f"Invalid JSON response: {response.text[:100]}..."}
-            
-            # Check for API errors
-            if response.status_code >= 400:
-                return {
-                    "error": data.get("msg", "Unknown error"),
-                    "code": data.get("code", response.status_code)
-                }
-            
-            return data
-            
-        except requests.exceptions.Timeout:
-            return {"error": "Request timeout (15s)"}
-        except requests.exceptions.SSLError as e:
-            return {"error": f"SSL Error: {str(e)}"}
-        except requests.exceptions.ConnectionError as e:
-            return {"error": f"Connection failed: {str(e)}"}
-        except requests.exceptions.RequestException as e:
-            return {"error": f"Request failed: {str(e)}"}
-        except Exception as e:
-            return {"error": f"Unexpected error: {str(e)}"}
+                if method.upper() == "GET":
+                    response = self.session.get(url, params=params, timeout=15)
+                elif method.upper() == "POST":
+                    response = self.session.post(url, data=params, timeout=15)
+                elif method.upper() == "PUT":
+                    response = self.session.put(url, data=params, timeout=15)
+                elif method.upper() == "DELETE":
+                    response = self.session.delete(url, params=params, timeout=15)
+                else:
+                    return {"error": f"Unsupported HTTP method: {method}"}
+                
+                # Handle rate limits
+                if response.status_code == 429:
+                    return {"error": "Rate limit exceeded", "code": 429}
+                
+                # Check for empty response
+                if not response.text or len(response.text.strip()) == 0:
+                    return {"error": f"Empty response from API (status: {response.status_code})"}
+                
+                # Try to parse JSON
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    print(f"[BinanceClient] Invalid JSON response: {response.text[:200]}")
+                    return {"error": f"Invalid JSON response: {response.text[:100]}..."}
+                
+                # Check for API errors
+                if response.status_code >= 400:
+                    return {
+                        "error": data.get("msg", "Unknown error"),
+                        "code": data.get("code", response.status_code)
+                    }
+                
+                return data
+                
+            except requests.exceptions.Timeout:
+                return {"error": "Request timeout (15s)"}
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+                last_error = str(e)
+                if attempt < max_retries:
+                    wait = (attempt + 1) * 1  # 1s, 2s
+                    print(f"[BinanceClient] Transient error (attempt {attempt+1}/{max_retries+1}), retrying in {wait}s: {last_error[:80]}")
+                    time.sleep(wait)
+                    continue
+                return {"error": f"SSL/Connection Error after {max_retries+1} attempts: {last_error}"}
+            except requests.exceptions.RequestException as e:
+                return {"error": f"Request failed: {str(e)}"}
+            except Exception as e:
+                return {"error": f"Unexpected error: {str(e)}"}
     
     # ==========================================
     # Account Endpoints

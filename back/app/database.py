@@ -31,12 +31,12 @@ def _init_pool():
     if _connection_pool is None:
         try:
             _connection_pool = pool.ThreadedConnectionPool(
-                minconn=2,
-                maxconn=20,
+                minconn=5,
+                maxconn=50,
                 dsn=DB_URL,
                 cursor_factory=DictCursor
             )
-            print("[DB] Connection pool initialized (min=2, max=20)")
+            print("[DB] Connection pool initialized (min=5, max=50)")
         except Exception as e:
             print(f"[DB] Failed to create connection pool: {e}")
             raise
@@ -53,12 +53,10 @@ def get_db_connection():
     
     try:
         conn = _connection_pool.getconn()
-        # 包装连接，让 close() 归还到池子而非真正关闭
         return PooledConnection(conn, _connection_pool)
     except Exception as e:
-        print(f"[DB] Error getting connection from pool: {e}")
-        # Fallback to direct connection (不使用池子)
-        return psycopg2.connect(DB_URL, cursor_factory=DictCursor)
+        print(f"[DB] CRITICAL: Connection pool exhausted or failed: {e}")
+        raise # 不要使用静默的 psycopg2.connect，防止连接泄露
 
 
 class PooledConnection:
