@@ -388,23 +388,49 @@ def disable_user_trading(user_id: str) -> dict:
 
 def get_all_active_trading_users() -> List[str]:
     """
-    Get all users with trading enabled (for startup recovery).
+    Get all users with trading enabled.
+    
+    Supports both legacy (user_binance_keys + user_trading_status) and
+    new Workspace (exchange_accounts + trader_instances) systems.
     
     Returns:
-        List of user IDs with active trading
+        List of unique user IDs with active trading
     """
+    user_ids = set()
     conn = _get_db()
-    with conn.cursor() as cursor:
-        cursor.execute("""
-            SELECT uts.user_id 
-            FROM user_trading_status uts
-            JOIN user_binance_keys ubk ON uts.user_id = ubk.user_id
-            WHERE uts.is_trading_enabled = TRUE
-        """)
-        rows = cursor.fetchall()
-    conn.close()
+    try:
+        with conn.cursor() as cursor:
+            # 路径 A: 旧系统 (user_binance_keys + user_trading_status)
+            try:
+                cursor.execute("""
+                    SELECT uts.user_id 
+                    FROM user_trading_status uts
+                    JOIN user_binance_keys ubk ON uts.user_id = ubk.user_id
+                    WHERE uts.is_trading_enabled = TRUE
+                """)
+                for row in cursor.fetchall():
+                    user_ids.add(row["user_id"])
+            except Exception as e:
+                print(f"[BinanceClient] Legacy active users query error: {e}")
+            
+            # 路径 B: 新系统 Workspace (trader_instances + exchange_accounts)
+            try:
+                cursor.execute("""
+                    SELECT DISTINCT ti.user_id
+                    FROM trader_instances ti
+                    JOIN exchange_accounts ea ON ea.id = ti.exchange_account_id
+                    WHERE ti.status = 'RUNNING'
+                      AND ti.is_enabled = TRUE
+                      AND ea.is_connected = TRUE
+                """)
+                for row in cursor.fetchall():
+                    user_ids.add(row["user_id"])
+            except Exception as e:
+                print(f"[BinanceClient] Workspace active users query error: {e}")
+    finally:
+        conn.close()
     
-    return [row["user_id"] for row in rows]
+    return list(user_ids)
 
 
 def get_user_strategy_config(user_id: str) -> dict:

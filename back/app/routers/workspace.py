@@ -1,8 +1,11 @@
 """
 Workspace router for product shell objects.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
+import oss2
+import os
+import uuid
 
 from app.services.workspace_service import (
     create_strategy_profile,
@@ -323,3 +326,31 @@ def debug_inspect_user_route(user_id: str):
         return {"status": "error", "message": str(e)}
     finally:
         conn.close()
+
+@router.post("/upload-avatar")
+async def upload_avatar_route(file: UploadFile = File(...)):
+    OSS_ACCESS_KEY_ID = os.getenv("ALIYUN_OSS_ACCESS_KEY_ID", "")
+    OSS_ACCESS_KEY_SECRET = os.getenv("ALIYUN_OSS_ACCESS_KEY_SECRET", "")
+    OSS_ENDPOINT = os.getenv("ALIYUN_OSS_ENDPOINT", "oss-cn-hangzhou.aliyuncs.com")
+    OSS_BUCKET_NAME = os.getenv("ALIYUN_OSS_BUCKET_NAME", "")
+    
+    if not all([OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET_NAME]):
+        raise HTTPException(status_code=500, detail="OSS configuration is missing in environment.")
+    
+    try:
+        contents = await file.read()
+        
+        ext = file.filename.split('.')[-1] if '.' in file.filename else 'png'
+        filename = f"avatars/{uuid.uuid4().hex}.{ext}"
+        
+        auth = oss2.Auth(OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET)
+        bucket = oss2.Bucket(auth, OSS_ENDPOINT, OSS_BUCKET_NAME)
+        
+        bucket.put_object(filename, contents)
+        
+        endpoint_clean = OSS_ENDPOINT.replace("https://", "").replace("http://", "")
+        public_url = f"https://{OSS_BUCKET_NAME}.{endpoint_clean}/{filename}"
+        
+        return {"url": public_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

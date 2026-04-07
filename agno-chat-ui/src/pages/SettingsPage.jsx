@@ -24,7 +24,7 @@ import {
     Copy
 } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
-import { getJson, postJson, deleteJson } from '../services/apiClient';
+import { getJson, postJson, deleteJson, uploadFile } from '../services/apiClient';
 import Button from '../components/common/Button';
 import Input from '../components/common/Input';
 import ConnectExchangeModal from '../components/ConnectExchangeModal';
@@ -75,9 +75,9 @@ function AccountSection({ userId, user: initialUser }) {
                 data: { full_name: editName }
             });
             if (error) throw error;
-            await supabase.auth.refreshSession();
+            const { data: { user: freshUser } } = await supabase.auth.getUser();
+            setUser(freshUser);
             setIsEditing(false);
-            window.location.reload();
         } catch (e) {
             alert("更新失败: " + e.message);
         } finally {
@@ -86,21 +86,32 @@ function AccountSection({ userId, user: initialUser }) {
     };
 
     const handleUpdateAvatar = async () => {
-        const newAvatar = window.prompt("请输入新的头像 URL:", user?.user_metadata?.avatar_url);
-        if (!newAvatar) return;
-        setSaving(true);
-        try {
-            const { error } = await supabase.auth.updateUser({
-                data: { avatar_url: newAvatar }
-            });
-            if (error) throw error;
-            await supabase.auth.refreshSession();
-            window.location.reload();
-        } catch (e) {
-            alert("头像更新失败");
-        } finally {
-            setSaving(false);
-        }
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            setSaving(true);
+            try {
+                const uploadRes = await uploadFile('/api/workspace/upload-avatar', file);
+                if (!uploadRes || !uploadRes.url) throw new Error("上传失败，未返回URL");
+                
+                const { error } = await supabase.auth.updateUser({
+                    data: { avatar_url: uploadRes.url }
+                });
+                
+                if (error) throw error;
+                const { data: { user: freshUser } } = await supabase.auth.getUser();
+                setUser(freshUser);
+            } catch (err) {
+                alert("头像上传失败: " + err.message);
+            } finally {
+                setSaving(false);
+            }
+        };
+        input.click();
     };
 
     const handleLogout = async () => {

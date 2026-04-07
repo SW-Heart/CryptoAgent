@@ -11,6 +11,8 @@ import {
   Zap
 } from 'lucide-react';
 import Button from '../components/common/Button';
+import ConfirmModal from '../components/ConfirmModal';
+import Toast from '../components/common/Toast';
 import { getJson, postJson, putJson, deleteJson } from '../services/apiClient';
 
 const StrategyHelp = ({ title, content }) => (
@@ -33,6 +35,7 @@ const StrategiesPage = ({ userId }) => {
     const [traderInstances, setTraderInstances] = useState([]);
     const [feedback, setFeedback] = useState(null);
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const showFeedback = (msg, type) => {
         setFeedback({ msg, type });
@@ -141,6 +144,7 @@ const StrategiesPage = ({ userId }) => {
     };
 
     const handleDelete = async () => {
+        setIsDeleting(true);
         try {
             const res = await deleteJson(`/api/workspace/strategy-profiles/${selectedProfile.id}?user_id=${userId}`);
             const newList = res.profiles || [];
@@ -150,6 +154,8 @@ const StrategiesPage = ({ userId }) => {
             showFeedback("策略已删除", "success");
         } catch (err) {
             showFeedback("删除出错", "error");
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -176,15 +182,7 @@ const StrategiesPage = ({ userId }) => {
 
     return (
         <div className="h-full flex flex-col animate-in fade-in duration-500 relative">
-            {/* Feedback Toast */}
-            {feedback && (
-                <div className={`fixed top-12 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl z-50 flex items-center gap-3 animate-in slide-in-from-top-4 border ${
-                    feedback.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                }`}>
-                    {feedback.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
-                    <span className="text-sm font-bold">{feedback.msg}</span>
-                </div>
-            )}
+            <Toast feedback={feedback} />
 
             <header className="mb-10 flex items-center justify-between">
                 <div className="flex flex-col gap-1">
@@ -376,12 +374,6 @@ const StrategiesPage = ({ userId }) => {
                             <div className="flex items-center gap-3">
                                 {selectedProfile.source === 'legacy_import' ? (
                                     <span className="text-xs text-slate-600 font-medium">系统默认策略</span>
-                                ) : isConfirmingDelete ? (
-                                    <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 transition-all">
-                                        <span className="text-xs font-bold text-rose-500 mr-2 uppercase tracking-tighter">确认永久删除？</span>
-                                        <Button variant="danger" size="sm" onClick={handleDelete}>确定</Button>
-                                        <Button variant="outline" size="sm" onClick={() => setIsConfirmingDelete(false)}>取消</Button>
-                                    </div>
                                 ) : (
                                     <Button variant="danger" icon={Trash2} onClick={() => setIsConfirmingDelete(true)}>删除策略</Button>
                                 )}
@@ -406,6 +398,16 @@ const StrategiesPage = ({ userId }) => {
                     </main>
                 )}
             </div>
+            <ConfirmModal 
+                isOpen={isConfirmingDelete} 
+                onClose={() => setIsConfirmingDelete(false)} 
+                onConfirm={handleDelete}
+                loading={isDeleting}
+                title="删除策略"
+                message="确定要永久删除此策略吗？关联的运行实例可能会受到影响。此动作无法撤销。"
+                confirmText="删除"
+                type="danger"
+            />
         </div>
     );
 };

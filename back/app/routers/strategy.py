@@ -404,46 +404,69 @@ def get_positions(status: str = "OPEN", user_id: str = None):
     
     If user has Binance trading enabled, returns real Binance positions.
     Otherwise returns virtual trading positions (demo mode).
+    
+    Supports both legacy (user_binance_keys) and new Workspace (exchange_accounts) systems.
     """
     import requests
+    
+    def _format_binance_positions(result):
+        """Convert binance_get_positions_summary result to unified frontend format."""
+        positions = []
+        for pos in result.get("open_positions", []):
+            positions.append({
+                "id": None,
+                "symbol": pos.get("symbol", "").replace("USDT", ""),
+                "direction": pos.get("direction"),
+                "leverage": pos.get("leverage", 10),
+                "margin": pos.get("margin", 0),
+                "notional_value": pos.get("quantity", 0) * pos.get("entry_price", 0),
+                "entry_price": pos.get("entry_price", 0),
+                "quantity": pos.get("quantity", 0),
+                "closed_quantity": 0,
+                "remaining_quantity": pos.get("quantity", 0),
+                "stop_loss": None,
+                "take_profit": None,
+                "current_price": pos.get("current_price", 0),
+                "unrealized_pnl": pos.get("unrealized_pnl", 0),
+                "realized_pnl": None,
+                "status": "OPEN",
+                "opened_at": None,
+                "closed_at": None,
+                "close_price": None,
+                "liquidation_price": pos.get("liquidation_price", 0),
+                "roi_percent": pos.get("roi_percent", 0)
+            })
+        return positions
     
     # 如果用户启用了 Binance 交易，使用 Binance 数据
     if user_id:
         try:
-            from tools.binance_trading_tools import binance_get_positions_summary
-            from binance_client import get_user_trading_status
+            from tools.binance_trading_tools import binance_get_positions_summary, _get_trading_client
+            from binance_client import get_user_trading_status, has_user_api_keys
             
-            trading_status = get_user_trading_status(user_id)
-            if trading_status.get("is_configured") and trading_status.get("is_trading_enabled"):
+            # 路径 A: 旧系统 (user_binance_keys + user_trading_status)
+            if has_user_api_keys(user_id):
+                trading_status = get_user_trading_status(user_id)
+                if trading_status.get("is_configured") and trading_status.get("is_trading_enabled"):
+                    result = binance_get_positions_summary(user_id)
+                    if "error" not in result:
+                        return {"source": "binance", "positions": _format_binance_positions(result)}
+            
+            # 路径 B: 新系统 Workspace (exchange_accounts)
+            # 查看是否有关联的 exchange_account
+            from app.services.workspace_service import list_trader_instances
+            instances = list_trader_instances(user_id)
+            primary = next((i for i in instances if i["slug"] == "primary-runtime"), None)
+            if not primary:
+                primary = instances[0] if instances else None
+            
+            if primary and primary.get("exchange_account_id"):
+                # 使用 _get_trading_client 统一获取 client (支持双路径)
                 result = binance_get_positions_summary(user_id)
-                if "error" not in result:
-                    # 转换为统一格式
-                    positions = []
-                    for pos in result.get("open_positions", []):
-                        positions.append({
-                            "id": None,  # Binance 没有我们的 position ID
-                            "symbol": pos.get("symbol", "").replace("USDT", ""),
-                            "direction": pos.get("direction"),
-                            "leverage": pos.get("leverage", 10),
-                            "margin": pos.get("margin", 0),
-                            "notional_value": pos.get("quantity", 0) * pos.get("entry_price", 0),
-                            "entry_price": pos.get("entry_price", 0),
-                            "quantity": pos.get("quantity", 0),
-                            "closed_quantity": 0,
-                            "remaining_quantity": pos.get("quantity", 0),
-                            "stop_loss": None,
-                            "take_profit": None,
-                            "current_price": pos.get("current_price", 0),
-                            "unrealized_pnl": pos.get("unrealized_pnl", 0),
-                            "realized_pnl": None,
-                            "status": "OPEN",
-                            "opened_at": None,
-                            "closed_at": None,
-                            "close_price": None,
-                            "liquidation_price": pos.get("liquidation_price", 0),
-                            "roi_percent": pos.get("roi_percent", 0)
-                        })
-                    return {"source": "binance", "positions": positions}
+                if isinstance(result, dict) and "error" not in result:
+                    return {"source": "binance", "positions": _format_binance_positions(result)}
+                else:
+                    print(f"[Strategy] Binance positions via Workspace failed: {result.get('error', 'unknown') if isinstance(result, dict) else result}")
         except Exception as e:
             print(f"[Strategy] Binance positions error: {e}")
     
@@ -548,89 +571,96 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
     try:
         # 如果 user_id 提供且已配置 Binance，获取 Binance 订单
         if user_id:
-            from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
+            client = None
             
+            # 路径 A: 旧系统 (user_binance_keys)
+            from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
             if has_user_api_keys(user_id):
                 trading_status = get_user_trading_status(user_id)
-                # Allow viewing history even if trading is currently disabled, as long as keys exist
                 if trading_status.get("is_configured"):
                     client = get_user_binance_client(user_id)
-                    if client:
-                        try:
-                            binance_orders = []
-                            
-                            if status == "OPEN":
-                                # Open orders don't strictly require symbol, but can be filtered
-                                binance_orders = client.get_open_orders()
-                            else:
-                                # History requires symbol iterations
-                                symbol_list = [s.strip().upper() for s in symbols.split(",")]
-                                for sym in symbol_list:
-                                    if not sym.endswith("USDT"):
-                                        sym += "USDT"
-                                    try:
-                                        sym_orders = client.get_order_history(symbol=sym, limit=limit)
-                                        if isinstance(sym_orders, list):
-                                            binance_orders.extend(sym_orders)
-                                    except Exception as e:
-                                        print(f"[Strategy] Error fetching order history for {sym}: {e}")
-                                
-                                # Sort combined history by time desc
-                                binance_orders.sort(key=lambda x: x.get("time", 0), reverse=True)
-                                # Limit total results
-                                binance_orders = binance_orders[:limit]
+            
+            # 路径 B: 新系统 Workspace (exchange_accounts)
+            if not client:
+                try:
+                    from tools.binance_trading_tools import _get_trading_client
+                    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+                    if err:
+                        client = None
+                except Exception:
+                    client = None
+            
+            if client:
+                try:
+                    binance_orders = []
+                    
+                    if status == "OPEN":
+                        binance_orders = client.get_open_orders()
+                    else:
+                        # History requires symbol iterations
+                        symbol_list = [s.strip().upper() for s in symbols.split(",")]
+                        for sym in symbol_list:
+                            if not sym.endswith("USDT"):
+                                sym += "USDT"
+                            try:
+                                sym_orders = client.get_order_history(symbol=sym, limit=limit)
+                                if isinstance(sym_orders, list):
+                                    binance_orders.extend(sym_orders)
+                            except Exception as e:
+                                print(f"[Strategy] Error fetching order history for {sym}: {e}")
+                        
+                        # Sort combined history by time desc
+                        binance_orders.sort(key=lambda x: x.get("time", 0), reverse=True)
+                        binance_orders = binance_orders[:limit]
 
-                            # 确保返回的是列表
-                            if not isinstance(binance_orders, list):
-                                if isinstance(binance_orders, dict) and "code" in binance_orders:
-                                    print(f"[Strategy] Binance error: {binance_orders}")
-                                    return {"orders": [], "source": "binance_error", "error": str(binance_orders)}
-                                binance_orders = [] # Unknown format
-                            
-                            formatted_orders = []
-                            for order in binance_orders:
-                                # 格式化 Binance 订单字段
-                                order_type = order.get("type", "")
-                                side = order.get("side", "")
-                                
-                                # 推断方向
-                                if order_type in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]:
-                                    direction = "SHORT" if side == "BUY" else "LONG"
-                                else:
-                                    direction = "LONG" if side == "BUY" else "SHORT"
-                                
-                                # 确定订单动作
-                                if order_type == "STOP_MARKET":
-                                    action = "STOP_LOSS"
-                                elif order_type == "TAKE_PROFIT_MARKET":
-                                    action = "TAKE_PROFIT"
-                                elif order_type == "LIMIT":
-                                    action = f"LIMIT_{side}"
-                                else:
-                                    action = order_type
-                                
-                                formatted_orders.append({
-                                    "id": order.get("orderId"),
-                                    "order_id": order.get("orderId"),
-                                    "symbol": order.get("symbol", "").replace("USDT", ""),
-                                    "direction": direction,
-                                    "action": action,
-                                    "type": order_type,
-                                    "side": side,
-                                    "quantity": float(order.get("origQty", 0)),
-                                    "filled_quantity": float(order.get("executedQty", 0)),
-                                    "price": float(order.get("price", 0)),
-                                    "avg_price": float(order.get("avgPrice", 0)),
-                                    "stop_price": float(order.get("stopPrice", 0)),
-                                    "status": order.get("status"),
-                                    "created_at": order.get("time"),
-                                    "source": "binance"
-                                })
-                            
-                            return {"orders": formatted_orders, "source": "binance"}
-                        except Exception as e:
-                            print(f"[Strategy] Binance get_orders error: {e}")
-                            # Continue to fallback
+                    # 确保返回的是列表
+                    if not isinstance(binance_orders, list):
+                        if isinstance(binance_orders, dict) and "code" in binance_orders:
+                            print(f"[Strategy] Binance error: {binance_orders}")
+                            return {"orders": [], "source": "binance_error", "error": str(binance_orders)}
+                        binance_orders = []
+                    
+                    formatted_orders = []
+                    for order in binance_orders:
+                        order_type = order.get("type", "")
+                        side = order.get("side", "")
+                        
+                        if order_type in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]:
+                            direction = "SHORT" if side == "BUY" else "LONG"
+                        else:
+                            direction = "LONG" if side == "BUY" else "SHORT"
+                        
+                        if order_type == "STOP_MARKET":
+                            action = "STOP_LOSS"
+                        elif order_type == "TAKE_PROFIT_MARKET":
+                            action = "TAKE_PROFIT"
+                        elif order_type == "LIMIT":
+                            action = f"LIMIT_{side}"
+                        else:
+                            action = order_type
+                        
+                        formatted_orders.append({
+                            "id": order.get("orderId"),
+                            "order_id": order.get("orderId"),
+                            "symbol": order.get("symbol", "").replace("USDT", ""),
+                            "direction": direction,
+                            "action": action,
+                            "type": order_type,
+                            "side": side,
+                            "quantity": float(order.get("origQty", 0)),
+                            "filled_quantity": float(order.get("executedQty", 0)),
+                            "price": float(order.get("price", 0)),
+                            "avg_price": float(order.get("avgPrice", 0)),
+                            "stop_price": float(order.get("stopPrice", 0)),
+                            "status": order.get("status"),
+                            "created_at": order.get("time"),
+                            "source": "binance"
+                        })
+                    
+                    return {"orders": formatted_orders, "source": "binance"}
+                except Exception as e:
+                    print(f"[Strategy] Binance get_orders error: {e}")
+                    # Continue to fallback
         
         # 回退到本地数据库
         conn = get_db_connection()
@@ -709,14 +739,26 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
 
     # Fetch from Binance
     try:
-        from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
+        from binance_client import has_user_api_keys, get_user_binance_client
         
-        if not has_user_api_keys(user_id):
-             return {"trades": [], "source": "binance", "error": "API keys not configured"}
-             
-        client = get_user_binance_client(user_id)
+        client = None
+        
+        # 路径 A: 旧系统
+        if has_user_api_keys(user_id):
+            client = get_user_binance_client(user_id)
+        
+        # 路径 B: 新系统 Workspace
         if not client:
-            return {"trades": [], "source": "binance", "error": "Failed to create client"}
+            try:
+                from tools.binance_trading_tools import _get_trading_client
+                client, err = _get_trading_client(user_id, require_trading_enabled=False)
+                if err:
+                    client = None
+            except Exception:
+                client = None
+        
+        if not client:
+            return {"trades": [], "source": "binance", "error": "No exchange account configured"}
             
         symbol_list = [s.strip().upper() for s in symbols.split(",")]
         all_trades = []
@@ -757,6 +799,142 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
         
         return {"trades": all_trades, "source": "binance"}
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/position-history")
+def get_position_history(
+    user_id: str = None,
+    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT",
+    limit: int = 20
+):
+    """
+    获取仓位历史（从交易记录聚合出仓位级别数据）。
+    
+    模拟 Binance 仓位历史页面的数据：
+    - 每个仓位从开仓到平仓的完整生命周期
+    - 包括已实现盈亏、收益率、开/平仓价格、数量、时间等
+    
+    Args:
+        user_id: User ID (required)
+        symbols: 逗号分隔的交易对列表
+        limit: 每个交易对获取的最大交易数
+    """
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    try:
+        from tools.binance_trading_tools import _get_trading_client
+        
+        client, err = _get_trading_client(user_id, require_trading_enabled=False)
+        if err:
+            return {"positions": [], "error": err}
+        
+        symbol_list = [s.strip().upper() for s in symbols.split(",")]
+        all_positions = []
+        
+        for sym in symbol_list:
+            if not sym.endswith("USDT"):
+                sym += "USDT"
+            
+            try:
+                trades = client.get_trade_history(symbol=sym, limit=min(limit * 5, 500))
+                if not isinstance(trades, list):
+                    continue
+                
+                # 按时间正序排列以便追踪仓位生命周期
+                trades.sort(key=lambda x: x.get("time", 0))
+                
+                # 追踪仓位状态，将交易聚合成仓位周期
+                current_pos = None  # 当前追踪的仓位
+                
+                for trade in trades:
+                    side = trade.get("side", "")
+                    qty = float(trade.get("qty", 0))
+                    price = float(trade.get("price", 0))
+                    r_pnl = float(trade.get("realizedPnl", 0))
+                    commission = float(trade.get("commission", 0))
+                    trade_time = trade.get("time", 0)
+                    
+                    if current_pos is None:
+                        # 开新仓
+                        current_pos = {
+                            "symbol": sym,
+                            "direction": "LONG" if side == "BUY" else "SHORT",
+                            "entry_trades": [],
+                            "close_trades": [],
+                            "total_entry_qty": 0,
+                            "total_entry_cost": 0,
+                            "total_close_qty": 0,
+                            "total_close_cost": 0,
+                            "realized_pnl": 0,
+                            "total_commission": 0,
+                            "open_time": trade_time,
+                            "close_time": None,
+                            "leverage": 10,  # 默认值
+                        }
+                    
+                    # 判断这笔交易是开仓还是平仓
+                    is_opening = (current_pos["direction"] == "LONG" and side == "BUY") or \
+                                 (current_pos["direction"] == "SHORT" and side == "SELL")
+                    
+                    if is_opening:
+                        current_pos["total_entry_qty"] += qty
+                        current_pos["total_entry_cost"] += qty * price
+                        current_pos["entry_trades"].append(trade)
+                    else:
+                        current_pos["total_close_qty"] += qty
+                        current_pos["total_close_cost"] += qty * price
+                        current_pos["close_trades"].append(trade)
+                        current_pos["realized_pnl"] += r_pnl
+                        current_pos["close_time"] = trade_time
+                    
+                    current_pos["total_commission"] += commission
+                    
+                    # 如果已平仓量 >= 开仓量，这个仓位周期结束
+                    if current_pos["total_close_qty"] > 0 and \
+                       current_pos["total_close_qty"] >= current_pos["total_entry_qty"] * 0.99:  # 0.99 容差
+                        
+                        entry_price = current_pos["total_entry_cost"] / current_pos["total_entry_qty"] \
+                            if current_pos["total_entry_qty"] > 0 else 0
+                        close_price = current_pos["total_close_cost"] / current_pos["total_close_qty"] \
+                            if current_pos["total_close_qty"] > 0 else 0
+                        
+                        # 计算收益率 (基于开仓成本)
+                        entry_notional = current_pos["total_entry_qty"] * entry_price
+                        margin = entry_notional / current_pos["leverage"] if current_pos["leverage"] > 0 else entry_notional
+                        roi = (current_pos["realized_pnl"] / margin * 100) if margin > 0 else 0
+                        
+                        all_positions.append({
+                            "symbol": sym.replace("USDT", ""),
+                            "symbol_full": sym,
+                            "direction": current_pos["direction"],
+                            "leverage": current_pos["leverage"],
+                            "margin_mode": "全仓",
+                            "close_type": "全部平仓",
+                            "realized_pnl": round(current_pos["realized_pnl"], 4),
+                            "roi_percent": round(roi, 2),
+                            "closed_quantity": current_pos["total_close_qty"],
+                            "entry_price": round(entry_price, 2),
+                            "close_price": round(close_price, 2),
+                            "max_quantity": current_pos["total_entry_qty"],
+                            "total_commission": round(current_pos["total_commission"], 4),
+                            "open_time": current_pos["open_time"],
+                            "close_time": current_pos["close_time"],
+                        })
+                        
+                        current_pos = None  # 重置，等待下一个仓位周期
+                
+            except Exception as e:
+                print(f"[Strategy] Error building position history for {sym}: {e}")
+        
+        # 按平仓时间倒序排列
+        all_positions.sort(key=lambda x: x.get("close_time", 0), reverse=True)
+        all_positions = all_positions[:limit]
+        
+        return {"positions": all_positions, "source": "binance"}
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -977,6 +1155,19 @@ def get_strategy_logs(limit: int = 10, offset: int = 0):
             "total": total_count,
             "has_more": has_more
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/logs")
+def clear_strategy_logs():
+    """Clear all strategy logs"""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM strategy_logs")
+            conn.commit()
+        conn.close()
+        return {"success": True, "message": "Strategy logs cleared successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

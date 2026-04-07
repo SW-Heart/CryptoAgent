@@ -169,11 +169,31 @@ def sync_user_account_stats(user_id: str):
     """
     Incrementally sync user trade history to update PnL and Win Rate stats.
     Compatible with Binance API restrictions (per symbol, fromId).
+    
+    Supports both legacy (get_user_binance_client) and new Workspace 
+    (exchange_accounts via _get_trading_client) systems.
     """
-    from binance_client import get_user_binance_client
     from app.database import get_db_connection
     
+    # 尝试获取 client：先旧系统，再新系统
+    client = None
+    
+    # 路径 A: 旧系统
+    from binance_client import get_user_binance_client
     client = get_user_binance_client(user_id)
+    
+    # 路径 B: 新系统 Workspace
+    if not client:
+        try:
+            from tools.binance_trading_tools import _get_trading_client
+            client, err = _get_trading_client(user_id, require_trading_enabled=False)
+            if err:
+                # print(f"[Stats] No client available for {user_id[:8]}: {err}")
+                return
+        except Exception as e:
+            # print(f"[Stats] _get_trading_client error: {e}")
+            return
+    
     if not client:
         return
 

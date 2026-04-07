@@ -950,17 +950,9 @@ def binance_modify_order(
     symbol = get_symbol_usdt(symbol)
     
     # Check user status
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    status = get_user_trading_status(user_id)
-    if not status.get("is_trading_enabled"):
-        return {"error": "Trading is not enabled"}
-    
-    # Get client
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=True)
+    if err:
+        return {"error": err}
     
     try:
         # Get order details to determine side
@@ -1036,12 +1028,9 @@ def binance_get_income_history(
     if symbol:
         symbol = get_symbol_usdt(symbol)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         result = client.get_income_history(
@@ -1123,8 +1112,7 @@ def binance_get_funding_rate(
     client = None
     if user_id:
         user_id = _get_effective_user_id(user_id)
-        if has_user_api_keys(user_id):
-            client = get_user_binance_client(user_id)
+        client, _ = _get_trading_client(user_id, require_trading_enabled=False)
     
     try:
         if client:
@@ -1194,12 +1182,9 @@ def binance_get_adl_risk(user_id: str = None) -> dict:
     """
     user_id = _get_effective_user_id(user_id)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         result = client.get_adl_quantile()
@@ -1280,12 +1265,9 @@ def binance_get_force_orders(
     if symbol:
         symbol = get_symbol_usdt(symbol)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         result = client.get_force_orders(symbol=symbol, limit=limit)
@@ -1349,12 +1331,9 @@ def binance_get_leverage_info(
     if symbol:
         symbol = get_symbol_usdt(symbol)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         result = client.get_leverage_bracket(symbol)
@@ -1423,12 +1402,9 @@ def binance_get_commission_rate(
     user_id = _get_effective_user_id(user_id)
     symbol = get_symbol_usdt(symbol)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         result = client.get_commission_rate(symbol)
@@ -1591,12 +1567,9 @@ def binance_get_position_mode(user_id: str = None) -> dict:
     """
     user_id = _get_effective_user_id(user_id)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         result = client.get_position_mode()
@@ -1638,12 +1611,9 @@ def binance_change_position_mode(
     """
     user_id = _get_effective_user_id(user_id)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=True)
+    if err:
+        return {"error": err}
     
     try:
         # 先检查是否有持仓

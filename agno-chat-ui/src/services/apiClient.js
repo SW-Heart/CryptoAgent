@@ -46,3 +46,12 @@ export function deleteJson(path) {
         },
     });
 }
+
+export function uploadFile(path, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request(path, {
+        method: 'POST',
+        body: formData,
+    });
+}
