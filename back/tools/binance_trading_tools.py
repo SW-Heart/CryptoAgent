@@ -43,6 +43,109 @@ def _get_effective_user_id(user_id: str = None) -> str:
     
     return STRATEGY_ADMIN_USER_ID
 
+
+def _get_trading_client(user_id: str, require_trading_enabled: bool = True):
+    """
+    统一获取 Binance Client 的入口（支持双路径）。
+
+    路径 A: user_binance_keys 表 + user_trading_status 表（旧系统）
+    路径 B: exchange_accounts 表（Workspace 新系统）
+
+    Args:
+        user_id: 用户 ID
+        require_trading_enabled: 是否检查 is_trading_enabled（下单类操作需要，查询类不需要）
+
+    Returns:
+        (client, None) on success
+        (None, error_message) on failure
+    """
+    # ===== 路径 A: 旧系统 =====
+    if has_user_api_keys(user_id):
+        if require_trading_enabled:
+            status = get_user_trading_status(user_id)
+            if not status.get("is_trading_enabled"):
+                return None, "Trading is not enabled. Please enable trading first."
+        client = get_user_binance_client(user_id)
+        if client:
+            return client, None
+        return None, "Failed to create Binance client"
+
+    # ===== 路径 B: 新系统 exchange_accounts =====
+    try:
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                # 查找用户关联的 exchange_account（优先通过 RUNNING 的 trader_instance）
+                cur.execute("""
+                    SELECT ea.id, ea.metadata_json, ea.environment
+                    FROM exchange_accounts ea
+                    WHERE ea.user_id = %s AND ea.is_connected = TRUE
+                    ORDER BY ea.is_default DESC, ea.id ASC
+                    LIMIT 1
+                """, (user_id,))
+                ea_row = cur.fetchone()
+
+                # 如果直接查不到，通过 trader_instances 关联查
+                if not ea_row:
+                    cur.execute("""
+                        SELECT ea.id, ea.metadata_json, ea.environment
+                        FROM trader_instances ti
+                        JOIN exchange_accounts ea ON ea.id = ti.exchange_account_id
+                        WHERE ti.user_id = %s AND ti.exchange_account_id IS NOT NULL
+                        ORDER BY ti.status = 'RUNNING' DESC, ti.id ASC
+                        LIMIT 1
+                    """, (user_id,))
+                    ea_row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if not ea_row:
+            return None, "No exchange account configured. Please set up your Binance API keys."
+
+        # 解析 metadata_json
+        meta = ea_row["metadata_json"]
+        if meta and isinstance(meta, str):
+            import json as _json
+            try:
+                meta = _json.loads(meta)
+            except Exception:
+                meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+
+        raw_key = meta.get("api_key", "")
+        raw_secret = meta.get("api_secret", "")
+        environment = ea_row.get("environment", "demo")
+        is_testnet = environment in ("testnet", "demo")
+
+        # 解密（如果已加密）
+        from binance_client import decrypt_value
+        api_key = raw_key
+        api_secret = raw_secret
+        if raw_key and raw_key.startswith("gAAAA"):
+            try:
+                api_key = decrypt_value(raw_key)
+            except Exception:
+                api_key = ""
+        if raw_secret and raw_secret.startswith("gAAAA"):
+            try:
+                api_secret = decrypt_value(raw_secret)
+            except Exception:
+                api_secret = ""
+
+        if not api_key or not api_secret:
+            return None, "Exchange account API credentials are empty or decryption failed."
+
+        client = BinanceFuturesClient(api_key=api_key, api_secret=api_secret, testnet=is_testnet)
+        print(f"[BinanceTrading] Client created via exchange_accounts (env={environment}) for user {user_id[:8]}")
+        return client, None
+
+    except Exception as e:
+        print(f"[BinanceTrading] _get_trading_client fallback error: {e}")
+        return None, f"Failed to initialize trading client: {str(e)}"
+
+
 # ==========================================
 # Configuration
 # ==========================================
@@ -123,9 +226,9 @@ def get_min_order_size(symbol: str) -> float:
 def binance_get_usdt_balance(user_id: str = None) -> dict:
     """Get USDT balance for user."""
     user_id = _get_effective_user_id(user_id)
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create client"}
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        return {"error": err}
     
     try:
         # returns dict with wallet_balance, available_balance, etc.
@@ -197,18 +300,10 @@ def binance_open_position(
     if order_type == "LIMIT" and (price is None or price <= 0):
         return {"error": "Price must be provided for LIMIT orders"}
     
-    # Check user trading status
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    status = get_user_trading_status(user_id)
-    if not status.get("is_trading_enabled"):
-        return {"error": "Trading is not enabled. Please enable trading first."}
-    
-    # Get client
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    # Get trading client (supports both user_binance_keys and exchange_accounts)
+    client, err = _get_trading_client(user_id)
+    if err:
+        return {"error": err}
     
     try:
         # Set leverage
@@ -409,18 +504,10 @@ def binance_close_position(
     if close_percent <= 0 or close_percent > 100:
         return {"error": "close_percent must be between 1 and 100"}
     
-    # Check user trading status
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    status = get_user_trading_status(user_id)
-    if not status.get("is_trading_enabled"):
-        return {"error": "Trading is not enabled"}
-    
-    # Get client
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    # Get trading client (supports both user_binance_keys and exchange_accounts)
+    client, err = _get_trading_client(user_id)
+    if err:
+        return {"error": err}
     
     try:
         # Get current positions
@@ -545,21 +632,17 @@ def binance_get_positions_summary(user_id: str = None) -> dict:
             "debug_info": f"received user_id: {user_id}"
         }
     
-    # Check user status
-    if not has_user_api_keys(user_id):
-        print(f"[BinanceTools] API keys NOT found for user: {user_id}")
+    # Get trading client (supports both user_binance_keys and exchange_accounts)
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    if err:
+        print(f"[BinanceTools] Client creation failed for user: {user_id[:8]}: {err}")
         return {
-            "error": "API keys not configured",
+            "error": err,
             "is_configured": False,
-            "debug_user_id": user_id  # 添加调试信息
+            "debug_user_id": user_id
         }
     
     status = get_user_trading_status(user_id)
-    
-    # Get client
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
     
     try:
         # Get balance - 直接使用 API 返回的总金额
@@ -723,9 +806,9 @@ def binance_update_stop_loss(
     
     symbol = get_symbol_usdt(symbol)
     
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    client, err = _get_trading_client(user_id)
+    if err:
+        return {"error": err}
     
     try:
         # Get current position
@@ -1412,16 +1495,10 @@ def binance_place_trailing_stop(
     user_id = _get_effective_user_id(user_id)
     symbol = get_symbol_usdt(symbol)
     
-    if not has_user_api_keys(user_id):
-        return {"error": "Please configure your Binance API keys first"}
-    
-    status = get_user_trading_status(user_id)
-    if not status.get("is_trading_enabled"):
-        return {"error": "Trading is not enabled"}
-    
-    client = get_user_binance_client(user_id)
-    if not client:
-        return {"error": "Failed to create Binance client"}
+    # Get trading client (supports both user_binance_keys and exchange_accounts)
+    client, err = _get_trading_client(user_id)
+    if err:
+        return {"error": err}
     
     # 验证回调比例
     if callback_rate < 0.1 or callback_rate > 5:
