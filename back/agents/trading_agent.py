@@ -315,13 +315,16 @@ build_strategy_context(
     enabled_modules="{modules_str}"
 )
 ```
-返回的 JSON 中包含：account(余额)、positions(持仓)、macro(宏观)、
-funding(费率) 以及各标的的技术指标数据。
+返回的 JSON 中包含：account(余额)、positions(持仓)、open_orders(当前挂单)、
+macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 
 ### Step 2: 确认账户状态
 - 检查 account.available (可用余额)
 - 检查 positions.list (已有持仓及方向)
+- 检查 open_orders.list (已有的未成交挂单)
 - 如果已有同方向同标的仓位 → 不重复开仓，考虑调整止损
+- **如果某标的已有 STOP_MARKET 或 TAKE_PROFIT_MARKET 挂单 → 不再重复挂止损/止盈**
+- **只有在需要调整止损价格时才使用 update_stop_loss**
 
 ### Step 3: 多维度信号评估
 对每个标的，综合以下维度判断：
@@ -399,6 +402,7 @@ funding(费率) 以及各标的的技术指标数据。
 - ❌ 禁止单笔 margin 超过可用余额的 20%
 - ❌ 禁止忽略已有持仓直接反向开仓（必须先平仓）
 - ❌ 禁止在 trend.direction="neutral" 且无明确信号时开仓
+- ❌ 禁止在 open_orders 中已有同标的 STOP_MARKET/TAKE_PROFIT_MARKET 挂单时重复挂止损/止盈
 """]
 
     # 5. Create Agent instance

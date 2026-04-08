@@ -727,7 +727,7 @@ class BinanceFuturesClient:
     def get_usdt_balance(self) -> dict:
         """
         获取合约账户余额信息。
-        手动汇总各资产的美元价值（稳定币直接取值，非稳定币按市价折算）。
+        直接使用 Binance API 返回的总和数据，确保与交易所显示完全一致。
         
         Returns:
             dict with:
@@ -743,66 +743,22 @@ class BinanceFuturesClient:
         if "error" in account:
             return account
         
-        # 稳定币列表（1:1 折算）
-        stablecoins = ["USDT", "USDC", "BUSD", "TUSD", "USDP"]
-        
-        # 汇总各资产
-        total_wallet_usd = 0.0
-        total_margin_usd = 0.0
-        total_available_usd = 0.0
-        total_unrealized = 0.0
         assets = []
-        
         for asset_info in account.get("assets", []):
-            asset_name = asset_info.get("asset", "")
             wallet = float(asset_info.get("walletBalance", 0))
             margin = float(asset_info.get("marginBalance", 0))
-            available = float(asset_info.get("availableBalance", 0))
             unrealized = float(asset_info.get("unrealizedProfit", 0))
-            
             if wallet <= 0 and margin <= 0 and unrealized == 0:
                 continue
-            
-            # 计算美元价值
-            if asset_name in stablecoins:
-                # 稳定币直接 1:1
-                usd_rate = 1.0
-            else:
-                # 非稳定币需要获取价格折算
-                try:
-                    price_data = self.get_mark_price(f"{asset_name}USDT")
-                    usd_rate = float(price_data.get("markPrice", 0)) if "error" not in price_data else 0
-                except:
-                    usd_rate = 0
-            
-            wallet_usd = wallet * usd_rate
-            margin_usd = margin * usd_rate
-            available_usd = available * usd_rate
-            
-            total_wallet_usd += wallet_usd
-            total_margin_usd += margin_usd
-            total_available_usd += available_usd
-            total_unrealized += unrealized
-            
-            assets.append({
-                "asset": asset_name,
-                "wallet_balance": wallet,
-                "wallet_balance_usd": round(wallet_usd, 2),
-                "available_balance": available,
-                "unrealized_pnl": unrealized,
-                "margin_balance": margin,
-                "usd_rate": usd_rate
-            })
+            assets.append(asset_info)
         
-        # 按美元价值降序排序
-        assets.sort(key=lambda x: x["wallet_balance_usd"], reverse=True)
-        
+        # 直接使用 Binance 已经折算好的总 USD 价值
         return {
-            "wallet_balance": round(total_wallet_usd, 2),       # 钱包总余额 (USD)
-            "margin_balance": round(total_margin_usd, 2),       # 保证金余额 (USD)
-            "available_balance": round(total_available_usd, 2), # 可用余额 (USD)
-            "unrealized_pnl": round(total_unrealized, 2),       # 总未实现盈亏
-            "assets": assets                                    # 各资产明细
+            "wallet_balance": float(account.get("totalWalletBalance", 0)),
+            "margin_balance": float(account.get("totalMarginBalance", 0)),
+            "available_balance": float(account.get("totalAvailableBalance", 0)),
+            "unrealized_pnl": float(account.get("totalUnrealizedProfit", 0)),
+            "assets": assets
         }
     
     def get_positions(self) -> List[dict]:
@@ -1088,6 +1044,74 @@ class BinanceFuturesClient:
             "symbol": symbol
         })
     
+    def cancel_all_algo_orders(self, symbol: str) -> dict:
+        """
+        取消指定交易对的所有 Algo/条件订单（止损、止盈、跟踪止损等）。
+        
+        由于 Binance 没有"批量取消全部 Algo 订单"的 API，
+        需要先查询所有活跃的 Algo 订单，再逐个取消。
+        
+        Args:
+            symbol: 交易对 (e.g., "BTCUSDT")
+        
+        Returns:
+            dict with cancelled count and details
+        """
+        cancelled = []
+        errors = []
+        
+        try:
+            # 1. 获取该 symbol 的所有活跃 Algo 订单
+            algo_orders = self.get_open_algo_orders(symbol=symbol)
+            
+            if not isinstance(algo_orders, list):
+                # 可能是 dict error 或空结果
+                if isinstance(algo_orders, dict) and "error" in algo_orders:
+                    return {"cancelled": 0, "error": algo_orders["error"]}
+                return {"cancelled": 0}
+            
+            # 2. 逐个取消
+            for order in algo_orders:
+                algo_id = order.get("algoId")
+                if not algo_id:
+                    continue
+                try:
+                    result = self._request("DELETE", "/fapi/v1/algoOrder", {
+                        "algoId": algo_id
+                    })
+                    if isinstance(result, dict) and "error" not in result:
+                        cancelled.append(algo_id)
+                    else:
+                        errors.append({"algoId": algo_id, "error": str(result)})
+                except Exception as e:
+                    errors.append({"algoId": algo_id, "error": str(e)})
+        except Exception as e:
+            return {"cancelled": 0, "error": str(e)}
+        
+        return {
+            "cancelled": len(cancelled),
+            "cancelled_ids": cancelled,
+            "errors": errors if errors else None
+        }
+    
+    def cancel_all_orders_and_algo(self, symbol: str) -> dict:
+        """
+        一次性取消指定交易对的所有普通订单 + 所有 Algo/条件订单。
+        
+        Args:
+            symbol: 交易对
+        
+        Returns:
+            dict with results from both cancellations
+        """
+        normal_result = self.cancel_all_orders(symbol)
+        algo_result = self.cancel_all_algo_orders(symbol)
+        
+        return {
+            "normal_orders": normal_result,
+            "algo_orders": algo_result
+        }
+    
     # ==========================================
     # Phase 4: 高级订单类型
     # ==========================================
@@ -1282,6 +1306,23 @@ class BinanceFuturesClient:
             params["symbol"] = symbol
         
         return self._request("GET", "/fapi/v1/openOrders", params)
+    
+    def get_open_algo_orders(self, symbol: Optional[str] = None) -> List[dict]:
+        """
+        Get open algorithmic orders (Conditional orders like Stop Loss, Take Profit).
+        
+        Args:
+            symbol: Optional trading pair filter
+        
+        Returns:
+            List of open algo orders
+        """
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+        
+        return self._request("GET", "/fapi/v1/openAlgoOrders", params)
+
     
     def get_order_history(self, symbol: str, limit: int = 50) -> List[dict]:
         """

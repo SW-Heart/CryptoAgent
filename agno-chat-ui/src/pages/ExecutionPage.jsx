@@ -461,8 +461,8 @@ export default function ExecutionPage({ userId }) {
             <div className="grid grid-cols-4 gap-6 flex-shrink-0 animate-in fade-in duration-700">
                 <StatCard 
                     icon={Wallet} 
-                    label="账户总余额" 
-                    value={wallet ? `${Number(wallet.current_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '--'} 
+                    label="账户总权益" 
+                    value={wallet ? `${Number(wallet.equity || wallet.current_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '--'} 
                     tone="emerald" 
                 />
                 <StatCard 
@@ -502,7 +502,7 @@ export default function ExecutionPage({ userId }) {
                     <div className="flex border-b border-white/5 bg-black/10 px-4 overflow-x-auto">
                         {['positions', 'orders', 'history', 'posHistory', 'income'].map(tab => (
                             <button key={tab} onClick={() => setActiveTab(tab)} className={`px-5 py-4 text-[10px] font-black uppercase tracking-widest relative transition-all whitespace-nowrap ${activeTab === tab ? 'text-emerald-400' : 'text-slate-200'}`}>
-                                {{'positions':'实盘持仓','orders':'待成交委托','history':'历史成交','posHistory':'仓位历史','income':'资金流水'}[tab]}
+                                {{'positions':'当前仓位','orders':'待成交委托','history':'历史成交','posHistory':'仓位历史','income':'资金流水'}[tab]}
                                 {activeTab === tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500 shadow-[0_0_10px_#6366f1]" />}
                             </button>
                         ))}
@@ -511,18 +511,29 @@ export default function ExecutionPage({ userId }) {
                         {activeTab === 'positions' && (
                             <table className="w-full text-left">
                                 <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                                    <tr><th className="py-4 px-6">交易对</th><th className="py-4 px-6 text-right">持仓数量</th><th className="py-4 px-6 text-right">开仓均价</th><th className="py-4 px-6 text-right">未实现盈亏</th></tr>
+                                    <tr><th className="py-4 px-6">合约</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">开仓价格</th><th className="py-4 px-6 text-right">标记价格</th><th className="py-4 px-6 text-right">未实现盈亏 (回报率)</th></tr>
                                 </thead>
                                 <tbody className="divide-y divide-white/5">
                                     {positions.length > 0 ? positions.map((pos, i) => (
-                                        <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                            <td className="py-4 px-6 font-bold">{pos.symbol}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-sm">{pos.quantity}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-sm">{pos.entry_price}</td>
-                                            <td className={`py-4 px-6 text-right font-mono font-bold ${Number(pos.unrealized_pnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pos.unrealized_pnl}</td>
+                                        <tr key={i} className="hover:bg-white/[0.02] transition-colors group">
+                                            <td className="py-4 px-6">
+                                                <div className="flex items-center gap-2">
+                                                    <div className={`w-1 h-4 rounded-sm ${pos.direction === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                                                    <div className="flex flex-col">
+                                                        <span className="font-bold text-sm text-slate-100">{pos.symbol}</span>
+                                                        <span className="text-[10px] text-slate-500 font-medium mt-0.5">永续</span>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{pos.quantity} {(pos.symbol || '').replace('USDT', '')}</td>
+                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.entry_price).toLocaleString(undefined, {minimumFractionDigits:1})}</td>
+                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.mark_price || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                            <td className={`py-4 px-6 text-right font-mono text-xs ${Number(pos.unrealized_pnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                {Number(pos.unrealized_pnl).toFixed(2)} ({Number(pos.unrealized_pnl) >= 0 ? '+' : ''}{Number(pos.roi_percent || 0).toFixed(2)}%)
+                                            </td>
                                         </tr>
                                     )) : (
-                                        <tr><td colSpan="4" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无活跃持仓</td></tr>
+                                        <tr><td colSpan="5" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无活跃持仓</td></tr>
                                     )}
                                 </tbody>
                             </table>
@@ -536,10 +547,22 @@ export default function ExecutionPage({ userId }) {
                                     {orders.length > 0 ? orders.map((order, i) => (
                                         <tr key={i} className="hover:bg-white/[0.02] transition-colors">
                                             <td className="py-4 px-6 font-bold text-sm">{order.symbol}</td>
-                                            <td className="py-4 px-6 text-xs text-slate-400">{order.type || order.action}</td>
-                                            <td className={`py-4 px-6 text-xs font-bold ${order.direction === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>{order.direction === 'LONG' ? '做多' : '做空'}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-sm">{order.quantity}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-sm">{order.price > 0 ? order.price : order.stop_price > 0 ? order.stop_price : '市价'}</td>
+                                            <td className="py-4 px-6 text-xs text-slate-400">{order.action || order.type}</td>
+                                            <td className={`py-4 px-6 text-xs font-bold ${
+                                                (order.direction === 'LONG' || order.direction === 'CLOSE_SHORT') ? 'text-emerald-400' : 'text-rose-400'
+                                            }`}>{
+                                                order.direction === 'LONG' ? '做多' : 
+                                                order.direction === 'SHORT' ? '做空' : 
+                                                order.direction === 'CLOSE_LONG' ? '平多' : 
+                                                order.direction === 'CLOSE_SHORT' ? '平空' : 
+                                                order.direction
+                                            }</td>
+                                            <td className="py-4 px-6 text-right font-mono text-sm">{order.close_position ? '全部(平仓)' : order.quantity}</td>
+                                            <td className="py-4 px-6 text-right font-mono text-sm flex flex-col items-end gap-0.5">
+                                                {order.stop_price > 0 && <span className="text-amber-400/80 text-[10px]">触发: {order.stop_price}</span>}
+                                                {order.activation_price > 0 && <span className="text-amber-400/80 text-[10px]">激活: {order.activation_price} (回撤 {order.callback_rate}%)</span>}
+                                                <span className={`${order.price > 0 ? 'text-slate-300' : 'text-slate-500'}`}>{order.price > 0 ? order.price : (order.type?.includes("MARKET") || order.action?.includes("市价") || order.action?.includes("跟踪") ? '市价' : '')}</span>
+                                            </td>
                                             <td className="py-4 px-6 text-right"><span className={`text-[10px] font-bold px-2 py-0.5 rounded ${order.status === 'NEW' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-500/10 text-slate-400'}`}>{order.status === 'NEW' ? '待成交' : order.status}</span></td>
                                         </tr>
                                     )) : (

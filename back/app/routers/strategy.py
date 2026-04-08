@@ -596,6 +596,15 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
                     
                     if status == "OPEN":
                         binance_orders = client.get_open_orders()
+                        try:
+                            # 尝试获取条件/算法订单
+                            algo_orders = client.get_open_algo_orders()
+                            if isinstance(algo_orders, list):
+                                if not isinstance(binance_orders, list):
+                                    binance_orders = []
+                                binance_orders.extend(algo_orders)
+                        except Exception as e:
+                            print(f"[Strategy] Failed to fetch open algo orders: {e}")
                     else:
                         # History requires symbol iterations
                         symbol_list = [s.strip().upper() for s in symbols.split(",")]
@@ -622,38 +631,88 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
                     
                     formatted_orders = []
                     for order in binance_orders:
-                        order_type = order.get("type", "")
                         side = order.get("side", "")
                         
-                        if order_type in ["STOP_MARKET", "TAKE_PROFIT_MARKET"]:
-                            direction = "SHORT" if side == "BUY" else "LONG"
+                        # 解析订单类型：尝试多个字段
+                        order_type = order.get("type") or order.get("orderType") or ""
+                        
+                        # Algo 订单可能没有具体 type，需要从触发条件推断
+                        if not order_type or order_type == "CONDITIONAL":
+                            algo_type = order.get("algoType", "")
+                            if algo_type == "CONDITIONAL":
+                                # 打印原始数据用于调试
+                                print(f"[Strategy] Algo order raw keys: {list(order.keys())}")
+                                
+                                # 从 triggerCondition 推断：ge = 价格上涨触发, le = 价格下跌触发
+                                trigger_cond = order.get("triggerCondition", "")
+                                if trigger_cond == "ge":
+                                    # 价格涨到触发：SELL=止盈(平多), BUY=止损(平空)
+                                    order_type = "TAKE_PROFIT_MARKET" if side == "SELL" else "STOP_MARKET"
+                                elif trigger_cond == "le":
+                                    # 价格跌到触发：SELL=止损(平多), BUY=止盈(平空)
+                                    order_type = "STOP_MARKET" if side == "SELL" else "TAKE_PROFIT_MARKET"
+                                else:
+                                    # 无法推断，用 bookSide 尝试
+                                    book_side = order.get("bookSide", "")
+                                    if book_side:
+                                        order_type = f"CONDITIONAL_{book_side}"
+                                    else:
+                                        order_type = "CONDITIONAL"
+                            elif algo_type:
+                                order_type = algo_type
+                        
+                        is_reduce = str(order.get("reduceOnly", "")).lower() == "true"
+                        is_close_position = str(order.get("closePosition", "")).lower() == "true"
+                        is_conditional = order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")
+                        
+                        # 判断方向：条件单/reduceOnly 是平仓单
+                        if is_reduce or is_close_position or is_conditional:
+                            # SELL = 平多仓, BUY = 平空仓
+                            direction = "CLOSE_LONG" if side == "SELL" else "CLOSE_SHORT"
                         else:
                             direction = "LONG" if side == "BUY" else "SHORT"
                         
-                        if order_type == "STOP_MARKET":
-                            action = "STOP_LOSS"
-                        elif order_type == "TAKE_PROFIT_MARKET":
-                            action = "TAKE_PROFIT"
-                        elif order_type == "LIMIT":
-                            action = f"LIMIT_{side}"
-                        else:
-                            action = order_type
+                        # 订单类型中文映射
+                        type_map = {
+                            "STOP_MARKET": "市价止损",
+                            "TAKE_PROFIT_MARKET": "市价止盈",
+                            "LIMIT": "限价委托",
+                            "TRAILING_STOP_MARKET": "跟踪止损",
+                            "STOP": "限价止损",
+                            "TAKE_PROFIT": "限价止盈",
+                            "MARKET": "市价委托",
+                            "CONDITIONAL": "条件委托",
+                        }
+                        action = type_map.get(order_type, order_type or "未知")
                         
+                        def safe_float(v):
+                            if v is None or v == "": return 0.0
+                            try: return float(v)
+                            except: return 0.0
+
+                        status_val = order.get("status") or order.get("algoStatus")
+                        if status_val == "WORKING":
+                            status_val = "NEW"
+
                         formatted_orders.append({
-                            "id": order.get("orderId"),
-                            "order_id": order.get("orderId"),
+                            "id": order.get("orderId") or order.get("algoId"),
+                            "order_id": order.get("orderId") or order.get("algoId"),
                             "symbol": order.get("symbol", "").replace("USDT", ""),
                             "direction": direction,
                             "action": action,
                             "type": order_type,
                             "side": side,
-                            "quantity": float(order.get("origQty", 0)),
-                            "filled_quantity": float(order.get("executedQty", 0)),
-                            "price": float(order.get("price", 0)),
-                            "avg_price": float(order.get("avgPrice", 0)),
-                            "stop_price": float(order.get("stopPrice", 0)),
-                            "status": order.get("status"),
-                            "created_at": order.get("time"),
+                            "quantity": safe_float(order.get("origQty") or order.get("quantity")),
+                            "filled_quantity": safe_float(order.get("executedQty")),
+                            "price": safe_float(order.get("price")),
+                            "avg_price": safe_float(order.get("avgPrice")),
+                            "stop_price": safe_float(order.get("stopPrice") or order.get("triggerPrice")),
+                            "activation_price": safe_float(order.get("activationPrice")),
+                            "callback_rate": safe_float(order.get("priceRate") or order.get("callbackRate")),
+                            "close_position": str(order.get("closePosition", "")).lower() == "true",
+                            "reduce_only": str(order.get("reduceOnly", "")).lower() == "true",
+                            "status": status_val,
+                            "created_at": order.get("time") or order.get("updateTime"),
                             "source": "binance"
                         })
                     

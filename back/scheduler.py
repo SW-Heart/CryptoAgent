@@ -101,6 +101,9 @@ def _run_scheduler_loop():
     # Schedule Binance position sync every 30 seconds (for real trading users)
     schedule.every(30).seconds.do(sync_binance_users_positions)
     
+    # Schedule orphan order cleanup every 5 minutes (清理无仓位的孤儿止盈止损挂单)
+    schedule.every(5).minutes.do(cleanup_orphan_orders)
+    
     # Run position update immediately
     update_positions_prices()
     
@@ -627,6 +630,39 @@ def _run_trader_instance(trader: dict, round_id: str):
         print(f"[Scheduler] Exception executing Trader #{trader_instance_id}: {e}")
         log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"})
 
+
+
+# ============= Orphan Order Cleanup =============
+
+def cleanup_orphan_orders():
+    """
+    定期扫描所有活跃交易用户，清理孤儿订单。
+    
+    孤儿订单 = 已经没有对应持仓的止损/止盈/条件挂单。
+    这些订单通常是因为仓位被止损或止盈触发自动平仓后，
+    另一侧的挂单没有被自动取消而遗留下来的。
+    """
+    try:
+        from binance_client import get_all_active_trading_users
+        from tools.binance_trading_tools import binance_cancel_orphan_orders
+        
+        users = get_all_active_trading_users()
+        if not users:
+            return
+        
+        for user_id in users:
+            try:
+                result = binance_cancel_orphan_orders(user_id=user_id)
+                if result.get("error"):
+                    print(f"[OrphanCleanup] Error for user {user_id[:8]}: {result['error']}")
+                elif (result.get("cancelled_normal", 0) + result.get("cancelled_algo", 0)) > 0:
+                    print(f"[OrphanCleanup] User {user_id[:8]}: cleaned {result['cancelled_normal']} normal + {result['cancelled_algo']} algo orphan orders")
+            except Exception as e:
+                print(f"[OrphanCleanup] Exception for user {user_id[:8]}: {e}")
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[OrphanCleanup] Error: {e}")
 
 
 def main():

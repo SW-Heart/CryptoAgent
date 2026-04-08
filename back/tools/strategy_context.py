@@ -197,6 +197,7 @@ def build_strategy_context(
     # ============ 1. 必选模块 (Core) ============
     result["account"] = _fetch_account(user_id)
     result["positions"] = _fetch_positions(user_id)
+    result["open_orders"] = _fetch_open_orders(user_id)
     result["macro"] = _fetch_macro()
     result["funding"] = _fetch_funding(symbol_list, user_id)
 
@@ -404,6 +405,73 @@ def _fetch_positions(user_id: str = None) -> Dict:
             result["error"] = err
     return result
 
+
+def _fetch_open_orders(user_id: str = None) -> Dict:
+    """获取当前所有未成交委托（普通挂单 + Algo/条件订单）。
+    
+    这是 Agent 反重复挂单的关键数据源。Agent 必须先検查这里有没有
+    已有的止损/止盈订单，再决定是否需要新挂单。
+    """
+    result = {"count": 0, "list": []}
+    
+    client, err = _get_binance_client_fallback(user_id) if user_id else (None, "no user_id")
+    if not client:
+        if err:
+            result["error"] = err
+        return result
+    
+    try:
+        # 1. 获取普通挂单
+        normal_orders = client.get_open_orders()
+        if isinstance(normal_orders, list):
+            for order in normal_orders:
+                order_type = order.get("type", "")
+                side = order.get("side", "")
+                symbol = order.get("symbol", "").replace("USDT", "")
+                
+                def _safe_float(v):
+                    if v is None or v == "": return 0.0
+                    try: return float(v)
+                    except: return 0.0
+                
+                result["list"].append({
+                    "symbol": symbol,
+                    "type": order_type,
+                    "side": side,
+                    "quantity": _safe_float(order.get("origQty")),
+                    "price": _safe_float(order.get("price")),
+                    "stop_price": _safe_float(order.get("stopPrice")),
+                    "reduce_only": str(order.get("reduceOnly", "")).lower() == "true",
+                    "source": "normal",
+                })
+        
+        # 2. 获取 Algo/条件挂单
+        try:
+            algo_orders = client.get_open_algo_orders()
+            if isinstance(algo_orders, list):
+                for order in algo_orders:
+                    order_type = order.get("type", "")
+                    side = order.get("side", "")
+                    symbol = order.get("symbol", "").replace("USDT", "")
+                    
+                    result["list"].append({
+                        "symbol": symbol,
+                        "type": order_type,
+                        "side": side,
+                        "quantity": _safe_float(order.get("quantity") or order.get("origQty")),
+                        "price": _safe_float(order.get("price")),
+                        "stop_price": _safe_float(order.get("triggerPrice") or order.get("stopPrice")),
+                        "reduce_only": str(order.get("reduceOnly", "")).lower() == "true",
+                        "source": "algo",
+                    })
+        except Exception as e:
+            print(f"[StrategyContext] _fetch_open_orders algo error: {e}")
+        
+        result["count"] = len(result["list"])
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
 
 def _fetch_macro() -> Dict:
     """获取市场宏观数据。"""
