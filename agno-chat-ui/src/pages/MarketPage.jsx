@@ -15,21 +15,18 @@ const DEFAULT_STUDIES = [
 ];
 
 export default function MarketPage() {
-    const [watchlist, setWatchlist] = useState([]);
+    const [watchlist, setWatchlist] = useState(() => {
+        const saved = localStorage.getItem('cryptoquant_watchlist');
+        if (saved) {
+            try { return JSON.parse(saved); } catch (e) { return DEFAULT_WATCHLIST; }
+        }
+        return DEFAULT_WATCHLIST;
+    });
     const [currentSymbol, setCurrentSymbol] = useState('BINANCE:BTCUSDT');
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-    // 页面加载时从 localStorage 读取用户的自选配置
     useEffect(() => {
-        const saved = localStorage.getItem('cryptoquant_watchlist');
-        if (saved) {
-            try {
-                setWatchlist(JSON.parse(saved));
-            } catch (e) {
-                setWatchlist(DEFAULT_WATCHLIST);
-            }
-        } else {
-            setWatchlist(DEFAULT_WATCHLIST);
+        if (!localStorage.getItem('cryptoquant_watchlist')) {
             localStorage.setItem('cryptoquant_watchlist', JSON.stringify(DEFAULT_WATCHLIST));
         }
     }, []);

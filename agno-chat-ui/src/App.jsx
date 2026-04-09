@@ -1,4 +1,5 @@
 import React, { useCallback, useState, useEffect } from 'react';
+import { BrowserRouter, useLocation, useNavigate } from 'react-router-dom';
 import { 
   ChevronRight, Cpu
 } from 'lucide-react';
@@ -21,8 +22,10 @@ import MarketPage from './pages/MarketPage';
 function AppContent() {
   const { user, signOut } = useAuth();
   const { t } = useTranslation();
-  
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
+  const activeTab = location.pathname.substring(1) || 'dashboard';
+
   const [collapsed, setCollapsed] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [llmConfig, setLlmConfig] = useState(null);
@@ -59,7 +62,7 @@ function AppContent() {
     return (
       <div className="h-full w-full relative">
         <div className="absolute inset-0" style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-          <ExecutionPage userId={userId} onOpenSettings={(tab) => setActiveTab(tab === 'strategies' ? 'strategies' : 'settings')} />
+          <ExecutionPage userId={userId} onOpenSettings={(tab) => navigate(tab === 'strategies' ? '/strategies' : '/settings')} />
         </div>
         
         {visitedTabs['strategies'] && (
@@ -93,7 +96,7 @@ function AppContent() {
       {user && (
         <Sidebar 
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={(tab) => navigate(tab === 'dashboard' ? '/' : '/' + tab)}
           user={user}
           onSignOut={signOut}
           llmConfig={llmConfig}
@@ -115,9 +118,11 @@ function AppContent() {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
 

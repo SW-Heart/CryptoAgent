@@ -94,7 +94,9 @@ const TradingViewWidget = ({
   }, [symbol, watchlistStr, studiesStr, theme, locale, timezone]);
 
   return (
-    <div ref={containerRef} className="w-full h-full absolute inset-0" />
+    <div className="tradingview-widget-container w-full h-full absolute inset-0">
+      <div ref={containerRef} className="w-full h-full" />
+    </div>
   );
 }
 

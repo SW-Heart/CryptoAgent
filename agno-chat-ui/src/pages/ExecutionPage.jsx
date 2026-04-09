@@ -436,7 +436,7 @@ export default function ExecutionPage({ userId }) {
                     </div>
                 </div>
                 <div className="flex items-center gap-3 pl-6 border-l border-white/5">
-                    <Button variant="outline" size="sm" onClick={() => window.location.hash = '/strategies'} className="text-[10px] font-black uppercase tracking-widest h-9 px-4">编辑策略</Button>
+                    <Button variant="outline" size="sm" onClick={() => onOpenSettings('strategies')} className="text-[10px] font-black uppercase tracking-widest h-9 px-4">编辑策略</Button>
                     {isRunning ? (
                         <Button variant="danger" size="sm" icon={Square} onClick={() => handleAction('STOP')} disabled={acting} className="h-9 px-6 font-black uppercase text-[10px]">停止运行</Button>
                     ) : (
