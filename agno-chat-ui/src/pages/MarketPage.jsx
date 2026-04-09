@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AdvancedRealTimeChart } from 'react-ts-tradingview-widgets';
+import TradingViewWidget from '../components/TradingViewWidget';
 import { Search, Plus, Trash2, LineChart, Star, X, Loader2 } from 'lucide-react';
 import Button from '../components/common/Button';
 import AddSymbolModal from '../components/AddSymbolModal';
@@ -64,9 +64,9 @@ export default function MarketPage() {
                     <div className="text-xs font-bold text-slate-500 uppercase tracking-widest animate-pulse">Initializing TradingView...</div>
                 </div>
 
-                {/* AdvancedRealTimeChart automatically expands to 100% */}
+                {/* TradingViewWidget automatically expands to 100% */}
                 <div className="absolute inset-0 z-10">
-                    <AdvancedRealTimeChart 
+                    <TradingViewWidget 
                         autosize={true}
                         theme="dark"
                         symbol={currentSymbol}
