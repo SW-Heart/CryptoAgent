@@ -6,7 +6,8 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  Cpu
+  Cpu,
+  LineChart
 } from 'lucide-react';
 
 const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }) => (
@@ -34,6 +35,7 @@ const Sidebar = ({
   const menuItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: '控制台' },
     { id: 'strategies', icon: Layers, label: '策略库' },
+    { id: 'market', icon: LineChart, label: '看盘' },
     { id: 'settings', icon: Settings, label: '系统设置' },
   ];
 

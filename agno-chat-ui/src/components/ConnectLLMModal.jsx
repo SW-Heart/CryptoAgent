@@ -25,7 +25,11 @@ function ProviderIcon({ provider, size = "w-5 h-5", active = true }) {
         openai: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/openai.svg",
         deepseek: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/deepseek.svg",
         anthropic: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Claude.svg",
-        google: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg"
+        google: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg",
+        qwen: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/qwen.svg",
+        minimax: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/MiniMax.svg",
+        kimi: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/kimi.svg",
+        glm: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/%E6%99%BA%E8%B0%B1.svg"
     };
 
     if (icons[provider]) {
@@ -58,6 +62,10 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
         { id: 'openai', name: 'OpenAI', defaultModel: 'gpt-5.4', defaultUrl: 'https://api.openai.com/v1' },
         { id: 'google', name: 'Gemini (Google)', defaultModel: 'gemini-3.1-pro', defaultUrl: 'https://generativelanguage.googleapis.com' },
         { id: 'anthropic', name: 'Anthropic', defaultModel: 'claude-4.6-sonnet', defaultUrl: 'https://api.anthropic.com/v1' },
+        { id: 'qwen', name: '通义千问 (Qwen)', defaultModel: 'qwen-plus', defaultUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+        { id: 'glm', name: '智谱 (GLM)', defaultModel: 'glm-4', defaultUrl: 'https://open.bigmodel.cn/api/paas/v4' },
+        { id: 'minimax', name: 'MiniMax', defaultModel: 'abab6.5s-chat', defaultUrl: 'https://api.minimax.chat/v1' },
+        { id: 'kimi', name: '月之暗面 (Kimi)', defaultModel: 'moonshot-v1-8k', defaultUrl: 'https://api.moonshot.cn/v1' },
         { id: 'custom', name: '自定义 (Custom)', defaultModel: '', defaultUrl: '' }
     ];
 

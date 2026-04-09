@@ -16,6 +16,7 @@ import Sidebar from './components/sidebar/Sidebar';
 import LandingPage from './pages/LandingPage';
 import StrategiesPage from './pages/StrategiesPage';
 import SettingsPage from './pages/SettingsPage';
+import MarketPage from './pages/MarketPage';
 
 function AppContent() {
   const { user, signOut } = useAuth();
@@ -45,20 +46,41 @@ function AppContent() {
     if (userId) refreshWorkspaceStatus();
   }, [refreshWorkspaceStatus, userId]);
 
-  // Render proper page based on activeTab
+  const [visitedTabs, setVisitedTabs] = useState({ [activeTab]: true });
+
+  useEffect(() => {
+    setVisitedTabs(prev => ({ ...prev, [activeTab]: true }));
+  }, [activeTab]);
+
+  // Render proper page based on activeTab, using "keep-alive" via display:none to prevent iframe/state destruction
   const renderActivePage = () => {
     if (!user) return <LandingPage onStart={() => setShowAuthModal(true)} />;
     
-    switch (activeTab) {
-      case 'dashboard':
-        return <ExecutionPage userId={userId} onOpenSettings={(tab) => setActiveTab(tab === 'strategies' ? 'strategies' : 'settings')} />;
-      case 'strategies':
-        return <StrategiesPage profiles={[]} userId={userId} onRefresh={refreshWorkspaceStatus} />;
-      case 'settings':
-        return <SettingsPage userId={userId} onConfigUpdated={refreshWorkspaceStatus} />;
-      default:
-        return <ExecutionPage userId={userId} onOpenSettings={setActiveTab} />;
-    }
+    return (
+      <div className="h-full w-full relative">
+        <div className="absolute inset-0" style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
+          <ExecutionPage userId={userId} onOpenSettings={(tab) => setActiveTab(tab === 'strategies' ? 'strategies' : 'settings')} />
+        </div>
+        
+        {visitedTabs['strategies'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'strategies' ? 'block' : 'none' }}>
+            <StrategiesPage profiles={[]} userId={userId} onRefresh={refreshWorkspaceStatus} />
+          </div>
+        )}
+
+        {visitedTabs['market'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'market' ? 'block' : 'none' }}>
+            <MarketPage />
+          </div>
+        )}
+
+        {visitedTabs['settings'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
+            <SettingsPage userId={userId} onConfigUpdated={refreshWorkspaceStatus} />
+          </div>
+        )}
+      </div>
+    );
   };
 
     return (

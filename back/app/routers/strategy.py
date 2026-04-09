@@ -357,7 +357,14 @@ def get_wallet(user_id: str = None):
         total_margin_in_use = 0
         
         # Batch fetch prices for all positions
-        symbols = [f"{pos['symbol']}USDT" for pos in positions]
+        symbols = []
+        for pos in positions:
+            sym = pos['symbol']
+            if not sym.endswith("USDT"):
+                sym = f"{sym}USDT"
+            if sym not in symbols:
+                symbols.append(sym)
+                
         price_map = fetch_prices_batch(symbols, BINANCE_API_BASE)
 
         for pos in positions:
@@ -366,7 +373,9 @@ def get_wallet(user_id: str = None):
             closed_qty = pos["closed_quantity"] if pos["closed_quantity"] else 0
             remaining_qty = pos["quantity"] - closed_qty
             
-            symbol_pair = f"{pos['symbol']}USDT"
+            symbol_pair = pos['symbol']
+            if not symbol_pair.endswith("USDT"):
+                symbol_pair = f"{symbol_pair}USDT"
             current_price = price_map.get(symbol_pair)
             
             if current_price:
@@ -495,7 +504,15 @@ def get_positions(status: str = "OPEN", user_id: str = None):
             pass # Placeholder to be removed by logic below
         
         # Batch fetch prices
-        symbols = [f"{row['symbol']}USDT" for row in rows if row["status"] == "OPEN"]
+        symbols = []
+        for row in rows:
+            if row["status"] == "OPEN":
+                sym = row['symbol']
+                if not sym.endswith("USDT"):
+                    sym = f"{sym}USDT"
+                if sym not in symbols:
+                    symbols.append(sym)
+                    
         price_map = fetch_prices_batch(symbols, BINANCE_API_BASE)
 
         positions = []
@@ -532,7 +549,9 @@ def get_positions(status: str = "OPEN", user_id: str = None):
             
             # For OPEN positions, get real-time price and calculate PnL
             if row["status"] == "OPEN":
-                symbol_pair = f"{row['symbol']}USDT"
+                symbol_pair = row['symbol']
+                if not symbol_pair.endswith("USDT"):
+                    symbol_pair = f"{symbol_pair}USDT"
                 current_price = price_map.get(symbol_pair)
                 
                 if current_price:
@@ -549,6 +568,10 @@ def get_positions(status: str = "OPEN", user_id: str = None):
                         unrealized_pnl = remaining_qty * (row["entry_price"] - current_price)
                     
                     pos_data["unrealized_pnl"] = round(unrealized_pnl, 2)
+                    if pos_data.get("margin"):
+                        pos_data["roi_percent"] = round((unrealized_pnl / pos_data["margin"]) * 100, 2)
+                    else:
+                        pos_data["roi_percent"] = 0
             
             positions.append(pos_data)
         

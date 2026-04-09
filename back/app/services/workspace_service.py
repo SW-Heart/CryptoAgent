@@ -1169,7 +1169,7 @@ def test_llm_connectivity(config_data: dict):
         elif provider == 'google':
             # Gemini in Agno 2.x uses 'id' and 'api_key'
             model = Gemini(id=model_id or "gemini-1.5-pro", api_key=api_key)
-        elif provider == 'custom':
+        elif provider in ('custom', 'qwen', 'glm', 'minimax', 'kimi'):
             # Custom provider assumed to be OpenAI-compatible
             model = OpenAIChat(id=model_id, api_key=api_key, base_url=base_url)
         else:

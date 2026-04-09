@@ -527,7 +527,7 @@ export default function ExecutionPage({ userId }) {
                                             </td>
                                             <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{pos.quantity} {(pos.symbol || '').replace('USDT', '')}</td>
                                             <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.entry_price).toLocaleString(undefined, {minimumFractionDigits:1})}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.mark_price || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.current_price || pos.mark_price || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                                             <td className={`py-4 px-6 text-right font-mono text-xs ${Number(pos.unrealized_pnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                                                 {Number(pos.unrealized_pnl).toFixed(2)} ({Number(pos.unrealized_pnl) >= 0 ? '+' : ''}{Number(pos.roi_percent || 0).toFixed(2)}%)
                                             </td>

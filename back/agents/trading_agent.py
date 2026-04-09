@@ -85,6 +85,9 @@ def get_model_instance(provider: str, model_name: str, api_key: str = None, base
         elif provider == "google":
             from agno.models.google import Gemini
             return Gemini(id=model_name or "gemini-3.1-pro", api_key=api_key)
+        elif provider in ("custom", "qwen", "glm", "minimax", "kimi"):
+            from agno.models.openai import OpenAIChat
+            return OpenAIChat(id=model_name, api_key=api_key, base_url=base_url)
         else:
             # Fallback to DeepSeek for custom or unknown
             from agno.models.deepseek import DeepSeek
