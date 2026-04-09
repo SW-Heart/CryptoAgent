@@ -179,6 +179,14 @@ async def run_agent(
     try:
         instance_label = f" (trader #{trader_instance_id})" if trader_instance_id else ""
         print(f"[Main] Running dynamic agent for user {user_id[:8]}{instance_label}...")
+        
+        # 关键修复：在 endpoint context 中直接设置 user_id。
+        # UserContextMiddleware 中的 set_current_user 设置的 ContextVar 无法可靠
+        # 传播到 BaseHTTPMiddleware.call_next() 内部（Starlette 在独立的 task 中
+        # 执行 endpoint）。必须在 endpoint 函数内部再次设置，确保 asyncio.to_thread
+        # 复制 context 时能获取到正确的 user_id。
+        set_current_user(user_id)
+        
         # 使用 asyncio.to_thread 在线程池中运行同步的 agent.run()，
         # 避免阻塞事件循环，确保其他 HTTP 请求（前端轮询等）不被卡住
         run_response = await asyncio.to_thread(agent.run, input=message, session_id=session_id)

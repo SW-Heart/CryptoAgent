@@ -756,7 +756,7 @@ class BinanceFuturesClient:
         return {
             "wallet_balance": float(account.get("totalWalletBalance", 0)),
             "margin_balance": float(account.get("totalMarginBalance", 0)),
-            "available_balance": float(account.get("totalAvailableBalance", 0)),
+            "available_balance": float(account.get("availableBalance", 0)),
             "unrealized_pnl": float(account.get("totalUnrealizedProfit", 0)),
             "assets": assets
         }

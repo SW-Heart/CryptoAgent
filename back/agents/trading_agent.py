@@ -405,17 +405,44 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 - ❌ 禁止在 open_orders 中已有同标的 STOP_MARKET/TAKE_PROFIT_MARKET 挂单时重复挂止损/止盈
 """]
 
-    # 5. Create Agent instance
+    # 5. 为所有工具预绑定 user_id，确保 LLM 调用时自动使用正确的用户身份
+    #    使用闭包而非 partial，让 Agno 看到的签名中不含 user_id 参数
+    from tools.trading_tools import set_current_user
+    set_current_user(user_id)  # 同时设置 ContextVar 作为备份
+    
+    _uid = user_id  # 闭包捕获
+    
+    def _build_strategy_context(symbols: str, timeframes: str = "4h,1d", enabled_modules: str = "trend,levels,volume") -> str:
+        """一次性构建 Agent 策略分析所需的全部上下文数据。"""
+        return build_strategy_context(symbols=symbols, timeframes=timeframes, enabled_modules=enabled_modules, user_id=_uid)
+    
+    def _open_position(symbol: str, direction: str, margin: float, leverage: int = 10, stop_loss: float = None, take_profit: float = None) -> dict:
+        """在 Binance 合约开仓。"""
+        return open_position(symbol=symbol, direction=direction, margin=margin, leverage=leverage, stop_loss=stop_loss, take_profit=take_profit, user_id=_uid)
+    
+    def _close_position(symbol: str, close_percent: float = 100) -> dict:
+        """平仓指定标的的持仓。"""
+        return close_position(symbol=symbol, close_percent=close_percent, user_id=_uid)
+    
+    def _update_stop_loss(symbol: str, new_stop_loss: float) -> dict:
+        """更新指定标的的止损价格。"""
+        return update_stop_loss(symbol=symbol, new_stop_loss=new_stop_loss, user_id=_uid)
+    
+    def _place_trailing_stop(symbol: str, callback_rate: float = 1.0, activation_price: float = None) -> dict:
+        """设置追踪止损。"""
+        return place_trailing_stop(symbol=symbol, callback_rate=callback_rate, activation_price=activation_price, user_id=_uid)
+
+    # 6. Create Agent instance
     return Agent(
         name="TradingStrategy",
         id=f"ts-{user_id[:8]}",
         model=model_instance,
         tools=[monitor_tool_usage(t) for t in [
-            build_strategy_context,   # 📥 唯一数据入口
-            open_position,            # 📤 开仓
-            close_position,           # 📤 平仓
-            update_stop_loss,         # 📤 调整止损
-            place_trailing_stop,      # 📤 追踪止损
+            _build_strategy_context,  # 📥 唯一数据入口 (user_id 已绑定)
+            _open_position,           # 📤 开仓 (user_id 已绑定)
+            _close_position,          # 📤 平仓 (user_id 已绑定)
+            _update_stop_loss,        # 📤 调整止损 (user_id 已绑定)
+            _place_trailing_stop,     # 📤 追踪止损 (user_id 已绑定)
             log_strategy_analysis,    # 📝 日志记录
         ]],
         instructions=dynamic_instructions,

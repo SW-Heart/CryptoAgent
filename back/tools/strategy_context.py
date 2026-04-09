@@ -183,6 +183,10 @@ def build_strategy_context(
         user_id = get_current_user()
         if user_id:
             print(f"[StrategyContext] user_id auto-resolved from context: {user_id[:8]}...")
+        else:
+            print(f"[StrategyContext] ⚠️ WARNING: user_id is None! LLM did not pass it AND context is empty.")
+    else:
+        print(f"[StrategyContext] user_id provided by caller: {user_id[:8]}...")
 
     # 解析参数
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -318,6 +322,7 @@ def _get_binance_client_fallback(user_id: str):
 
 def _fetch_account(user_id: str = None) -> Dict:
     """获取账户余额信息（支持 user_binance_keys + exchange_accounts 双路径）。"""
+    print(f"[StrategyContext] _fetch_account called with user_id={user_id[:12] if user_id else 'None'}")
     result = {"balance": 0, "available": 0, "margin_balance": 0}
 
     # 先尝试标准路径
@@ -328,7 +333,7 @@ def _fetch_account(user_id: str = None) -> Dict:
             result["balance"] = summary.get("margin_balance", 0)
             result["available"] = summary.get("available_balance", 0)
             result["margin_balance"] = summary.get("margin_balance", 0)
-            result["unrealized_pnl"] = summary.get("total_unrealized_pnl", 0)
+            result["unrealized_pnl"] = summary.get("unrealized_pnl", 0)
             print(f"[StrategyContext] _fetch_account path-A OK: balance={result['balance']}")
             return result
         else:

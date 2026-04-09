@@ -55,7 +55,7 @@ export default function OnboardingWizard({ userId, onStepComplete, status }) {
             icon: Target,
             completed: hasStrategy,
             actionLabel: "构建逻辑",
-            onAction: () => onStepComplete('strategy')
+            onAction: () => { window.location.hash = '/strategies'; }
         }
     ];
 

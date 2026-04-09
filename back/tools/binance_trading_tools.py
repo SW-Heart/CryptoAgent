@@ -76,12 +76,12 @@ def _get_trading_client(user_id: str, require_trading_enabled: bool = True):
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
-                # 查找用户关联的 exchange_account（优先通过 RUNNING 的 trader_instance）
+                # 查找用户关联的 exchange_account（优先 connected + default，允许非 connected）
                 cur.execute("""
                     SELECT ea.id, ea.metadata_json, ea.environment
                     FROM exchange_accounts ea
-                    WHERE ea.user_id = %s AND ea.is_connected = TRUE
-                    ORDER BY ea.is_default DESC, ea.id ASC
+                    WHERE ea.user_id = %s
+                    ORDER BY ea.is_connected DESC, ea.is_default DESC, ea.id ASC
                     LIMIT 1
                 """, (user_id,))
                 ea_row = cur.fetchone()
