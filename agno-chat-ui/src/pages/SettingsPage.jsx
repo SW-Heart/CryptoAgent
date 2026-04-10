@@ -208,12 +208,11 @@ function AccountSection({ userId, user: initialUser }) {
             </div>
 
             {/* --- Account Stats Inline --- */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {[
                     { label: "AI 模型", value: stats.llms, color: "text-emerald-400", icon: Cpu },
                     { label: "交易所", value: stats.exchanges, color: "text-emerald-400", icon: Globe },
                     { label: "活跃策略", value: 1, color: "text-amber-400", icon: ShieldCheck },
-                    { label: "运行天数", value: 15, color: "text-slate-400", icon: Calendar },
                 ].map((item, i) => (
                     <div key={i} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center gap-4">
                         <div className={`p-2.5 rounded-lg bg-white/5 ${item.color}`}><item.icon className="w-5 h-5" /></div>
@@ -269,11 +268,11 @@ function AccountSection({ userId, user: initialUser }) {
             {/* --- Subtle Danger Zone --- */}
             <div className="p-6 rounded-2xl border border-rose-500/10 bg-rose-500/[0.01] flex items-center justify-between">
                 <div>
-                    <h4 className="text-sm font-bold text-rose-500 mb-0.5">重置工作区</h4>
-                    <p className="text-slate-500 text-[10px] font-medium uppercase tracking-tight">清空所有配置、密钥及历史记录</p>
+                    <h4 className="text-sm font-bold text-rose-500 mb-0.5">注销账号</h4>
+                    <p className="text-slate-500 text-[10px] font-medium uppercase tracking-tight">永久删除您的账号及所有相关数据</p>
                 </div>
                 <button onClick={handleNukeData} className="px-4 py-2 rounded-lg bg-rose-500/10 hover:bg-rose-500 text-rose-500 hover:text-white text-[10px] font-bold transition-all uppercase">
-                    物理清空数据
+                    确认注销
                 </button>
             </div>
 
@@ -282,9 +281,10 @@ function AccountSection({ userId, user: initialUser }) {
                 onClose={() => setShowNukeConfirm(false)}
                 onConfirm={executeNukeData}
                 loading={isNuking}
-                title="危险：物理清空工作区"
-                message="此操作将永久删除您的所有模型配置、交易所 API 密钥、持仓记录及决策日志。该动作无法被撤销，您的账户将恢复至初始未配置状态。确定要继续吗？"
-                confirmText="同步清除所有数据"
+                title="危险：系统账号注销"
+                message="此操作将永久删除您的账号，并物理清空所有的模型配置、交易所 API 密钥、持仓记录及决策日志。该动作无法被撤销。如果您确定要注销，请输入确认文字。"
+                confirmText="永久注销"
+                requireInputText="确认注销"
                 type="danger"
             />
         </div>

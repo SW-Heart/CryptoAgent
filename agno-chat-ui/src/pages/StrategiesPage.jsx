@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  Plus, 
-  Trash2, 
-  Save, 
-  Info,
-  HelpCircle,
-  Loader2,
-  CheckCircle2,
-  AlertCircle,
-  Zap
+import {
+    Plus,
+    Trash2,
+    Save,
+    Info,
+    HelpCircle,
+    Loader2,
+    CheckCircle2,
+    AlertCircle,
+    Zap
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import ConfirmModal from '../components/ConfirmModal';
@@ -57,11 +57,11 @@ const StrategiesPage = ({ userId }) => {
                 getJson(`/api/workspace/strategy-profiles?user_id=${userId}`),
                 getJson(`/api/workspace/trader-instances?user_id=${userId}`)
             ]);
-            
+
             const list = profilesRes.profiles || [];
             setProfiles(list);
             setTraderInstances(tradersRes.traders || []);
-            
+
             if (list.length > 0 && !selectedProfile) {
                 setSelectedProfile(list[0]);
             }
@@ -132,7 +132,7 @@ const StrategiesPage = ({ userId }) => {
             const data = { ...selectedProfile };
             if (typeof data.symbols === 'string') data.symbols = data.symbols.split(',').map(s => s.trim());
             if (typeof data.timeframes === 'string') data.timeframes = data.timeframes.split(',').map(s => s.trim());
-            
+
             const res = await putJson(`/api/workspace/strategy-profiles/${selectedProfile.id}?user_id=${userId}`, data);
             setProfiles(res.profiles || []);
             showFeedback("配置同步成功", "success");
@@ -202,19 +202,17 @@ const StrategiesPage = ({ userId }) => {
                                 setSelectedProfile(p);
                                 setIsConfirmingDelete(false);
                             }}
-                            className={`p-4 rounded-2xl text-left border transition-all group shrink-0 ${
-                                selectedProfile?.id === p.id 
-                                    ? 'bg-gradient-to-r from-white/10 to-transparent border-white/10 shadow-lg shadow-black/20' 
-                                    : 'bg-[#0e1215]/50 border-white/5 hover:border-white/10'
-                            }`}
+                            className={`p-4 rounded-2xl text-left border transition-all group shrink-0 ${selectedProfile?.id === p.id
+                                ? 'bg-gradient-to-r from-white/10 to-transparent border-white/10 shadow-lg shadow-black/20'
+                                : 'bg-[#0e1215]/50 border-white/5 hover:border-white/10'
+                                }`}
                         >
                             <div className="flex items-center justify-between mb-2">
                                 {(() => {
                                     const isRunning = traderInstances.some(t => t.strategy_profile_id === p.id && t.status === 'RUNNING');
                                     return (
-                                        <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${
-                                            isRunning ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-700/50 text-slate-400'
-                                        }`}>
+                                        <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${isRunning ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-700/50 text-slate-400'
+                                            }`}>
                                             {isRunning ? '运行中' : '未使用'}
                                         </div>
                                     );
@@ -250,7 +248,7 @@ const StrategiesPage = ({ userId }) => {
                                     <div className="grid gap-6">
                                         <div>
                                             <label className="block text-xs font-bold text-slate-500 mb-2 ml-1 uppercase tracking-widest">策略名称</label>
-                                            <input 
+                                            <input
                                                 value={selectedProfile.name}
                                                 onChange={e => updateField('name', e.target.value)}
                                                 disabled={selectedProfile.source === 'legacy_import'}
@@ -259,8 +257,8 @@ const StrategiesPage = ({ userId }) => {
                                         </div>
                                         <div>
                                             <label className="block text-xs font-bold text-slate-500 mb-2 ml-1 uppercase tracking-widest">策略描述</label>
-                                            <textarea 
-                                                rows={2} 
+                                            <textarea
+                                                rows={2}
                                                 value={selectedProfile.description || ''}
                                                 onChange={e => updateField('description', e.target.value)}
                                                 disabled={selectedProfile.source === 'legacy_import'}
@@ -282,7 +280,7 @@ const StrategiesPage = ({ userId }) => {
                                                     <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">{doc.title}</label>
                                                     <StrategyHelp title={doc.title} content={doc.content} />
                                                 </div>
-                                                <input 
+                                                <input
                                                     value={Array.isArray(selectedProfile[key]) ? selectedProfile[key].join(', ') : selectedProfile[key]}
                                                     onChange={e => updateField(key, e.target.value)}
                                                     disabled={selectedProfile.source === 'legacy_import'}
@@ -328,20 +326,17 @@ const StrategiesPage = ({ userId }) => {
                                                     <button
                                                         key={m.id}
                                                         onClick={() => toggleModule(m.id)}
-                                                        className={`bg-[#060809] border rounded-xl px-3 py-3 text-center transition-all group ${
-                                                            enabled
-                                                                ? 'border-emerald-500/40 shadow-lg shadow-emerald-500/5'
-                                                                : 'border-white/5 hover:border-white/15 opacity-50'
-                                                        }`}
+                                                        className={`bg-[#060809] border rounded-xl px-3 py-3 text-center transition-all group ${enabled
+                                                            ? 'border-emerald-500/40 shadow-lg shadow-emerald-500/5'
+                                                            : 'border-white/5 hover:border-white/15 opacity-50'
+                                                            }`}
                                                     >
                                                         <div className="text-lg mb-1">{m.icon}</div>
-                                                        <div className={`text-[11px] font-bold transition-colors ${
-                                                            enabled ? 'text-emerald-400' : 'text-slate-500'
-                                                        }`}>{m.name}</div>
+                                                        <div className={`text-[11px] font-bold transition-colors ${enabled ? 'text-emerald-400' : 'text-slate-500'
+                                                            }`}>{m.name}</div>
                                                         <div className="text-[9px] text-slate-600 mt-0.5 leading-tight">{m.description}</div>
-                                                        <div className={`mt-2 text-[9px] font-bold uppercase tracking-widest ${
-                                                            enabled ? 'text-emerald-400' : 'text-slate-700'
-                                                        }`}>
+                                                        <div className={`mt-2 text-[9px] font-bold uppercase tracking-widest ${enabled ? 'text-emerald-400' : 'text-slate-700'
+                                                            }`}>
                                                             {enabled ? '✓ 已启用' : '关闭'}
                                                         </div>
                                                         {m.warning && enabled && (
@@ -357,9 +352,9 @@ const StrategiesPage = ({ userId }) => {
                                 <section>
                                     <div className="flex items-center gap-2 mb-6">
                                         <div className="w-1.5 h-4 bg-teal-500 rounded-full" />
-                                        <h3 className="text-sm font-bold text-white uppercase tracking-widest">AI 指令集 (Prompt)</h3>
+                                        <h3 className="text-sm font-bold text-white uppercase tracking-widest">自定义交易指令 (选填)</h3>
                                     </div>
-                                    <textarea 
+                                    <textarea
                                         rows={6}
                                         value={selectedProfile.prompt_template || ''}
                                         onChange={e => updateField('prompt_template', e.target.value)}
@@ -378,7 +373,7 @@ const StrategiesPage = ({ userId }) => {
                                     <Button variant="danger" icon={Trash2} onClick={() => setIsConfirmingDelete(true)}>删除策略</Button>
                                 )}
                             </div>
-                            
+
                             {selectedProfile.source !== 'legacy_import' && (
                                 <div className="flex items-center gap-3">
                                     <Button variant="outline" onClick={handleUndo}>撤销更改</Button>
@@ -398,9 +393,9 @@ const StrategiesPage = ({ userId }) => {
                     </main>
                 )}
             </div>
-            <ConfirmModal 
-                isOpen={isConfirmingDelete} 
-                onClose={() => setIsConfirmingDelete(false)} 
+            <ConfirmModal
+                isOpen={isConfirmingDelete}
+                onClose={() => setIsConfirmingDelete(false)}
                 onConfirm={handleDelete}
                 loading={isDeleting}
                 title="删除策略"

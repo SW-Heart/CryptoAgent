@@ -11,8 +11,17 @@ export default function ConfirmModal({
     confirmText = "确认", 
     cancelText = "取消",
     loading = false,
-    type = "danger" // danger, warning
+    type = "danger", // danger, warning
+    requireInputText = ""
 }) {
+    const [inputValue, setInputValue] = React.useState('');
+
+    React.useEffect(() => {
+        if (isOpen) {
+            setInputValue('');
+        }
+    }, [isOpen]);
+
     if (!isOpen) return null;
 
     const accentColor = type === 'danger' ? 'rose' : 'amber';
@@ -46,6 +55,21 @@ export default function ConfirmModal({
                         </button>
                     </div>
 
+                    {requireInputText && (
+                        <div className="mt-6">
+                            <p className="text-xs text-slate-400 mb-2">
+                                请在下方输入 <span className="text-white font-bold">{requireInputText}</span> 以确认操作：
+                            </p>
+                            <input
+                                type="text"
+                                className={`w-full bg-black/20 border border-white/10 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-${accentColor}-500/50 transition-colors`}
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                placeholder={requireInputText}
+                            />
+                        </div>
+                    )}
+
                     <div className="mt-8 flex gap-3">
                         <button
                             onClick={onClose}
@@ -56,8 +80,8 @@ export default function ConfirmModal({
                         </button>
                         <button
                             onClick={onConfirm}
-                            disabled={loading}
-                            className={`flex-1 px-4 py-3 rounded-2xl bg-${accentColor}-500 hover:bg-${accentColor}-600 text-white text-xs font-bold transition-all shadow-lg shadow-${accentColor}-500/20 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50`}
+                            disabled={loading || (requireInputText !== "" && inputValue !== requireInputText)}
+                            className={`flex-1 px-4 py-3 rounded-2xl bg-${accentColor}-500 hover:bg-${accentColor}-600 text-white text-xs font-bold transition-all shadow-lg shadow-${accentColor}-500/20 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:grayscale`}
                         >
                             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                             {confirmText}
