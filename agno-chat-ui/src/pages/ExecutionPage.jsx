@@ -45,7 +45,7 @@ function StatCard({ icon: Icon, label, value, subValue, trend, tone = 'emerald',
             <div className="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
                 <div className={`absolute top-0 right-0 w-24 h-24 blur-[60px] opacity-20 -mr-12 -mt-12 transition-all group-hover:opacity-40 ${tones[tone].split(' ')[0].replace('text', 'bg')}`} />
             </div>
-            
+
             {/* Content Layer without Overflow Hidden (Allows Dropdown to Escape) */}
             <div className="relative z-10 p-5">
                 <div className="flex items-center justify-between mb-4">
@@ -91,7 +91,7 @@ function CustomDropdown({ label, options, value, onChange, disabled, icon: Icon 
                 type="button"
                 disabled={disabled}
                 onClick={() => setIsOpen(!isOpen)}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-[#0e1215]/60 border border-white/5 rounded-xl text-xs font-bold hover:border-white/10 transition-all ${disabled ? 'opacity-40 cursor-not-allowed' : 'text-slate-200'}`}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-[#0e1215]/60 border border-white/5 rounded-xl text-xs font-bold hover:border-white/10 transition-all focus:outline-none ${disabled ? 'opacity-40 cursor-not-allowed' : 'text-slate-200'}`}
             >
                 <span className="truncate">{selectedOption ? selectedOption.name : '未选择'}</span>
                 <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -133,7 +133,7 @@ function MiniDropdown({ options, value, onChange }) {
             <button
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
-                className={`flex items-center gap-1.5 px-2 py-1 transition-all rounded-[6px] border font-bold ${isOpen ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-transparent border-transparent text-slate-500 hover:bg-white/5 hover:text-slate-300'}`}
+                className={`flex items-center gap-1.5 px-2 py-1 transition-all rounded-[6px] border font-bold focus:outline-none ${isOpen ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-transparent border-transparent text-slate-500 hover:bg-white/5 hover:text-slate-300'}`}
             >
                 {selectedOption.label}
                 <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : 'opacity-50'}`} />
@@ -159,6 +159,7 @@ function MiniDropdown({ options, value, onChange }) {
 
 export default function ExecutionPage({ userId }) {
     const [initialLoading, setInitialLoading] = useState(true);
+    const [dataLoading, setDataLoading] = useState(false);
     const [acting, setActing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [feedback, setFeedback] = useState(null);
@@ -175,6 +176,7 @@ export default function ExecutionPage({ userId }) {
     const [llmConfigs, setLlmConfigs] = useState([]);
     const [logs, setLogs] = useState([]);
     const [activeTrader, setActiveTrader] = useState(null);
+    const [traderInstances, setTraderInstances] = useState([]);
     const [isConnectingLLM, setIsConnectingLLM] = useState(false);
     const [showOnboarding, setShowOnboarding] = useState(false);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -204,14 +206,15 @@ export default function ExecutionPage({ userId }) {
                 getJson(`/api/workspace/strategy-profiles?user_id=${userId}`),
                 getJson(`/api/workspace/exchange-accounts?user_id=${userId}`),
                 getJson(`/api/workspace/llm-configs?user_id=${userId}`),
-                getJson(`/api/strategy/logs?user_id=${userId}&limit=20`)
+                getJson(`/api/strategy/logs?user_id=${userId}&limit=20&_t=${Date.now()}`)
             ]);
-            
+
             setStrategies(stratRes.profiles || []);
             setAccounts(accountRes.accounts || []);
             setLlmConfigs(llmRes.configs || []);
             setLogs(logsRes.logs || []);
-            
+            setTraderInstances(traderRes.traders || []);
+
             if (accountRes.accounts?.length === 0 || stratRes.profiles?.length === 0 || llmRes.configs?.length === 0) {
                 setShowOnboarding(true);
             } else {
@@ -221,7 +224,7 @@ export default function ExecutionPage({ userId }) {
             if (traderRes.traders?.length > 0) {
                 const primary = traderRes.traders[0];
                 setActiveTrader(primary);
-                
+
                 // Only sync pendingChanges from the backend on FIRST load.
                 // Subsequent polling should never overwrite local user edits.
                 if (!initializedRef.current) {
@@ -240,16 +243,50 @@ export default function ExecutionPage({ userId }) {
         }
     }, [userId]);
 
+    const prevTraderIdRef = useRef(null);
+    useEffect(() => {
+        if (!activeTrader) return;
+        const currentId = activeTrader.id;
+        if (prevTraderIdRef.current !== currentId) {
+            setDataLoading(true);
+            
+            // 如果是切换实例，清空旧数据
+            if (prevTraderIdRef.current !== null) {
+                setWallet(null);
+                setPositions([]);
+                setOrders([]);
+                setTradeHistory([]);
+                setPositionHistory([]);
+                setIncomeHistory([]);
+                setLogs([]);
+            }
+            
+            // 由于 refreshMarket 已经包含了所有业务数据的抓取，包括 logs，
+            // 首次选中或是切换都会在这里强制刷一次。
+            // 使用 setTimeout 避开 react 严格模式下的连续调用冲突
+            setTimeout(() => {
+                refreshMarketRef.current();
+            }, 0);
+        }
+        prevTraderIdRef.current = currentId;
+    }, [activeTrader]);
+
     const refreshMarket = useCallback(async () => {
         if (!userId || showOnboarding) return;
+
+        // 让前端不管是否属于 RUNNING 状态都持续同步一次底层交易所的状态和数据库的日志
+        // 这样可以确保即使暂停，用户也能看到最新的余额与历史。
+        if (!activeTrader) return;
+
         try {
-            const [walletRes, posRes, ordersRes, historyRes, posHistRes, incomeRes] = await Promise.all([
-                getJson(`/api/strategy/wallet?user_id=${userId}`),
-                getJson(`/api/strategy/positions?status=OPEN&user_id=${userId}`),
-                getJson(`/api/strategy/orders?user_id=${userId}&status=OPEN`),
-                getJson(`/api/strategy/trade-history?user_id=${userId}&limit=50`),
-                getJson(`/api/strategy/position-history?user_id=${userId}&limit=100`).catch(() => ({ positions: [] })),
-                getJson(`/api/strategy/income-history?user_id=${userId}&limit=100`).catch(() => ({ records: [] })),
+            const [walletRes, posRes, ordersRes, historyRes, posHistRes, incomeRes, logsRes] = await Promise.all([
+                getJson(`/api/strategy/wallet?user_id=${userId}&_t=${Date.now()}`),
+                getJson(`/api/strategy/positions?status=OPEN&user_id=${userId}&_t=${Date.now()}`),
+                getJson(`/api/strategy/orders?user_id=${userId}&status=OPEN&_t=${Date.now()}`),
+                getJson(`/api/strategy/trade-history?user_id=${userId}&limit=50&_t=${Date.now()}`),
+                getJson(`/api/strategy/position-history?user_id=${userId}&limit=100&_t=${Date.now()}`).catch(() => ({ positions: [] })),
+                getJson(`/api/strategy/income-history?user_id=${userId}&limit=100&_t=${Date.now()}`).catch(() => ({ records: [] })),
+                getJson(`/api/strategy/logs?user_id=${userId}&trader_instance_id=${activeTrader.id}&limit=20&_t=${Date.now()}`).catch(() => ({ logs: [] }))
             ]);
             if (!walletRes?.source?.includes('error')) {
                 setWallet(walletRes || { current_balance: 0, total_pnl: 0, total_trades: 0, win_trades: 0 });
@@ -259,28 +296,61 @@ export default function ExecutionPage({ userId }) {
             setTradeHistory(historyRes.trades || []);
             setPositionHistory(posHistRes.positions || []);
             setIncomeHistory(incomeRes.records || []);
+            if (logsRes.logs && logsRes.logs.length > 0) {
+                setLogs(logsRes.logs);
+            }
         } catch (err) {
             console.error(err);
+        } finally {
+            setDataLoading(false);
         }
-    }, [userId, showOnboarding]);
+    }, [userId, showOnboarding, activeTrader]);
+
+    const refreshMarketRef = useRef(refreshMarket);
+    const fetchDataRef = useRef(fetchData);
 
     useEffect(() => {
-        fetchData();
-        refreshMarket();
-        const timer = setInterval(() => { refreshMarket(); fetchData(); }, 15000);
+        refreshMarketRef.current = refreshMarket;
+        fetchDataRef.current = fetchData;
+    }, [refreshMarket, fetchData]);
+
+    useEffect(() => {
+        if (!userId) return;
+        fetchDataRef.current();
+        refreshMarketRef.current();
+        const timer = setInterval(() => {
+            fetchDataRef.current();
+            refreshMarketRef.current();
+        }, 15000);
         return () => clearInterval(timer);
-    }, [fetchData, refreshMarket, userId]);
+    }, [userId]);
 
     const handleAction = async (action) => {
         if (!activeTrader || acting) return;
         const lowerAction = action.toLowerCase();
         setActing(true);
+
+        // 启动时立即清空旧数据，进入加载态，防止显示上一个交易所的残留数据
+        if (lowerAction === 'start') {
+            setDataLoading(true);
+            setWallet(null);
+            setPositions([]);
+            setOrders([]);
+            setTradeHistory([]);
+            setPositionHistory([]);
+            setIncomeHistory([]);
+            setLogs([]);
+        }
+
         try {
             await postJson(`/api/workspace/trader-instances/${activeTrader.id}/runtime-action?user_id=${userId}`, { action: lowerAction });
             await fetchData();
+            if (lowerAction === 'start') {
+                await refreshMarketRef.current();
+            }
             showFeedback(`${lowerAction === 'start' ? '已成功启动' : '已成功停止'}`, "success");
         } catch (err) {
-            showFeedback("操作失败，请重试", "error");
+            showFeedback(err.message || "操作失败，请重试", "error");
         } finally {
             setActing(false);
         }
@@ -321,7 +391,7 @@ export default function ExecutionPage({ userId }) {
     const executeClearLogs = async () => {
         setClearingLogs(true);
         try {
-            await deleteJson('/api/strategy/logs');
+            await deleteJson(`/api/strategy/logs?user_id=${userId}`);
             await fetchData();
             showFeedback("决策日志已清空", "success");
         } catch (err) {
@@ -384,14 +454,14 @@ export default function ExecutionPage({ userId }) {
             <div className="h-full flex flex-col gap-6 p-6 max-w-[1600px] mx-auto min-h-0 w-full animate-pulse">
                 {/* Header Skeleton */}
                 <div className="h-20 bg-[#0e1215]/50 border border-white/5 rounded-3xl flex-shrink-0" />
-                
+
                 {/* Stats Cards Skeleton */}
                 <div className="grid grid-cols-4 gap-6 flex-shrink-0">
                     {[1, 2, 3, 4].map(i => (
                         <div key={i} className="h-32 bg-[#0e1215]/50 border border-white/5 rounded-2xl" />
                     ))}
                 </div>
-                
+
                 {/* Body Skeleton */}
                 <div className="flex-1 flex gap-8 min-h-0">
                     <div className="flex-[7] bg-[#0e1215]/50 border border-white/5 rounded-3xl" />
@@ -404,9 +474,9 @@ export default function ExecutionPage({ userId }) {
     if (showOnboarding) {
         return (
             <div className="h-full flex items-center justify-center p-4">
-                <OnboardingWizard 
-                    userId={userId} 
-                    status={{ hasExchange: accounts.length > 0, hasLLM: llmConfigs.length > 0, hasStrategy: strategies.length > 0 }} 
+                <OnboardingWizard
+                    userId={userId}
+                    status={{ hasExchange: accounts.length > 0, hasLLM: llmConfigs.length > 0, hasStrategy: strategies.length > 0 }}
                     onStepComplete={() => fetchData()}
                 />
             </div>
@@ -444,10 +514,10 @@ export default function ExecutionPage({ userId }) {
                     )}
                     {!isRunning && (
                         <div className="flex items-center gap-1">
-                            <Button 
-                                variant="outline" 
-                                size="sm" 
-                                onClick={handleClearConfig} 
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleClearConfig}
                                 className="h-9 px-4 text-slate-500 border-white/5 hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/20 transition-all font-black text-[10px] uppercase tracking-widest"
                             >
                                 清除配置
@@ -458,263 +528,412 @@ export default function ExecutionPage({ userId }) {
             </header>
 
             {/* Dashboard Stats */}
-            <div className="grid grid-cols-4 gap-6 flex-shrink-0 animate-in fade-in duration-700">
-                <StatCard 
-                    icon={Wallet} 
-                    label="账户总权益" 
-                    value={wallet ? `${Number(wallet.equity || wallet.current_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '--'} 
-                    tone="emerald" 
-                />
-                <StatCard 
-                    icon={DollarSign} 
-                    label="可用余额" 
-                    value={wallet ? `${Number(wallet.available_balance || ((wallet.current_balance || 0) - (wallet.margin_in_use || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '--'} 
-                    tone="amber" 
-                />
-                <StatCard 
-                    icon={BarChart3} 
-                    label="总盈亏" 
-                    headerRight={<PeriodSelector />}
-                    value={filteredStats.totalCount > 0 ? (
-                        <div className="flex items-baseline gap-2">
-                            <span>{`${totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)} USDT`}</span>
-                            {wallet && <span className={`text-sm font-bold ${totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'} opacity-90`}>
-                                ({totalPnL >= 0 ? '+' : ''}{((totalPnL / Math.max(1, Number(wallet.current_balance || 1))) * 100).toFixed(1)}%)
-                            </span>}
-                        </div>
-                    ) : '--'} 
-                    subValue={filteredStats.totalCount > 0 ? `${filteredStats.totalCount} 笔已平仓` : undefined}
-                    tone={totalPnL >= 0 ? 'emerald' : 'rose'} 
-                />
-                <StatCard 
-                    icon={Target} 
-                    label="胜率" 
-                    headerRight={<PeriodSelector />}
-                    value={filteredStats.totalCount > 0 ? `${winRate.toFixed(1)}%` : '--'} 
-                    subValue={filteredStats.totalCount > 0 ? `${filteredStats.winCount} 盈 / ${filteredStats.totalCount - filteredStats.winCount} 亏  共 ${filteredStats.totalCount} 笔` : undefined}
-                    tone={winRate >= 50 ? 'emerald' : 'rose'} 
-                />
-            </div>
+            {isRunning && (
+                <div className="grid grid-cols-4 gap-6 flex-shrink-0 animate-in fade-in duration-700">
+                    <StatCard
+                        icon={Wallet}
+                        label="账户总权益"
+                        value={wallet ? `${Number(wallet.equity || wallet.current_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />}
+                        tone="emerald"
+                    />
+                    <StatCard
+                        icon={DollarSign}
+                        label="可用余额"
+                        value={wallet ? `${Number(wallet.available_balance || ((wallet.current_balance || 0) - (wallet.margin_in_use || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />}
+                        tone="amber"
+                    />
+                    <StatCard
+                        icon={BarChart3}
+                        label="已实现盈亏"
+                        headerRight={<PeriodSelector />}
+                        value={filteredStats.totalCount > 0 ? (
+                            <div className="flex items-baseline gap-2">
+                                <span>{`${totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)} USDT`}</span>
+                                {wallet && <span className={`text-sm font-bold ${totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'} opacity-90`}>
+                                    ({totalPnL >= 0 ? '+' : ''}{((totalPnL / Math.max(1, Number(wallet.current_balance || 1))) * 100).toFixed(1)}%)
+                                </span>}
+                            </div>
+                        ) : (wallet ? '0.00 USDT' : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />)}
+                        subValue={filteredStats.totalCount > 0 ? `${filteredStats.totalCount} 笔已平仓` : (wallet ? '0 笔已平仓' : undefined)}
+                        tone={totalPnL >= 0 ? 'emerald' : 'rose'}
+                    />
+                    <StatCard
+                        icon={Target}
+                        label="胜率"
+                        headerRight={<PeriodSelector />}
+                        value={filteredStats.totalCount > 0 ? `${winRate.toFixed(1)}%` : (wallet ? '0.0%' : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />)}
+                        subValue={filteredStats.totalCount > 0 ? `${filteredStats.winCount} 盈 / ${filteredStats.totalCount - filteredStats.winCount} 亏  共 ${filteredStats.totalCount} 笔` : (wallet ? '0 笔交易' : undefined)}
+                        tone={winRate >= 50 ? 'emerald' : 'rose'}
+                    />
+                </div>
+            )}
 
             {/* Split Workspace */}
-            <div className="flex-1 flex gap-8 min-h-0 animate-in fade-in duration-1000">
-                <main className="flex-[7] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-sm relative">
-                    <div className="flex border-b border-white/5 bg-black/10 px-4 overflow-x-auto">
-                        {['positions', 'orders', 'history', 'posHistory', 'income'].map(tab => (
-                            <button key={tab} onClick={() => setActiveTab(tab)} className={`px-5 py-4 text-[10px] font-black uppercase tracking-widest relative transition-all whitespace-nowrap ${activeTab === tab ? 'text-emerald-400' : 'text-slate-200'}`}>
-                                {{'positions':'当前仓位','orders':'待成交委托','history':'历史成交','posHistory':'仓位历史','income':'资金流水'}[tab]}
-                                {activeTab === tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500 shadow-[0_0_10px_#6366f1]" />}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="flex-1 p-0 overflow-y-auto custom-scrollbar">
-                        {activeTab === 'positions' && (
-                            <table className="w-full text-left">
-                                <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                                    <tr><th className="py-4 px-6">合约</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">开仓价格</th><th className="py-4 px-6 text-right">标记价格</th><th className="py-4 px-6 text-right">未实现盈亏 (回报率)</th></tr>
-                                </thead>
-                                <tbody className="divide-y divide-white/5">
-                                    {positions.length > 0 ? positions.map((pos, i) => (
-                                        <tr key={i} className="hover:bg-white/[0.02] transition-colors group">
-                                            <td className="py-4 px-6">
-                                                <div className="flex items-center gap-2">
-                                                    <div className={`w-1 h-4 rounded-sm ${pos.direction === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                                                    <div className="flex flex-col">
-                                                        <span className="font-bold text-sm text-slate-100">{pos.symbol}</span>
-                                                        <span className="text-[10px] text-slate-500 font-medium mt-0.5">永续</span>
+            {isRunning ? (
+                <div className="flex-1 flex gap-8 min-h-0 animate-in fade-in duration-1000">
+                    <main className="flex-[7] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-sm relative">
+                        <div className="flex border-b border-white/5 bg-black/10 px-4 overflow-x-auto">
+                            {['positions', 'orders', 'history', 'posHistory', 'income'].map(tab => (
+                                <button key={tab} onClick={() => setActiveTab(tab)} className={`px-5 py-4 text-[10px] font-black uppercase tracking-widest relative transition-all whitespace-nowrap focus:outline-none ${activeTab === tab ? 'text-emerald-400' : 'text-slate-200'}`}>
+                                    {{ 'positions': '当前仓位', 'orders': '待成交委托', 'history': '历史成交', 'posHistory': '仓位历史', 'income': '资金流水' }[tab]}
+                                    {activeTab === tab && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500 shadow-[0_0_10px_#6366f1]" />}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex-1 p-0 overflow-y-auto custom-scrollbar">
+                            {activeTab === 'positions' && (
+                                <table className="w-full text-left">
+                                    <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                                        <tr><th className="py-4 px-6">合约</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">开仓价格</th><th className="py-4 px-6 text-right">标记价格</th><th className="py-4 px-6 text-right">未实现盈亏 (回报率)</th><th className="py-4 px-6 text-right">止盈/止损</th></tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {positions.length > 0 ? positions.map((pos, i) => {
+                                            const expectedCloseDir = pos.direction === 'LONG' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
+                                            const condOrders = orders.filter(o => o.symbol === pos.symbol && o.status === 'NEW' && o.direction === expectedCloseDir && (o.type?.includes('TAKE_PROFIT') || o.type?.includes('STOP')));
+                                            
+                                            // Find the TP and SL that are closest to the entry price to display on the outside
+                                            const entryPrice = Number(pos.entry_price || 0);
+                                            const getPrice = o => Number(o.stop_price || o.price || 0);
+
+                                            const tpOrders = condOrders.filter(o => o.type?.includes('TAKE_PROFIT'))
+                                                .sort((a, b) => Math.abs(getPrice(a) - entryPrice) - Math.abs(getPrice(b) - entryPrice));
+                                            
+                                            const slOrders = condOrders.filter(o => o.type?.includes('STOP') && !o.type?.includes('TAKE_PROFIT'))
+                                                .sort((a, b) => Math.abs(getPrice(a) - entryPrice) - Math.abs(getPrice(b) - entryPrice));
+                                            
+                                            const tpOrder = tpOrders[0];
+                                            const slOrder = slOrders[0];
+                                            
+                                            return (
+                                                <tr key={i} className="hover:bg-white/[0.02] transition-colors group relative hover:z-50">
+                                                    <td className="py-4 px-6">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className={`w-1 h-4 rounded-sm ${pos.direction === 'LONG' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                                                            <div className="flex flex-col">
+                                                                <span className="font-bold text-sm text-slate-100">{pos.symbol}</span>
+                                                                <span className="text-[10px] text-slate-500 font-medium mt-0.5">永续</span>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{pos.quantity} {(pos.symbol || '').replace('USDT', '')}</td>
+                                                    <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.entry_price).toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
+                                                    <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.current_price || pos.mark_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                                    <td className={`py-4 px-6 text-right font-mono text-xs ${Number(pos.unrealized_pnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                        {Number(pos.unrealized_pnl).toFixed(2)} ({Number(pos.unrealized_pnl) >= 0 ? '+' : ''}{Number(pos.roi_percent || 0).toFixed(2)}%)
+                                                    </td>
+                                                    <td className="py-4 px-6 whitespace-nowrap relative group/tooltip">
+                                                        <div className="flex items-center justify-end gap-3 cursor-pointer">
+                                                            <div className="flex flex-col items-end gap-1 font-mono text-[11px]">
+                                                                <div className="flex items-center gap-1.5 border-b border-dashed border-white/20 pb-0.5">
+                                                                    {tpOrder ? <span className="text-emerald-400">{Number(tpOrder.stop_price || tpOrder.price).toLocaleString(undefined, { minimumFractionDigits: 1 })}</span> : <span className="text-slate-500">--</span>}
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5 pt-0.5">
+                                                                    {slOrder ? <span className="text-rose-400">{Number(slOrder.stop_price || slOrder.price).toLocaleString(undefined, { minimumFractionDigits: 1 })}</span> : <span className="text-slate-500">--</span>}
+                                                                </div>
+                                                            </div>
+                                                            {condOrders.length > 1 && (
+                                                                <span className="text-[10px] text-slate-400 bg-white/5 px-1.5 py-0.5 rounded">({condOrders.length})</span>
+                                                            )}
+                                                        </div>
+                                                        
+                                                        {/* Hover Tooltip for multiple orders */}
+                                                        {condOrders.length > 1 && (
+                                                            <div className="absolute right-full top-2 mr-3 opacity-0 pointer-events-none group-hover/tooltip:opacity-100 group-hover/tooltip:pointer-events-auto transition-all bg-[#1E2329] border border-white/10 rounded shadow-[0_8px_30px_rgb(0,0,0,0.8)] p-2 min-w-[200px] z-[9999]">
+                                                                {/* Arrow pointing right */}
+                                                                <div className="absolute top-[12px] -right-[4px] w-0 h-0 border-y-[4px] border-y-transparent border-l-[4px] border-l-[#1E2329]"></div>
+                                                                
+                                                                {/* OKX style tooltip content */}
+                                                                <table className="w-full text-left text-[10px] relative z-10 m-0 border-collapse bg-transparent">
+                                                                    <thead className="text-slate-500 font-medium tracking-wide">
+                                                                        <tr>
+                                                                            <th className="pb-1.5 px-1 font-normal border-b border-white/5 w-1/3">止盈</th>
+                                                                            <th className="pb-1.5 px-1 font-normal border-b border-white/5 w-1/3">止损</th>
+                                                                            <th className="pb-1.5 px-1 font-normal text-right border-b border-white/5 w-1/3">数量</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="font-mono divide-y divide-white/5">
+                                                                        {condOrders.map((o, idx) => {
+                                                                            const isTp = o.type?.includes('TAKE_PROFIT');
+                                                                            const price = Number(o.stop_price || o.price).toLocaleString(undefined, { minimumFractionDigits: 1 });
+                                                                            return (
+                                                                                <tr key={idx} className="hover:bg-white/5">
+                                                                                    <td className="py-2 px-1 leading-none">
+                                                                                        {isTp ? <span className="text-emerald-400">{price}</span> : <span className="text-slate-500">--</span>}
+                                                                                    </td>
+                                                                                    <td className="py-2 px-1 leading-none">
+                                                                                        {!isTp ? <span className="text-rose-400">{price}</span> : <span className="text-slate-500">--</span>}
+                                                                                    </td>
+                                                                                    <td className="py-2 px-1 text-right text-slate-300 leading-none">
+                                                                                        {o.quantity}
+                                                                                    </td>
+                                                                                </tr>
+                                                                            );
+                                                                        })}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }) : (
+                                            <tr>
+                                                <td colSpan="6" className="py-12 text-center">
+                                                    {dataLoading ? (
+                                                        <div className="flex flex-col items-center justify-center gap-3 opacity-50">
+                                                            <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
+                                                            <span className="text-slate-500 text-[10px] uppercase tracking-widest font-black">正在同步数据...</span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无活跃持仓</span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            )}
+                            {activeTab === 'orders' && (
+                                <div className="w-full overflow-x-auto custom-scrollbar md:overflow-x-visible">
+                                <table className="w-full min-w-max text-left whitespace-nowrap">
+                                    <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                                        <tr><th className="py-4 px-6 w-32">委托时间</th><th className="py-4 px-6">合约</th><th className="py-4 px-6">方向</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">触发价格</th><th className="py-4 px-6 text-right">委托类型</th><th className="py-4 px-6 text-right">状态</th></tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {orders.length > 0 ? orders.map((order, i) => (
+                                            <tr key={i} className="hover:bg-white/[0.02] transition-colors group">
+                                                <td className="py-4 px-6 whitespace-nowrap">
+                                                    <span className="text-xs font-mono text-slate-400">
+                                                        {order.time ? `${new Date(order.time).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })} ${new Date(order.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : '--/-- --:--:--'}
+                                                    </span>
+                                                </td>
+                                                <td className="py-4 px-6 whitespace-nowrap">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`w-1 h-4 rounded-sm ${order.direction?.includes('LONG') ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-bold text-sm text-slate-100">{order.symbol}</span>
+                                                            <span className="text-[9px] px-1 py-0.5 rounded bg-white/5 text-slate-400 font-medium">永续</span>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="py-4 px-6 whitespace-nowrap">
+                                                    <span className={`text-xs tracking-wide ${(order.direction === 'LONG' || order.direction === 'CLOSE_SHORT') ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                        {order.direction === 'LONG' ? '买入开多' : order.direction === 'SHORT' ? '卖出开空' : order.direction === 'CLOSE_LONG' ? '卖出平多' : order.direction === 'CLOSE_SHORT' ? '买入平空' : order.direction}
+                                                    </span>
+                                                </td>
+                                                <td className="py-4 px-6 text-right font-mono text-xs text-slate-300 whitespace-nowrap">
+                                                    {order.close_position ? (
+                                                        <span className="text-slate-500">全部平仓</span>
+                                                    ) : (
+                                                        <div className="flex items-center justify-end gap-1">
+                                                            <span>{(order.quantity || 0).toLocaleString()}</span>
+                                                            <span className="text-[10px] text-slate-500">{order.symbol?.replace('USDT', '')}</span>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td className="py-4 px-6 text-right whitespace-nowrap">
+                                                    {order.stop_price > 0 ? (
+                                                        <span className={`font-mono text-xs ${order.type?.includes("TAKE_PROFIT") ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                                            {order.stop_price.toLocaleString(undefined, { minimumFractionDigits: 1 })}
+                                                        </span>
+                                                    ) : order.activation_price > 0 ? (
+                                                        <span className="font-mono text-xs text-amber-400">
+                                                            {order.activation_price.toLocaleString(undefined, { minimumFractionDigits: 1 })}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-slate-600 text-xs font-mono">--</span>
+                                                    )}
+                                                </td>
+                                                <td className="py-4 px-6 text-right whitespace-nowrap">
+                                                    <span className="text-xs text-slate-300">
+                                                        {order.type === 'STOP_MARKET' ? '市价止损' : order.type === 'TAKE_PROFIT_MARKET' ? '市价止盈' : order.type === 'TRAILING_STOP_MARKET' ? '跟踪挂单' : order.type === 'LIMIT' ? '限价单' : order.type === 'MARKET' ? '市价单' : order.type}
+                                                    </span>
+                                                </td>
+                                                <td className="py-4 px-6 text-right whitespace-nowrap">
+                                                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${order.status === 'NEW' ? 'text-amber-400' : 'text-slate-500'}`}>
+                                                        {order.status === 'NEW' ? '等待成交' : order.status}
+                                                    </span>
+                                                </td>
+
+                                            </tr>
+                                        )) : (
+                                            <tr><td colSpan="7" className="py-20 text-center"><div className="flex flex-col items-center justify-center gap-2"><div className="w-12 h-12 rounded-full border border-dashed border-white/10 flex items-center justify-center mb-2"><div className="w-2 h-2 rounded-full bg-emerald-500/50"></div></div><span className="text-slate-600 text-[11px] font-bold tracking-[0.2em] opacity-40">当前暂无任何挂单</span></div></td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                                </div>
+                            )}
+                            {activeTab === 'history' && (
+                                <table className="w-full text-left">
+                                    <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                                        <tr><th className="py-4 px-6">时间</th><th className="py-4 px-6">交易对</th><th className="py-4 px-6">方向</th><th className="py-4 px-6 text-right">价格</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">手续费</th><th className="py-4 px-6 text-right">已实现盈亏</th></tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {tradeHistory.length > 0 ? tradeHistory.map((trade, i) => {
+                                            const tradeTime = trade.time ? new Date(trade.time) : null;
+                                            const timeStr = tradeTime ? `${tradeTime.getMonth() + 1}/${tradeTime.getDate()} ${String(tradeTime.getHours()).padStart(2, '0')}:${String(tradeTime.getMinutes()).padStart(2, '0')}:${String(tradeTime.getSeconds()).padStart(2, '0')}` : '--';
+                                            const side = trade.side;
+                                            const posSide = (trade.position_side || '').toUpperCase();
+                                            // 通过 side + positionSide 判断精确方向
+                                            let dirLabel = '';
+                                            let isGreen = false;
+                                            if (side === 'BUY' && posSide === 'LONG') { dirLabel = '买入/开多'; isGreen = true; }
+                                            else if (side === 'SELL' && posSide === 'LONG') { dirLabel = '卖出/平多'; isGreen = false; }
+                                            else if (side === 'SELL' && posSide === 'SHORT') { dirLabel = '卖出/开空'; isGreen = false; }
+                                            else if (side === 'BUY' && posSide === 'SHORT') { dirLabel = '买入/平空'; isGreen = true; }
+                                            else { dirLabel = side === 'BUY' ? '买入/做多' : '卖出/做空'; isGreen = side === 'BUY'; }
+                                            const pnl = Number(trade.realized_pnl || 0);
+                                            return (
+                                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                                                    <td className="py-4 px-6 text-xs font-mono text-slate-400">{timeStr}</td>
+                                                    <td className="py-4 px-6 font-bold text-sm">{(trade.symbol || '').replace('USDT', '')}</td>
+                                                    <td className={`py-4 px-6 text-xs font-bold ${isGreen ? 'text-emerald-400' : 'text-rose-400'}`}>{dirLabel}</td>
+                                                    <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(trade.price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                                                    <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{parseFloat(Number(trade.quantity || 0).toFixed(8))}</td>
+                                                    <td className="py-4 px-6 text-right font-mono text-xs text-slate-500">{Number(trade.commission || 0).toFixed(4)}</td>
+                                                    <td className={`py-4 px-6 text-right font-mono text-xs ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}` : '--'}</td>
+                                                </tr>
+                                            );
+                                        }) : (
+                                            <tr><td colSpan="7" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无历史成交</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            )}
+                            {activeTab === 'posHistory' && (
+                                <div className="divide-y divide-white/5">
+                                    {positionHistory.length > 0 ? positionHistory.map((pos, i) => {
+                                        const pnl = Number(pos.realized_pnl || 0);
+                                        const roi = Number(pos.roi_percent || 0);
+                                        const isPnlPositive = pnl >= 0;
+                                        const fmtTime = (ts) => {
+                                            if (!ts) return '--';
+                                            const d = new Date(ts);
+                                            return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+                                        };
+                                        const unit = pos.symbol || '';
+                                        return (
+                                            <div key={i} className="px-6 py-5 hover:bg-white/[0.02] transition-colors">
+                                                {/* Row 1: Symbol + Tags + Times */}
+                                                <div className="flex items-center justify-between mb-4">
+                                                    <div className="flex items-center gap-2.5 flex-wrap">
+                                                        <span className="text-white font-black text-sm">{pos.symbol_full || `${unit}USDT`}</span>
+                                                        <span className="text-[9px] font-bold text-slate-500 bg-slate-800/50 px-1.5 py-0.5 rounded">永续</span>
+                                                        <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">{pos.leverage || 10}x</span>
+                                                        <span className="text-[9px] font-bold text-slate-400 bg-slate-700/30 px-1.5 py-0.5 rounded">{pos.margin_mode || '全仓'}</span>
+                                                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${pos.direction === 'LONG' ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'}`}>{pos.direction === 'LONG' ? '做多' : '做空'}</span>
+                                                        <span className="text-[9px] font-bold text-slate-500">{pos.close_type || '全部平仓'}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-[10px] text-slate-500 font-mono">
+                                                        <span>{fmtTime(pos.open_time)} 开仓时间</span>
+                                                        <span className="text-slate-700">|</span>
+                                                        <span>{fmtTime(pos.close_time)} 最后平仓时间</span>
                                                     </div>
                                                 </div>
-                                            </td>
-                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{pos.quantity} {(pos.symbol || '').replace('USDT', '')}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.entry_price).toLocaleString(undefined, {minimumFractionDigits:1})}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-xs text-slate-300">{Number(pos.current_price || pos.mark_price || 0).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
-                                            <td className={`py-4 px-6 text-right font-mono text-xs ${Number(pos.unrealized_pnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                                {Number(pos.unrealized_pnl).toFixed(2)} ({Number(pos.unrealized_pnl) >= 0 ? '+' : ''}{Number(pos.roi_percent || 0).toFixed(2)}%)
-                                            </td>
-                                        </tr>
-                                    )) : (
-                                        <tr><td colSpan="5" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无活跃持仓</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        )}
-                        {activeTab === 'orders' && (
-                            <table className="w-full text-left">
-                                <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                                    <tr><th className="py-4 px-6">交易对</th><th className="py-4 px-6">类型</th><th className="py-4 px-6">方向</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">价格</th><th className="py-4 px-6 text-right">状态</th></tr>
-                                </thead>
-                                <tbody className="divide-y divide-white/5">
-                                    {orders.length > 0 ? orders.map((order, i) => (
-                                        <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                            <td className="py-4 px-6 font-bold text-sm">{order.symbol}</td>
-                                            <td className="py-4 px-6 text-xs text-slate-400">{order.action || order.type}</td>
-                                            <td className={`py-4 px-6 text-xs font-bold ${
-                                                (order.direction === 'LONG' || order.direction === 'CLOSE_SHORT') ? 'text-emerald-400' : 'text-rose-400'
-                                            }`}>{
-                                                order.direction === 'LONG' ? '做多' : 
-                                                order.direction === 'SHORT' ? '做空' : 
-                                                order.direction === 'CLOSE_LONG' ? '平多' : 
-                                                order.direction === 'CLOSE_SHORT' ? '平空' : 
-                                                order.direction
-                                            }</td>
-                                            <td className="py-4 px-6 text-right font-mono text-sm">{order.close_position ? '全部(平仓)' : order.quantity}</td>
-                                            <td className="py-4 px-6 text-right font-mono text-sm flex flex-col items-end gap-0.5">
-                                                {order.stop_price > 0 && <span className="text-amber-400/80 text-[10px]">触发: {order.stop_price}</span>}
-                                                {order.activation_price > 0 && <span className="text-amber-400/80 text-[10px]">激活: {order.activation_price} (回撤 {order.callback_rate}%)</span>}
-                                                <span className={`${order.price > 0 ? 'text-slate-300' : 'text-slate-500'}`}>{order.price > 0 ? order.price : (order.type?.includes("MARKET") || order.action?.includes("市价") || order.action?.includes("跟踪") ? '市价' : '')}</span>
-                                            </td>
-                                            <td className="py-4 px-6 text-right"><span className={`text-[10px] font-bold px-2 py-0.5 rounded ${order.status === 'NEW' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-500/10 text-slate-400'}`}>{order.status === 'NEW' ? '待成交' : order.status}</span></td>
-                                        </tr>
-                                    )) : (
-                                        <tr><td colSpan="6" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无待成交委托</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        )}
-                        {activeTab === 'history' && (
-                            <table className="w-full text-left">
-                                <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                                    <tr><th className="py-4 px-6">时间</th><th className="py-4 px-6">交易对</th><th className="py-4 px-6">方向</th><th className="py-4 px-6 text-right">价格</th><th className="py-4 px-6 text-right">数量</th><th className="py-4 px-6 text-right">手续费</th><th className="py-4 px-6 text-right">已实现盈亏</th></tr>
-                                </thead>
-                                <tbody className="divide-y divide-white/5">
-                                    {tradeHistory.length > 0 ? tradeHistory.map((trade, i) => {
-                                        const tradeTime = trade.time ? new Date(trade.time) : null;
-                                        const timeStr = tradeTime ? `${tradeTime.getMonth()+1}/${tradeTime.getDate()} ${String(tradeTime.getHours()).padStart(2,'0')}:${String(tradeTime.getMinutes()).padStart(2,'0')}:${String(tradeTime.getSeconds()).padStart(2,'0')}` : '--';
-                                        const isLong = trade.side === 'BUY';
-                                        const pnl = Number(trade.realized_pnl || 0);
-                                        return (
-                                            <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                                <td className="py-4 px-6 text-xs font-mono text-slate-400">{timeStr}</td>
-                                                <td className="py-4 px-6 font-bold text-sm">{(trade.symbol || '').replace('USDT', '')}</td>
-                                                <td className={`py-4 px-6 text-xs font-bold ${isLong ? 'text-emerald-400' : 'text-rose-400'}`}>{isLong ? '买入/做多' : '卖出/做空'}</td>
-                                                <td className="py-4 px-6 text-right font-mono text-sm">{Number(trade.price).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
-                                                <td className="py-4 px-6 text-right font-mono text-sm">{trade.quantity}</td>
-                                                <td className="py-4 px-6 text-right font-mono text-xs text-slate-500">{Number(trade.commission || 0).toFixed(4)}</td>
-                                                <td className={`py-4 px-6 text-right font-mono font-bold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{pnl !== 0 ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)}` : '--'}</td>
-                                            </tr>
-                                        );
-                                    }) : (
-                                        <tr><td colSpan="7" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无历史成交</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        )}
-                        {activeTab === 'posHistory' && (
-                            <div className="divide-y divide-white/5">
-                                {positionHistory.length > 0 ? positionHistory.map((pos, i) => {
-                                    const pnl = Number(pos.realized_pnl || 0);
-                                    const roi = Number(pos.roi_percent || 0);
-                                    const isPnlPositive = pnl >= 0;
-                                    const fmtTime = (ts) => {
-                                        if (!ts) return '--';
-                                        const d = new Date(ts);
-                                        return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-                                    };
-                                    const unit = pos.symbol || '';
-                                    return (
-                                        <div key={i} className="px-6 py-5 hover:bg-white/[0.02] transition-colors">
-                                            {/* Row 1: Symbol + Tags + Times */}
-                                            <div className="flex items-center justify-between mb-4">
-                                                <div className="flex items-center gap-2.5 flex-wrap">
-                                                    <span className="text-white font-black text-sm">{pos.symbol_full || `${unit}USDT`}</span>
-                                                    <span className="text-[9px] font-bold text-slate-500 bg-slate-800/50 px-1.5 py-0.5 rounded">永续</span>
-                                                    <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">{pos.leverage || 10}x</span>
-                                                    <span className="text-[9px] font-bold text-slate-400 bg-slate-700/30 px-1.5 py-0.5 rounded">{pos.margin_mode || '全仓'}</span>
-                                                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${pos.direction === 'LONG' ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'}`}>{pos.direction === 'LONG' ? '做多' : '做空'}</span>
-                                                    <span className="text-[9px] font-bold text-slate-500">{pos.close_type || '全部平仓'}</span>
-                                                </div>
-                                                <div className="flex items-center gap-4 text-[10px] text-slate-500 font-mono">
-                                                    <span>{fmtTime(pos.open_time)} 开仓时间</span>
-                                                    <span className="text-slate-700">|</span>
-                                                    <span>{fmtTime(pos.close_time)} 最后平仓时间</span>
+                                                {/* Row 2: Stats Grid */}
+                                                <div className="grid grid-cols-6 gap-4">
+                                                    <div>
+                                                        <div className="text-[9px] text-slate-600 font-bold mb-1">已实现盈亏 (USDT)</div>
+                                                        <div className={`text-sm font-black font-mono ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>{isPnlPositive ? '+' : ''}{pnl.toFixed(2)} USDT</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[9px] text-slate-600 font-bold mb-1">收益率</div>
+                                                        <div className={`text-sm font-black font-mono ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>{isPnlPositive ? '+' : ''}{roi.toFixed(2)}%</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[9px] text-slate-600 font-bold mb-1">已平仓量 ({unit})</div>
+                                                        <div className="text-sm font-mono text-white">{pos.closed_quantity}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[9px] text-slate-600 font-bold mb-1">开仓价格</div>
+                                                        <div className="text-sm font-mono text-white">{Number(pos.entry_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[9px] text-slate-600 font-bold mb-1">平仓均价</div>
+                                                        <div className="text-sm font-mono text-white">{Number(pos.close_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[9px] text-slate-600 font-bold mb-1">最大未平仓合约量 ({unit})</div>
+                                                        <div className="text-sm font-mono text-white">{pos.max_quantity}</div>
+                                                    </div>
                                                 </div>
                                             </div>
-                                            {/* Row 2: Stats Grid */}
-                                            <div className="grid grid-cols-6 gap-4">
-                                                <div>
-                                                    <div className="text-[9px] text-slate-600 font-bold mb-1">已实现盈亏 (USDT)</div>
-                                                    <div className={`text-sm font-black font-mono ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>{isPnlPositive ? '+' : ''}{pnl.toFixed(2)} USDT</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[9px] text-slate-600 font-bold mb-1">收益率</div>
-                                                    <div className={`text-sm font-black font-mono ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>{isPnlPositive ? '+' : ''}{roi.toFixed(2)}%</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[9px] text-slate-600 font-bold mb-1">已平仓量 ({unit})</div>
-                                                    <div className="text-sm font-mono text-white">{pos.closed_quantity}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[9px] text-slate-600 font-bold mb-1">开仓价格</div>
-                                                    <div className="text-sm font-mono text-white">{Number(pos.entry_price).toLocaleString(undefined, {minimumFractionDigits:2})}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[9px] text-slate-600 font-bold mb-1">平仓均价</div>
-                                                    <div className="text-sm font-mono text-white">{Number(pos.close_price).toLocaleString(undefined, {minimumFractionDigits:2})}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[9px] text-slate-600 font-bold mb-1">最大未平仓合约量 ({unit})</div>
-                                                    <div className="text-sm font-mono text-white">{pos.max_quantity}</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                }) : (
-                                    <div className="py-16 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无仓位历史</div>
-                                )}
-                            </div>
-                        )}
-                        {activeTab === 'income' && (
-                            <table className="w-full text-left">
-                                <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                                    <tr><th className="py-4 px-5">时间</th><th className="py-4 px-5">交易对</th><th className="py-4 px-5">类型</th><th className="py-4 px-5 text-right">金额</th><th className="py-4 px-5 text-right">资产</th></tr>
-                                </thead>
-                                <tbody className="divide-y divide-white/5">
-                                    {incomeHistory.length > 0 ? [...incomeHistory].sort((a, b) => (b.time || 0) - (a.time || 0)).map((item, i) => {
-                                        const t = item.time ? new Date(item.time) : null;
-                                        const timeStr = t ? `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}` : '--';
-                                        const amount = Number(item.amount || 0);
-                                        const typeMap = {'REALIZED_PNL':'已实现盈亏','FUNDING_FEE':'资金费率','COMMISSION':'手续费','TRANSFER':'转账','WELCOME_BONUS':'奖励','INSURANCE_CLEAR':'保险基金','DELIVERED_SETTELMENT':'交割','COIN_SWAP_DEPOSIT':'兑换充值','COIN_SWAP_WITHDRAW':'兑换提现'};
-                                        const typeLabel = typeMap[item.type] || item.type;
-                                        const typeColor = item.type === 'REALIZED_PNL' ? (amount >= 0 ? 'text-emerald-400' : 'text-rose-400') : item.type === 'FUNDING_FEE' ? 'text-sky-400' : item.type === 'COMMISSION' ? 'text-orange-400' : item.type === 'TRANSFER' ? 'text-violet-400' : 'text-slate-400';
-                                        return (
-                                            <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                                <td className="py-3.5 px-5 text-xs font-mono text-slate-400">{timeStr}</td>
-                                                <td className="py-3.5 px-5 font-bold text-sm">{(item.symbol || '--').replace('USDT', '')}</td>
-                                                <td className={`py-3.5 px-5 text-xs font-bold ${typeColor}`}>{typeLabel}</td>
-                                                <td className={`py-3.5 px-5 text-right font-mono font-bold ${amount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{amount >= 0 ? '+' : ''}{amount.toFixed(4)}</td>
-                                                <td className="py-3.5 px-5 text-right text-xs text-slate-400">{item.asset || 'USDT'}</td>
-                                            </tr>
                                         );
                                     }) : (
-                                        <tr><td colSpan="5" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无资金流水</td></tr>
+                                        <div className="py-16 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无仓位历史</div>
                                     )}
-                                </tbody>
-                            </table>
-                        )}
-                        {!isRunning && positions.length === 0 && activeTab === 'positions' && <div className="h-full flex items-center justify-center opacity-30 italic text-[10px] uppercase tracking-[0.2em] font-black">待机模式 - 扫描未启动</div>}
+                                </div>
+                            )}
+                            {activeTab === 'income' && (
+                                <table className="w-full text-left">
+                                    <thead className="sticky top-0 bg-[#0B0E11] z-10 border-b border-white/5 text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                                        <tr><th className="py-4 px-5">时间</th><th className="py-4 px-5">交易对</th><th className="py-4 px-5">类型</th><th className="py-4 px-5 text-right">金额</th><th className="py-4 px-5 text-right">资产</th></tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-white/5">
+                                        {incomeHistory.length > 0 ? [...incomeHistory].sort((a, b) => (b.time || 0) - (a.time || 0)).map((item, i) => {
+                                            const t = item.time ? new Date(item.time) : null;
+                                            const timeStr = t ? `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}` : '--';
+                                            const amount = Number(item.amount || 0);
+                                            const typeMap = { 'REALIZED_PNL': '已实现盈亏', 'FUNDING_FEE': '资金费率', 'COMMISSION': '手续费', 'TRANSFER': '转账', 'WELCOME_BONUS': '奖励', 'INSURANCE_CLEAR': '保险基金', 'DELIVERED_SETTELMENT': '交割', 'COIN_SWAP_DEPOSIT': '兑换充值', 'COIN_SWAP_WITHDRAW': '兑换提现' };
+                                            const typeLabel = typeMap[item.type] || item.type;
+                                            const typeColor = item.type === 'REALIZED_PNL' ? (amount >= 0 ? 'text-emerald-400' : 'text-rose-400') : item.type === 'FUNDING_FEE' ? 'text-sky-400' : item.type === 'COMMISSION' ? 'text-orange-400' : item.type === 'TRANSFER' ? 'text-violet-400' : 'text-slate-400';
+                                            return (
+                                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                                                    <td className="py-3.5 px-5 text-xs font-mono text-slate-400">{timeStr}</td>
+                                                    <td className="py-3.5 px-5 font-bold text-sm">{(item.symbol || '--').replace('USDT', '')}</td>
+                                                    <td className={`py-3.5 px-5 text-xs font-bold ${typeColor}`}>{typeLabel}</td>
+                                                    <td className={`py-3.5 px-5 text-right font-mono font-bold ${amount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{amount >= 0 ? '+' : ''}{amount.toFixed(4)}</td>
+                                                    <td className="py-3.5 px-5 text-right text-xs text-slate-400">{item.asset || 'USDT'}</td>
+                                                </tr>
+                                            );
+                                        }) : (
+                                            <tr><td colSpan="5" className="py-12 text-center text-slate-600 text-[10px] font-bold tracking-[0.2em] opacity-40">暂无资金流水</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            )}
+                            {!isRunning && positions.length === 0 && activeTab === 'positions' && <div className="h-full flex items-center justify-center opacity-30 italic text-[10px] uppercase tracking-[0.2em] font-black">待机模式 - 扫描未启动</div>}
+                        </div>
+                    </main>
+                    <aside className="flex-[3] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-sm relative min-w-[340px]">
+                        <div className="flex items-center justify-between border-b border-white/5 bg-black/10 px-6 h-[49px]">
+                            <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-400" /><h3 className="text-[10px] font-black text-white uppercase tracking-widest">Agent决策日志</h3></div>
+                            <button onClick={() => setShowClearLogsConfirm(true)} className="p-1 hover:bg-white/5 hover:text-rose-400 rounded-lg text-slate-500 transition-all cursor-pointer" title="清空日志">
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-3 p-4">
+                            {logs.length > 0 ? logs.map((log, idx) => <DecisionCard key={idx} log={log} traderInstances={traderInstances} accounts={accounts} llmConfigs={llmConfigs} />) : (
+                                dataLoading ? (
+                                    <div className="h-full flex flex-col items-center justify-center gap-3 opacity-50">
+                                        <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
+                                        <span className="text-slate-500 text-[10px] uppercase tracking-widest font-black">正在拉取日志...</span>
+                                    </div>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-600 text-[10px] font-black opacity-30 uppercase tracking-[0.2em] italic">
+                                        等待首份研究报告...
+                                    </div>
+                                )
+                            )}
+                        </div>
+                    </aside>
+                </div>
+            ) : (
+                <div className="flex-1 flex items-center justify-center bg-[#0e1215]/30 border border-dashed border-white/5 rounded-[40px] text-slate-500 backdrop-blur-sm animate-in fade-in duration-700 mt-2">
+                    <div className="text-center">
+                        <div className="p-4 rounded-full bg-slate-800/50 mb-4 inline-block">
+                            <Activity className="w-8 h-8 text-slate-500" />
+                        </div>
+                        <p className="text-sm font-medium text-slate-400">系统进入休眠状态，资源已释放，数据面板已隐藏</p>
+                        <p className="text-[10px] mt-2 text-emerald-500/50 uppercase tracking-widest font-black">当策略开始运行后将自动恢复显示</p>
                     </div>
-                </main>
-                <aside className="flex-[3] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-sm relative min-w-[340px]">
-                    <div className="flex items-center justify-between border-b border-white/5 bg-black/10 px-6 h-[49px]">
-                        <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-400" /><h3 className="text-[10px] font-black text-white uppercase tracking-widest">实时智脑决策日志</h3></div>
-                        <button onClick={() => setShowClearLogsConfirm(true)} className="p-1 hover:bg-white/5 hover:text-rose-400 rounded-lg text-slate-500 transition-all cursor-pointer" title="清空日志">
-                            <Trash2 className="w-4 h-4" />
-                        </button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-3 p-4">
-                        {logs.length > 0 ? logs.map((log, idx) => <DecisionCard key={idx} log={log} />) : (
-                            <div className="h-full flex items-center justify-center text-slate-600 text-[10px] font-black opacity-30 uppercase tracking-[0.2em] italic">
-                                等待首份研究报告...
-                            </div>
-                        )}
-                    </div>
-                </aside>
-            </div>
+                </div>
+            )}
             <ConnectLLMModal userId={userId} isOpen={isConnectingLLM} onClose={() => setIsConnectingLLM(false)} onConnected={() => fetchData()} />
-            
-            <ConfirmModal 
-                isOpen={showClearConfirm} 
-                onClose={() => setShowClearConfirm(false)} 
+
+            <ConfirmModal
+                isOpen={showClearConfirm}
+                onClose={() => setShowClearConfirm(false)}
                 onConfirm={executeClearConfig}
                 loading={clearing}
                 title="清除实例配置"
@@ -723,13 +942,13 @@ export default function ExecutionPage({ userId }) {
                 type="danger"
             />
 
-            <ConfirmModal 
-                isOpen={showClearLogsConfirm} 
-                onClose={() => setShowClearLogsConfirm(false)} 
+            <ConfirmModal
+                isOpen={showClearLogsConfirm}
+                onClose={() => setShowClearLogsConfirm(false)}
                 onConfirm={executeClearLogs}
                 loading={clearingLogs}
                 title="清空决策日志"
-                message="确定要清空所有实时智脑决策日志吗？此动作无法撤销。"
+                message="确定要清空所有决策日志吗？此动作无法撤销。"
                 confirmText="清空"
                 type="danger"
             />
@@ -738,19 +957,25 @@ export default function ExecutionPage({ userId }) {
 }
 
 // --- Internal Decision Card ---
-function DecisionCard({ log }) {
+function DecisionCard({ log, traderInstances, accounts, llmConfigs }) {
     const [open, setOpen] = useState(false);
-    
-    // NO FALLBACKS to current date. If timestamp is missing, it should reflect the real missing state.
+
     const dateObj = useMemo(() => {
         if (!log.timestamp) return null;
         let tsStr = log.timestamp.replace(' ', 'T');
-        // If from backend it might lack timezone indicator, assume UTC
-        if (!tsStr.endsWith('Z') && !tsStr.includes('+')) tsStr += 'Z';
-        
+        // Handle postgres +00 output making it standard ISO 8601
+        if (tsStr.endsWith('+00')) {
+            tsStr = tsStr.replace(/\+00$/, 'Z');
+        } else if (!tsStr.endsWith('Z') && !tsStr.includes('+')) {
+            tsStr += 'Z';
+        }
+
+        // Safari bugs out on 6-digit microseconds (e.g. .123456Z). Truncate to 3 digits.
+        tsStr = tsStr.replace(/\.(\d{3})\d+(Z|[+-][0-9:]+)$/, '.$1$2');
+
         const d = new Date(tsStr);
         if (isNaN(d.getTime())) return null;
-        
+
         // Output UTC+8 regardless of browser local time
         const utc8Time = d.getTime() + (8 * 60 * 60 * 1000);
         return new Date(utc8Time);
@@ -759,18 +984,90 @@ function DecisionCard({ log }) {
     if (!dateObj) return null; // Don't render a card with fake time
 
     const formattedDate = `${dateObj.getUTCFullYear()}/${dateObj.getUTCMonth() + 1}/${dateObj.getUTCDate()} ${String(dateObj.getUTCHours()).padStart(2, '0')}:${String(dateObj.getUTCMinutes()).padStart(2, '0')}:${String(dateObj.getUTCSeconds()).padStart(2, '0')}`;
-    
-    // Logic: '执行' if decision implies an action, otherwise '等待'
-    const isExecution = log.strategy_decision?.toLowerCase().includes('open') || 
-                        log.strategy_decision?.toLowerCase().includes('close') ||
-                        (log.actions_taken && log.actions_taken !== '[]');
+
+    // Logic: '执行' if decision actually executed market orders, otherwise '等待'
+    let isExecution = false;
+    let activeActions = [];
+    try {
+        if (log.actions_taken && log.actions_taken !== '[]') {
+            const actions = JSON.parse(log.actions_taken);
+            if (Array.isArray(actions)) {
+                activeActions = actions.filter(a => typeof a === 'string' && !a.toUpperCase().startsWith('HOLD'));
+                if (activeActions.length > 0) isExecution = true;
+            } else if (typeof actions === 'string' && !actions.toUpperCase().startsWith('HOLD')) {
+                activeActions = [actions];
+                isExecution = true;
+            }
+        }
+    } catch {
+        if (log.actions_taken && !log.actions_taken.toUpperCase().includes('HOLD') && log.actions_taken !== '[]') {
+            activeActions = [log.actions_taken];
+            isExecution = true;
+        }
+    }
+
+    const trader = traderInstances?.find(t => String(t.id) === String(log.trader_instance_id));
+    const account = accounts?.find(a => String(a.id) === String(trader?.exchange_account_id));
+    const llm = llmConfigs?.find(l => String(l.id) === String(trader?.llm_config_id));
+
+    const exchangeName = account ? account.exchange : (log.trader_instance_id ? '配置已删' : '迁移数据');
+    const modelName = llm ? llm.provider : (log.trader_instance_id ? '配置已删' : '未知体系');
+
+    const renderProviderLogo = (name, type) => {
+        const lowerName = name?.toLowerCase() || '';
+        
+        let logoUrl = null;
+        if (type === 'exchange') {
+            if (lowerName === 'binance') {
+                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg";
+            } else if (lowerName === 'okx') {
+                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg";
+            }
+        } else {
+            if (lowerName === 'openai') {
+                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/openai.svg";
+            } else if (lowerName === 'anthropic' || lowerName.includes('claude')) {
+                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Claude.svg";
+            } else if (lowerName === 'deepseek') {
+                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/deepseek.svg";
+            } else if (lowerName === 'google' || lowerName === 'gemini') {
+                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg";
+            }
+        }
+
+        if (logoUrl) {
+            return (
+                <div className="flex items-center justify-center p-0.5" title={name}>
+                    <img src={logoUrl} alt={name} className="w-3.5 h-3.5 object-contain" />
+                </div>
+            );
+        }
+
+        // Fallback to text if missing logo
+        const colorClass = type === 'exchange' ? 'bg-white/5 border-white/10 text-slate-400' : 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400';
+        return <span className={`px-1.5 py-[1px] rounded border text-[8px] capitalize tracking-widest ${colorClass}`}>{name}</span>;
+    };
 
     return (
-        <div className={`p-4 rounded-2xl border transition-all ${open ? 'bg-[#0a0d0f] border-emerald-500/30' : 'bg-[#0e1215]/40 border-white/5 hover:border-white/10'}`}>
+        <div onClick={() => setOpen(!open)} className={`p-4 rounded-2xl border transition-all cursor-pointer ${open ? 'bg-[#0a0d0f] border-emerald-500/30' : 'bg-[#0e1215]/40 border-white/5 hover:border-white/10'}`}>
             <div className="flex items-center justify-between mb-2">
-                <div className="text-[9px] font-mono text-slate-500 font-bold">{formattedDate}</div>
-                <div className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase ${isExecution ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'}`}>
-                    {isExecution ? '执行' : '等待'}
+                <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-mono text-slate-500 font-bold">{formattedDate}</span>
+                    {renderProviderLogo(exchangeName, 'exchange')}
+                    {renderProviderLogo(modelName, 'llm')}
+                </div>
+                <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">本轮决策：</span>
+                    {!isExecution && (
+                        <div className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                            等待
+                        </div>
+                    )}
+                    {isExecution && activeActions.map((act, i) => (
+                        <div key={i} className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            {act}
+                        </div>
+                    ))}
                 </div>
             </div>
             <div className="flex items-center justify-between gap-4 py-1">
@@ -778,9 +1075,9 @@ function DecisionCard({ log }) {
                     <Target className="w-3.5 h-3.5 text-emerald-400" />
                     <div className="text-xs font-black text-slate-100 uppercase">{log.symbols}</div>
                 </div>
-                <button onClick={() => setOpen(!open)} className="p-1 hover:bg-white/5 rounded-lg text-slate-500 transition-all">
+                <div className="p-1 rounded-lg text-slate-500 transition-all">
                     <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
-                </button>
+                </div>
             </div>
             {open && (
                 <div className="mt-3 pt-3 border-t border-white/5 space-y-3 animate-in slide-in-from-top-1 duration-300">

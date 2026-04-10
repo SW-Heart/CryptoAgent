@@ -281,7 +281,7 @@ def _get_binance_client_fallback(user_id: str):
 
                 ea_id = ti_row["exchange_account_id"]
                 cur.execute(
-                    "SELECT metadata_json, environment FROM exchange_accounts WHERE id = %s AND user_id = %s",
+                    "SELECT provider, metadata_json, environment FROM exchange_accounts WHERE id = %s AND user_id = %s",
                     (ea_id, user_id)
                 )
                 ea_row = cur.fetchone()
@@ -312,8 +312,24 @@ def _get_binance_client_fallback(user_id: str):
             except Exception:
                 api_secret = ""
 
+        passphrase = meta.get("passphrase", "")
+        if passphrase and passphrase.startswith("gAAAA"):
+            try:
+                from binance_client import decrypt_value
+                passphrase = decrypt_value(passphrase)
+            except Exception:
+                passphrase = ""
+
         if api_key and api_secret:
-            client = BinanceFuturesClient(api_key=api_key, api_secret=api_secret, testnet=is_testnet)
+            provider = ea_row.get("provider", "binance") if "provider" in ea_row.keys() else "binance"
+            from exchange_factory import create_exchange_client
+            client = create_exchange_client(
+                provider=provider,
+                api_key=api_key,
+                api_secret=api_secret,
+                passphrase=passphrase,
+                environment=environment
+            )
             return client, None
         return None, "API credentials empty"
     except Exception as e:

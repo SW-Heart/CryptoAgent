@@ -116,6 +116,7 @@ class UserContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if "/runs" in str(request.url) or "/agent" in str(request.url):
             user_id = None
+            trader_instance_id = None
             try:
                 user_id = request.query_params.get("user_id")
                 if not user_id and request.method == "POST":
@@ -126,16 +127,23 @@ class UserContextMiddleware(BaseHTTPMiddleware):
                             try:
                                 data = json.loads(body)
                                 user_id = data.get("user_id")
+                                trader_instance_id = data.get("trader_instance_id")
                             except: pass
                         elif "form" in content_type or "urlencoded" in content_type:
                             try:
                                 from urllib.parse import parse_qs
                                 form_data = parse_qs(body.decode("utf-8"))
                                 user_id = form_data.get("user_id", [None])[0]
+                                trader_instance_id = form_data.get("trader_instance_id", [None])[0]
                             except: pass
                         request._body = body
                 if user_id:
                     set_current_user(user_id)
+                if trader_instance_id:
+                    try:
+                        from tools.trading_tools import set_current_trader_id
+                        set_current_trader_id(int(trader_instance_id))
+                    except: pass
             except Exception as e:
                 print(f"[UserContext] Error: {e}")
         return await call_next(request)
@@ -186,6 +194,11 @@ async def run_agent(
         # 执行 endpoint）。必须在 endpoint 函数内部再次设置，确保 asyncio.to_thread
         # 复制 context 时能获取到正确的 user_id。
         set_current_user(user_id)
+        if trader_instance_id:
+            try:
+                from tools.trading_tools import set_current_trader_id
+                set_current_trader_id(int(trader_instance_id))
+            except: pass
         
         # 使用 asyncio.to_thread 在线程池中运行同步的 agent.run()，
         # 避免阻塞事件循环，确保其他 HTTP 请求（前端轮询等）不被卡住
@@ -208,5 +221,6 @@ from app.routers.strategy import router as strategy_router
 from app.routers.workspace import router as workspace_router
 app.include_router(strategy_router)
 app.include_router(workspace_router)
+
 
 print("[Main] CryptoAgent Backend Streamlined - Focus: Pure Strategy Trading with Multi-LLM Support")

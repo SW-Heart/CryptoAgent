@@ -73,23 +73,44 @@ def _get_trading_client(user_id: str, require_trading_enabled: bool = True):
     # ===== 路径 B: 新系统 exchange_accounts =====
     try:
         from app.database import get_db_connection
+        from tools.trading_tools import get_current_trader_id
+        
+        trader_id = None
+        try:
+            trader_id = get_current_trader_id()
+        except Exception:
+            pass
+
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
-                # 查找用户关联的 exchange_account（优先 connected + default，允许非 connected）
-                cur.execute("""
-                    SELECT ea.id, ea.metadata_json, ea.environment
-                    FROM exchange_accounts ea
-                    WHERE ea.user_id = %s
-                    ORDER BY ea.is_connected DESC, ea.is_default DESC, ea.id ASC
-                    LIMIT 1
-                """, (user_id,))
-                ea_row = cur.fetchone()
+                ea_row = None
+                
+                # 1. 优先通过上下文中获取到的 trader_id 精准锁定绑定的交易所账户
+                if trader_id:
+                    cur.execute('''
+                        SELECT ea.id, ea.provider, ea.metadata_json, ea.environment
+                        FROM trader_instances ti
+                        JOIN exchange_accounts ea ON ea.id = ti.exchange_account_id
+                        WHERE ti.id = %s AND ti.user_id = %s
+                    ''', (trader_id, user_id))
+                    ea_row = cur.fetchone()
+
+                # 2. 否则按全局 connected + default 查找
+                if not ea_row:
+                    cur.execute('''
+                        SELECT ea.id, ea.provider, ea.metadata_json, ea.environment
+                        FROM exchange_accounts ea
+                        WHERE ea.user_id = %s
+                        ORDER BY ea.is_connected DESC, ea.is_default DESC, ea.id ASC
+                        LIMIT 1
+                    ''', (user_id,))
+                    ea_row = cur.fetchone()
 
                 # 如果直接查不到，通过 trader_instances 关联查
                 if not ea_row:
                     cur.execute("""
-                        SELECT ea.id, ea.metadata_json, ea.environment
+                        SELECT ea.id, ea.provider, ea.metadata_json, ea.environment
                         FROM trader_instances ti
                         JOIN exchange_accounts ea ON ea.id = ti.exchange_account_id
                         WHERE ti.user_id = %s AND ti.exchange_account_id IS NOT NULL
@@ -123,6 +144,8 @@ def _get_trading_client(user_id: str, require_trading_enabled: bool = True):
         from binance_client import decrypt_value
         api_key = raw_key
         api_secret = raw_secret
+        passphrase = meta.get("passphrase", "")
+        
         if raw_key and raw_key.startswith("gAAAA"):
             try:
                 api_key = decrypt_value(raw_key)
@@ -133,12 +156,26 @@ def _get_trading_client(user_id: str, require_trading_enabled: bool = True):
                 api_secret = decrypt_value(raw_secret)
             except Exception:
                 api_secret = ""
+        if passphrase and passphrase.startswith("gAAAA"):
+            try:
+                passphrase = decrypt_value(passphrase)
+            except Exception:
+                passphrase = ""
 
         if not api_key or not api_secret:
             return None, "Exchange account API credentials are empty or decryption failed."
 
-        client = BinanceFuturesClient(api_key=api_key, api_secret=api_secret, testnet=is_testnet)
-        print(f"[BinanceTrading] Client created via exchange_accounts (env={environment}) for user {user_id[:8]}")
+        provider = ea_row.get("provider", "binance")
+        
+        from exchange_factory import create_exchange_client
+        client = create_exchange_client(
+            provider=provider,
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+            environment=environment
+        )
+        print(f"[TradingTools] Client created via exchange_accounts (provider={provider}, env={environment}) for user {user_id[:8]}")
         return client, None
 
     except Exception as e:

@@ -17,6 +17,14 @@ STRATEGY_ADMIN_USER_ID = "ee20fa53-5ac2-44bc-9237-41b308e291d8"
 # threading.local() doesn't work well with async/await, use contextvars instead
 from contextvars import ContextVar
 _current_user_id: ContextVar[str] = ContextVar('current_user_id', default=None)
+_current_trader_id: ContextVar[int] = ContextVar('current_trader_id', default=None)
+_session_actions: ContextVar[list] = ContextVar('session_actions')
+
+def set_current_trader_id(trader_id: int):
+    _current_trader_id.set(trader_id)
+
+def get_current_trader_id() -> int:
+    return _current_trader_id.get()
 
 def set_current_user(user_id: str):
     """Set the current user ID for this request (async-safe)"""
@@ -34,6 +42,24 @@ def is_admin(user_id: str = None) -> bool:
     if user_id is None:
         user_id = get_current_user()
     return user_id == STRATEGY_ADMIN_USER_ID
+
+def add_session_action(action: str):
+    """Add a recorded execution action to the current strategy session"""
+    try:
+        actions = _session_actions.get()
+    except LookupError:
+        actions = []
+        _session_actions.set(actions)
+    actions.append(action)
+
+def get_and_clear_session_actions() -> list:
+    """Retrieve and wipe the recorded actions for the current session"""
+    try:
+        actions = _session_actions.get()
+        _session_actions.set([])
+        return actions
+    except LookupError:
+        return []
 
 from app.database import get_db_connection as get_db
 
@@ -105,18 +131,30 @@ def log_strategy_analysis(
                 "round_id": round_id,
                 "message": f"Strategy log for {symbols} already exists (skipped duplicate)"
             }
+        # 强制使用上下文里的 User ID 和 Trader ID，绝不能信任 LLM 传进来的 user_id，因为它经常幻觉传 'admin'
+        ctx_user_id = get_current_user()
+        ctx_trader_id = get_current_trader_id()
+        
+        # Override the agent's hallucinated "action_taken" with strict server-side tracking
+        actual_actions = get_and_clear_session_actions()
+        if not actual_actions:
+            actual_actions = ["HOLD"]
+            
+        import json
         
         cursor.execute("""
-            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp")
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp", user_id, trader_instance_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s)
         """, (
             round_id,
             symbols,
             market_analysis[:2000] if market_analysis else "",
             position_check[:1000] if position_check else "",
             strategy_decision[:1000] if strategy_decision else "",
-            f'["{action_taken}"]',
-            f"Strategy analysis at {round_id}: {strategy_decision[:500]}"
+            json.dumps(actual_actions),
+            f"Strategy analysis at {round_id}: {strategy_decision[:500]}",
+            ctx_user_id,
+            str(ctx_trader_id) if ctx_trader_id else None
         ))
         conn.commit()
     conn.close()
@@ -388,6 +426,8 @@ def close_position(position_id: int, reason: str = "manual", user_id: str = None
         
         conn.commit()
         
+        add_session_action(f"CLOSE_{pos['direction']}_{pos['symbol']}")
+        
         # Get updated balance for return value
         cursor.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = %s", (position_user_id,))
         wallet = cursor.fetchone()
@@ -545,10 +585,13 @@ def partial_close_position(
                     updated_at = CURRENT_TIMESTAMP
                 WHERE user_id = %s
             """, (margin_to_release, realized_pnl, realized_pnl, position_user_id))
-        
+            
         conn.commit()
         
-        # Get updated balance
+        # Add to session tracking
+        add_session_action(f"PARTIAL_CLOSE_{pos['direction']}_{pos['symbol']}_{int(close_percent)}%")
+        
+        # Get updated balance for return value
         cursor.execute("SELECT current_balance FROM virtual_wallet WHERE user_id = %s", (position_user_id,))
         wallet = cursor.fetchone()
     conn.close()
@@ -720,6 +763,12 @@ def update_stop_loss_take_profit(position_id: int, new_sl: float = None, new_tp:
         """, (position_id, pos["symbol"], new_sl, new_tp))
         
         conn.commit()
+        
+        info = []
+        if new_sl is not None: info.append("SL")
+        if new_tp is not None: info.append("TP")
+        add_session_action(f"MODIFY_{'+'.join(info)}_{pos['symbol']}")
+        
     conn.close()
     
     return {

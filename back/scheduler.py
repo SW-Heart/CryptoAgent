@@ -291,7 +291,7 @@ from app.database import get_db_connection as get_db
 
 # get_db replaced by import
 
-def log_strategy_round(round_id: str, symbols: str, response: dict):
+def log_strategy_round(round_id: str, symbols: str, response: dict, user_id: str = None, trader_instance_id: str = None):
     """Save strategy log to database"""
     try:
         conn = get_db()
@@ -336,9 +336,9 @@ def log_strategy_round(round_id: str, symbols: str, response: dict):
                 return
             
             cursor.execute("""
-                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp")
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000]))
+                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp", user_id, trader_instance_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s)
+            """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000], user_id, trader_instance_id))
             
             conn.commit()
         conn.close()
@@ -624,11 +624,11 @@ def _run_trader_instance(trader: dict, round_id: str):
                 print(f"[Scheduler] Failed to update last_analyzed_at for Profile #{profile_id}: {db_e}")
         else:
             print(f"[Scheduler] Error for Trader #{trader_instance_id}: {response.status_code} - {response.text[:200]}")
-            log_strategy_round(round_id, symbols, {"content": f"Error: {response.status_code}"})
+            log_strategy_round(round_id, symbols, {"content": f"Error: {response.status_code}"}, user_id=user_id, trader_instance_id=str(trader_instance_id))
             
     except Exception as e:
         print(f"[Scheduler] Exception executing Trader #{trader_instance_id}: {e}")
-        log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"})
+        log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"}, user_id=user_id, trader_instance_id=str(trader_instance_id))
 
 
 

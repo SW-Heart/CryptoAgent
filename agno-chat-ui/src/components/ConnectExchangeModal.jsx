@@ -59,7 +59,7 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
     const SERVER_IP = "47.243.12.88"; 
 
     const platforms = [
-        { id: 'okx', name: 'OKX', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg', comingSoon: true },
+        { id: 'okx', name: 'OKX', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg', comingSoon: false },
         { id: 'binance', name: 'Binance', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg', comingSoon: false }
     ];
 
@@ -194,6 +194,10 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                     <Input label="API Key" placeholder="请输入 API Key" icon={Key} value={formData.api_key} onChange={v => { setFormData(f => ({ ...f, api_key: v })); setError(null); }} />
 
                     <Input label="Secret Key" type="password" placeholder="请输入 Secret Key" value={formData.api_secret} onChange={v => { setFormData(f => ({ ...f, api_secret: v })); setError(null); }} />
+                    
+                    {platform === 'okx' && (
+                        <Input label="Passphrase" type="password" placeholder="请输入 API Passphrase" value={formData.passphrase} onChange={v => { setFormData(f => ({ ...f, passphrase: v })); setError(null); }} />
+                    )}
 
                     <div className="space-y-2 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10 animate-in slide-in-from-top-2">
                         <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest ml-1 flex items-center justify-between">
@@ -201,7 +205,7 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                             <button onClick={handleCopyIp} className="hover:text-indigo-300 flex items-center gap-1 font-black text-[9px] uppercase tracking-wider"><Copy className="w-3 h-3"/> 复制 IP</button>
                         </label>
                         <div className="text-xs font-mono text-slate-300 break-all bg-black/20 p-2.5 rounded-xl border border-white/5">{SERVER_IP}</div>
-                        <p className="text-[10px] text-slate-500 leading-relaxed font-medium">币安强烈建议开启 IP 绑定。请将上方 IP 填入币安 API 设置的白名单中。</p>
+                        <p className="text-[10px] text-slate-500 leading-relaxed font-medium">{selectedPlatform?.name || '交易平台'}强烈建议开启 IP 绑定。请将上方 IP 填入 API 设置的白名单中。</p>
                     </div>
                 </div>
 

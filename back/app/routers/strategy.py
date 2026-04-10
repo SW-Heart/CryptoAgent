@@ -3,6 +3,21 @@ Strategy API router.
 Handles virtual trading, positions, and strategy logs.
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+
+def _get_active_client(user_id: str):
+    from app.services.workspace_service import list_trader_instances
+    from tools.trading_tools import set_current_trader_id
+    from tools.binance_trading_tools import _get_trading_client
+    
+    instances = list_trader_instances(user_id)
+    primary = next((i for i in instances if i.get("status") == "RUNNING"), None)
+    if not primary:
+        primary = instances[0] if instances else None
+    
+    if primary and primary.get("exchange_account_id"):
+        set_current_trader_id(primary["id"])
+    return _get_trading_client(user_id, require_trading_enabled=False)
+
 import os
 from datetime import datetime
 from app.database import get_db_connection as get_db_connection
@@ -155,9 +170,12 @@ def migrate_tables():
                  print(f"[Strategy] positions migration note: {e}")
 
             # Fix data: populate missing user_ids
-            cursor.execute("UPDATE positions SET user_id = %s WHERE user_id IS NULL", (STRATEGY_ADMIN_USER_ID,))
-            
-            print("[Strategy] Migrations completed")
+            # strategy_logs extensions
+            try:
+                cursor.execute("ALTER TABLE strategy_logs ADD COLUMN IF NOT EXISTS user_id TEXT")
+                cursor.execute("ALTER TABLE strategy_logs ADD COLUMN IF NOT EXISTS trader_instance_id TEXT")
+            except Exception as e:
+                print(f"[Strategy] strategy_logs migration note: {e}")
                 
         conn.commit()
     except Exception as e:
@@ -182,135 +200,72 @@ def get_wallet(user_id: str = None):
         from app.services.workspace_service import list_trader_instances, list_exchange_accounts, _normalize_json
         from tools.binance_trading_tools import binance_get_positions_summary
         from binance_client import BinanceFuturesClient, has_user_api_keys
-        
         # 1. 尝试从 Workspace 查找当前的实盘账户绑定
-        instances = list_trader_instances(user_id)
-        primary = next((i for i in instances if i["slug"] == "primary-runtime"), None)
-        if not primary:
-            primary = instances[0] if instances else None
-        
-        exchange_account_id = primary.get("exchange_account_id") if primary else None
+        client, err = _get_active_client(user_id)
         
         # 如果有关联的交易所账户，尝试获取真实余额
-        if exchange_account_id:
+        if client:
             result = None
             last_exchange_error = None
             
-            # 路径 A: 优先尝试旧版 Binance 密钥（user_binance_keys 表）
-            if has_user_api_keys(user_id):
-                result = binance_get_positions_summary(user_id)
-                if "error" in result:
-                    last_exchange_error = result.get("error")
-                    result = None
-            
-            # 路径 B: 回退到 Workspace 交易所账户凭证（exchange_accounts.metadata_json）
-            if result is None:
-                try:
-                    # 直接从数据库读取原始凭证（可能已加密），而非通过脱敏的 list 接口
-                    conn_ws = get_db_connection()
-                    try:
-                        with conn_ws.cursor() as ws_cursor:
-                            ws_cursor.execute(
-                                "SELECT metadata_json, environment FROM exchange_accounts WHERE id = %s AND user_id = %s",
-                                (exchange_account_id, user_id)
-                            )
-                            ea_row = ws_cursor.fetchone()
-                    finally:
-                        conn_ws.close()
+            try:
+                balance = client.get_usdt_balance()
+                if "error" not in balance:
+                    positions = client.get_positions()
+                    open_positions = positions if isinstance(positions, list) else []
+                    total_margin = 0
+                    total_unrealized = balance.get("unrealized_pnl", 0)
+                    for pos in open_positions:
+                        entry_price = pos.get("entry_price", 0)
+                        quantity = pos.get("quantity", 0)
+                        leverage = pos.get("leverage", 10)
+                        notional = quantity * entry_price
+                        margin = notional / leverage if leverage > 0 else notional
+                        total_margin += margin
                     
-                    if ea_row:
-                        meta = _normalize_json(ea_row["metadata_json"]) if ea_row["metadata_json"] else {}
-                        raw_key = meta.get("api_key", "")
-                        raw_secret = meta.get("api_secret", "")
-                        environment = ea_row.get("environment", "demo")
-                        is_testnet = environment in ("testnet", "demo")
-                        
-                        # 解密凭证（如果已加密）
-                        api_key = raw_key
-                        api_secret = raw_secret
-                        if raw_key and raw_key.startswith("gAAAA"):
-                            try:
-                                from binance_client import decrypt_value
-                                api_key = decrypt_value(raw_key)
-                            except Exception as dec_e:
-                                print(f"[Strategy] Failed to decrypt api_key for account {exchange_account_id}: {dec_e}")
-                                api_key = ""
-                        if raw_secret and raw_secret.startswith("gAAAA"):
-                            try:
-                                from binance_client import decrypt_value
-                                api_secret = decrypt_value(raw_secret)
-                            except Exception as dec_e:
-                                print(f"[Strategy] Failed to decrypt api_secret for account {exchange_account_id}: {dec_e}")
-                                api_secret = ""
-                        
-                        if api_key and api_secret:
-                            client = BinanceFuturesClient(
-                                api_key=api_key,
-                                api_secret=api_secret,
-                                testnet=is_testnet
-                            )
-                            balance = client.get_usdt_balance()
-                            if "error" not in balance:
-                                positions = client.get_positions()
-                                open_positions = positions if isinstance(positions, list) else []
-                                total_margin = 0
-                                total_unrealized = balance.get("unrealized_pnl", 0)
-                                for pos in open_positions:
-                                    entry_price = pos.get("entry_price", 0)
-                                    quantity = pos.get("quantity", 0)
-                                    leverage = pos.get("leverage", 10)
-                                    notional = quantity * entry_price
-                                    margin = notional / leverage if leverage > 0 else notional
-                                    total_margin += margin
-                                
-                                result = {
-                                    "wallet_balance": balance.get("wallet_balance", 0),
-                                    "margin_balance": balance.get("margin_balance", 0),
-                                    "available_balance": balance.get("available_balance", 0),
-                                    "unrealized_pnl": total_unrealized,
-                                    "equity": balance.get("margin_balance", 0),
-                                    "margin_in_use": round(total_margin, 2),
-                                    "balance_breakdown": balance.get("assets", [])
-                                }
-                            else:
-                                last_exchange_error = balance.get('error')
-                                print(f"[Strategy] Workspace exchange balance error: {last_exchange_error}")
-                        else:
-                            last_exchange_error = f"Workspace exchange account {exchange_account_id} has no API credentials in metadata"
-                            print(f"[Strategy] {last_exchange_error}")
-                except Exception as ws_e:
-                    last_exchange_error = str(ws_e)
-                    print(f"[Strategy] Workspace exchange fallback error: {ws_e}")
-            
+                    result = {
+                        "wallet_balance": balance.get("wallet_balance", 0),
+                        "margin_balance": balance.get("margin_balance", 0),
+                        "available_balance": balance.get("available_balance", 0),
+                        "unrealized_pnl": total_unrealized,
+                        "equity": balance.get("margin_balance", 0) if balance.get("margin_balance", 0) > 0 else balance.get("wallet_balance", 0) + total_unrealized,
+                        "margin_in_use": round(total_margin, 2),
+                        "balance_breakdown": balance.get("assets", [])
+                    }
+                else:
+                    last_exchange_error = balance.get('error')
+                    print(f"[Strategy] Workspace exchange balance error: {last_exchange_error}")
+            except Exception as e:
+                last_exchange_error = str(e)
+                print(f"[Strategy] Error getting balance via active client: {e}")
+                
             if result and "error" not in result:
-                # 获取数据库记录的累计盈亏统计
-                conn = get_db_connection()
-                total_pnl = 0
-                total_trades = 0
-                win_trades = 0
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("""
-                            SELECT SUM(total_pnl), SUM(total_trades), SUM(win_trades)
-                            FROM binance_sync_state
-                            WHERE user_id = %s
-                        """, (user_id,))
-                        row = cursor.fetchone()
-                        if row and row[0] is not None:
-                            total_pnl = row[0]
-                            total_trades = row[1]
-                            win_trades = row[2]
-                except Exception as db_e:
-                    print(f"[Strategy] Error fetching stats: {db_e}")
-                finally:
-                    conn.close()
+                # 只如果是 binance，才走老的 local DB history aggregate
+                total_pnl, total_trades, win_trades, win_rate = 0, 0, 0, 0
+                if client.__class__.__name__ == "BinanceFuturesClient":
+                    conn = get_db_connection()
+                    try:
+                        with conn.cursor() as cursor:
+                            cursor.execute("""
+                                SELECT SUM(total_pnl), SUM(total_trades), SUM(win_trades)
+                                FROM binance_sync_state
+                                WHERE user_id = %s
+                            """, (user_id,))
+                            row = cursor.fetchone()
+                            if row and row[0] is not None:
+                                total_pnl = row[0]
+                                total_trades = row[1]
+                                win_trades = row[2]
+                    except Exception as db_e:
+                        print(f"[Strategy] Error fetching stats: {db_e}")
+                    finally:
+                        conn.close()
 
-                win_rate = 0
-                if total_trades > 0:
-                    win_rate = round(win_trades / total_trades * 100, 1)
+                    if total_trades > 0:
+                        win_rate = round(win_trades / total_trades * 100, 1)
 
                 return {
-                    "source": "binance",
+                    "source": "exchange",
                     "initial_balance": None,
                     "current_balance": result.get("wallet_balance", 0),
                     "available_balance": result.get("available_balance", 0),
@@ -447,37 +402,20 @@ def get_positions(status: str = "OPEN", user_id: str = None):
             })
         return positions
     
-    # 如果用户启用了 Binance 交易，使用 Binance 数据
+    # 实盘数据获取
     if user_id:
         try:
-            from tools.binance_trading_tools import binance_get_positions_summary, _get_trading_client
-            from binance_client import get_user_trading_status, has_user_api_keys
-            
-            # 路径 A: 旧系统 (user_binance_keys + user_trading_status)
-            if has_user_api_keys(user_id):
-                trading_status = get_user_trading_status(user_id)
-                if trading_status.get("is_configured") and trading_status.get("is_trading_enabled"):
-                    result = binance_get_positions_summary(user_id)
-                    if "error" not in result:
-                        return {"source": "binance", "positions": _format_binance_positions(result)}
-            
-            # 路径 B: 新系统 Workspace (exchange_accounts)
-            # 查看是否有关联的 exchange_account
-            from app.services.workspace_service import list_trader_instances
-            instances = list_trader_instances(user_id)
-            primary = next((i for i in instances if i["slug"] == "primary-runtime"), None)
-            if not primary:
-                primary = instances[0] if instances else None
-            
-            if primary and primary.get("exchange_account_id"):
-                # 使用 _get_trading_client 统一获取 client (支持双路径)
+            from tools.binance_trading_tools import binance_get_positions_summary
+            # 使用提取出的公用方法获取最新 active_client
+            client, err = _get_active_client(user_id)
+            if client:
                 result = binance_get_positions_summary(user_id)
                 if isinstance(result, dict) and "error" not in result:
-                    return {"source": "binance", "positions": _format_binance_positions(result)}
+                    return {"source": "exchange", "positions": _format_binance_positions(result)}
                 else:
-                    print(f"[Strategy] Binance positions via Workspace failed: {result.get('error', 'unknown') if isinstance(result, dict) else result}")
+                    print(f"[Strategy] Positions via Workspace failed: {result.get('error', 'unknown') if isinstance(result, dict) else result}")
         except Exception as e:
-            print(f"[Strategy] Binance positions error: {e}")
+            print(f"[Strategy] Exchange positions error: {e}")
     
     # 虚拟交易模式（Demo）
     try:
@@ -592,40 +530,23 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
         symbols: Comma-separated symbols for history lookup (Binance requires symbol for history)
     """
     try:
-        # 如果 user_id 提供且已配置 Binance，获取 Binance 订单
+        # 如果 user_id 提供，通过 _get_active_client 统一获取客户端
         if user_id:
-            client = None
-            
-            # 路径 A: 旧系统 (user_binance_keys)
-            from binance_client import has_user_api_keys, get_user_trading_status, get_user_binance_client
-            if has_user_api_keys(user_id):
-                trading_status = get_user_trading_status(user_id)
-                if trading_status.get("is_configured"):
-                    client = get_user_binance_client(user_id)
-            
-            # 路径 B: 新系统 Workspace (exchange_accounts)
-            if not client:
-                try:
-                    from tools.binance_trading_tools import _get_trading_client
-                    client, err = _get_trading_client(user_id, require_trading_enabled=False)
-                    if err:
-                        client = None
-                except Exception:
-                    client = None
+            client, err = _get_active_client(user_id)
             
             if client:
                 try:
-                    binance_orders = []
+                    exchange_orders = []
                     
                     if status == "OPEN":
-                        binance_orders = client.get_open_orders()
+                        exchange_orders = client.get_open_orders()
                         try:
                             # 尝试获取条件/算法订单
-                            algo_orders = client.get_open_algo_orders()
+                            algo_orders = client.get_open_algo_orders() if hasattr(client, "get_open_algo_orders") else []
                             if isinstance(algo_orders, list):
-                                if not isinstance(binance_orders, list):
-                                    binance_orders = []
-                                binance_orders.extend(algo_orders)
+                                if not isinstance(exchange_orders, list):
+                                    exchange_orders = []
+                                exchange_orders.extend(algo_orders)
                         except Exception as e:
                             print(f"[Strategy] Failed to fetch open algo orders: {e}")
                     else:
@@ -637,56 +558,80 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
                             try:
                                 sym_orders = client.get_order_history(symbol=sym, limit=limit)
                                 if isinstance(sym_orders, list):
-                                    binance_orders.extend(sym_orders)
+                                    exchange_orders.extend(sym_orders)
                             except Exception as e:
                                 print(f"[Strategy] Error fetching order history for {sym}: {e}")
                         
                         # Sort combined history by time desc
-                        binance_orders.sort(key=lambda x: x.get("time", 0), reverse=True)
-                        binance_orders = binance_orders[:limit]
+                        exchange_orders.sort(key=lambda x: x.get("time", 0) or x.get("updateTime", 0), reverse=True)
+                        exchange_orders = exchange_orders[:limit]
 
                     # 确保返回的是列表
-                    if not isinstance(binance_orders, list):
-                        if isinstance(binance_orders, dict) and "code" in binance_orders:
-                            print(f"[Strategy] Binance error: {binance_orders}")
-                            return {"orders": [], "source": "binance_error", "error": str(binance_orders)}
-                        binance_orders = []
+                    if not isinstance(exchange_orders, list):
+                        if isinstance(exchange_orders, dict) and "code" in exchange_orders:
+                            return {"orders": [], "source": "exchange_error", "error": str(exchange_orders)}
+                        exchange_orders = []
+                    
+                    # 提取当前用户的实际仓位大小，用于智能替换“全部平仓”条件单为确切的数量
+                    pos_map = {}
+                    try:
+                        raw_positions = client.get_positions()
+                        if isinstance(raw_positions, list):
+                            for p in raw_positions:
+                                sym_raw = p.get("symbol", "")
+                                qty = abs(float(p.get("quantity", 0) or 0))
+                                if qty > 0:
+                                    direction = p.get("direction", "LONG")
+                                    sym_short = sym_raw.replace("USDT", "").replace("-USDT-SWAP", "")
+                                    pos_map[(sym_short, direction)] = qty
+                    except Exception as e:
+                        print(f"[Strategy] Error fetching positions for quantity deduction: {e}")
                     
                     formatted_orders = []
-                    for order in binance_orders:
-                        side = order.get("side", "")
+                    for order in exchange_orders:
+                        side = order.get("side", "").upper()
                         
-                        # 解析订单类型：尝试多个字段
-                        order_type = order.get("type") or order.get("orderType") or ""
+                        # 解析订单类型：尝试多个字段 (Binance 和 OKX)
+                        order_type = order.get("type") or order.get("orderType") or order.get("ordType") or ""
+                        order_type = order_type.upper()
                         
                         # Algo 订单可能没有具体 type，需要从触发条件推断
                         if not order_type or order_type == "CONDITIONAL":
                             algo_type = order.get("algoType", "")
                             if algo_type == "CONDITIONAL":
-                                # 打印原始数据用于调试
-                                print(f"[Strategy] Algo order raw keys: {list(order.keys())}")
-                                
-                                # 从 triggerCondition 推断：ge = 价格上涨触发, le = 价格下跌触发
                                 trigger_cond = order.get("triggerCondition", "")
                                 if trigger_cond == "ge":
-                                    # 价格涨到触发：SELL=止盈(平多), BUY=止损(平空)
                                     order_type = "TAKE_PROFIT_MARKET" if side == "SELL" else "STOP_MARKET"
                                 elif trigger_cond == "le":
-                                    # 价格跌到触发：SELL=止损(平多), BUY=止盈(平空)
                                     order_type = "STOP_MARKET" if side == "SELL" else "TAKE_PROFIT_MARKET"
                                 else:
-                                    # 无法推断，用 bookSide 尝试
                                     book_side = order.get("bookSide", "")
-                                    if book_side:
-                                        order_type = f"CONDITIONAL_{book_side}"
-                                    else:
-                                        order_type = "CONDITIONAL"
+                                    order_type = f"CONDITIONAL_{book_side}" if book_side else "CONDITIONAL"
                             elif algo_type:
                                 order_type = algo_type
                         
                         is_reduce = str(order.get("reduceOnly", "")).lower() == "true"
                         is_close_position = str(order.get("closePosition", "")).lower() == "true"
                         is_conditional = order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")
+                        
+                        # 币安和OKX对于“全部平仓”数量往往为0，需要特殊处理
+                        try:
+                            orig_qty_val = float(order.get("origQty", 0.0) or 0.0)
+                        except:
+                            orig_qty_val = 0.0
+                            
+                        if is_conditional and orig_qty_val == 0.0:
+                            is_close_position = True
+                            
+                        # 智能数量补偿：如果返回值为0 且属于平仓动作，根据当前仓位大小自动填充真实数量
+                        if orig_qty_val == 0.0 and (is_close_position or is_reduce):
+                            sym = order.get("symbol", "").replace("USDT", "").replace("-USDT-SWAP", "")
+                            target_direction = "LONG" if side == "SELL" else "SHORT"
+                            deduced_qty = pos_map.get((sym, target_direction), 0.0)
+                            if deduced_qty > 0:
+                                orig_qty_val = deduced_qty
+                                # 当已经通过仓位填补了数字后，不再强制显示全部平仓，而是显示出精确数字
+                                is_close_position = False 
                         
                         # 判断方向：条件单/reduceOnly 是平仓单
                         if is_reduce or is_close_position or is_conditional:
@@ -724,19 +669,16 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
                             "direction": direction,
                             "action": action,
                             "type": order_type,
-                            "side": side,
-                            "quantity": safe_float(order.get("origQty") or order.get("quantity")),
-                            "filled_quantity": safe_float(order.get("executedQty")),
+                            "quantity": orig_qty_val,
+                            "executed_quantity": safe_float(order.get("executedQty")),
                             "price": safe_float(order.get("price")),
-                            "avg_price": safe_float(order.get("avgPrice")),
                             "stop_price": safe_float(order.get("stopPrice") or order.get("triggerPrice")),
                             "activation_price": safe_float(order.get("activationPrice")),
-                            "callback_rate": safe_float(order.get("priceRate") or order.get("callbackRate")),
-                            "close_position": str(order.get("closePosition", "")).lower() == "true",
-                            "reduce_only": str(order.get("reduceOnly", "")).lower() == "true",
+                            "callback_rate": safe_float(order.get("callbackRate")),
+                            "time": order.get("time") or order.get("updateTime"),
                             "status": status_val,
-                            "created_at": order.get("time") or order.get("updateTime"),
-                            "source": "binance"
+                            "reduce_only": is_reduce,
+                            "close_position": is_close_position
                         })
                     
                     return {"orders": formatted_orders, "source": "binance"}
@@ -787,7 +729,6 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.get("/trade-history")
 def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT", limit: int = 50):
     """
@@ -819,28 +760,12 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Fetch from Binance
+    # Fetch from Exchange
     try:
-        from binance_client import has_user_api_keys, get_user_binance_client
-        
-        client = None
-        
-        # 路径 A: 旧系统
-        if has_user_api_keys(user_id):
-            client = get_user_binance_client(user_id)
-        
-        # 路径 B: 新系统 Workspace
-        if not client:
-            try:
-                from tools.binance_trading_tools import _get_trading_client
-                client, err = _get_trading_client(user_id, require_trading_enabled=False)
-                if err:
-                    client = None
-            except Exception:
-                client = None
+        client, err = _get_active_client(user_id)
         
         if not client:
-            return {"trades": [], "source": "binance", "error": "No exchange account configured"}
+            return {"trades": [], "source": "exchange", "error": "No exchange account configured"}
             
         symbol_list = [s.strip().upper() for s in symbols.split(",")]
         all_trades = []
@@ -855,31 +780,30 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
                 
                 if isinstance(trades, list):
                     for t in trades:
-                        # Normalize fields
+                        # 客户端层已统一格式化，直接读取标准字段
                         all_trades.append({
                             "id": t.get("id"),
                             "order_id": t.get("orderId"),
                             "symbol": t.get("symbol"),
-                            "side": t.get("side"),
-                            "price": float(t.get("price", 0)),
-                            "quantity": float(t.get("qty", 0)),
-                            "quote_quantity": float(t.get("quoteQty", 0)),
-                            "realized_pnl": float(t.get("realizedPnl", 0)),
-                            "commission": float(t.get("commission", 0)),
-                            "commission_asset": t.get("commissionAsset"),
-                            "time": t.get("time"),
-                            "position_side": t.get("positionSide"),
+                            "side": t.get("side", ""),
+                            "position_side": t.get("positionSide", ""),
+                            "price": t.get("price", 0),
+                            "quantity": t.get("qty", 0),
+                            "quote_quantity": t.get("quoteQty", 0),
+                            "realized_pnl": t.get("realizedPnl", 0),
+                            "commission": t.get("commission", 0),
+                            "commission_asset": t.get("commissionAsset", "USDT"),
+                            "time": t.get("time", 0),
                             "maker": t.get("maker"),
-                            "source": "binance"
+                            "source": "exchange"
                         })
             except Exception as e:
                 print(f"[Strategy] Error fetching trades for {symbol}: {e}")
-                # Continue to next symbol
                 
         # Sort by time descending
         all_trades.sort(key=lambda x: x["time"], reverse=True)
         
-        return {"trades": all_trades, "source": "binance"}
+        return {"trades": all_trades, "source": "exchange"}
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -907,19 +831,32 @@ def get_position_history(
         raise HTTPException(status_code=400, detail="user_id is required")
     
     try:
-        from tools.binance_trading_tools import _get_trading_client
-        
-        client, err = _get_trading_client(user_id, require_trading_enabled=False)
-        if err:
-            return {"positions": [], "error": err}
+        # 统一使用 _get_active_client 获取当前实盘实例上下文
+        client, err = _get_active_client(user_id)
+        if err or not client:
+            return {"positions": [], "error": err or "No active exchange account configured"}
         
         symbol_list = [s.strip().upper() for s in symbols.split(",")]
         all_positions = []
+        
+        # 1. 检查是否有原生接口覆盖（只有子类真正实现了才使用，基类返回空列表不算）
+        # 判断方式：子类是否覆盖了基类的 get_position_history
+        from exchange_base import ExchangeClient
+        has_native = type(client).get_position_history is not ExchangeClient.get_position_history
         
         for sym in symbol_list:
             if not sym.endswith("USDT"):
                 sym += "USDT"
             
+            if has_native:
+                try:
+                    native_pos = client.get_position_history(symbol=sym, limit=limit)
+                    if isinstance(native_pos, list) and native_pos:
+                        all_positions.extend(native_pos)
+                        continue  # 有原生数据，跳过 trade 聚合
+                except Exception as e:
+                    print(f"[Strategy] Native get_position_history for {sym} failed: {e}")
+                
             try:
                 trades = client.get_trade_history(symbol=sym, limit=min(limit * 5, 500))
                 if not isinstance(trades, list):
@@ -1041,19 +978,21 @@ def get_income_history(
         raise HTTPException(status_code=400, detail="user_id is required")
     
     try:
-        from tools.binance_trading_tools import binance_get_income_history
+        client, err = _get_active_client(user_id)
+        if err or not client:
+            return {"records": [], "error": err or "No active exchange account"}
         
-        result = binance_get_income_history(
+        # 直接调用客户端的统一接口
+        records = client.get_income_history(
             symbol=symbol,
             income_type=income_type,
-            limit=limit,
-            user_id=user_id
+            limit=limit
         )
         
-        if "error" in result:
-            raise HTTPException(status_code=400, detail=result["error"])
+        if isinstance(records, dict) and "error" in records:
+            raise HTTPException(status_code=400, detail=records["error"])
         
-        return result
+        return {"records": records or [], "source": "exchange"}
         
     except HTTPException:
         raise
@@ -1211,20 +1150,22 @@ def change_position_mode(user_id: str, dual_side: bool):
 
 
 @router.get("/logs")
-def get_strategy_logs(limit: int = 10, offset: int = 0):
-    """Get strategy logs with pagination support"""
+def get_strategy_logs(user_id: str = None, limit: int = 10, offset: int = 0, trader_instance_id: str = None):
+    """Get strategy logs with pagination support, filtered by user_id"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+        
     try:
         conn = get_db_connection()
         
-        # Get total count for pagination
         with conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM strategy_logs")
+            # 降级：仅按 user_id，不论 trader_instance_id
+            cursor.execute("SELECT COUNT(*) FROM strategy_logs WHERE user_id = %s OR user_id IS NULL", (user_id,))
             total_count = cursor.fetchone()[0]
             
-            # Get paginated logs
             cursor.execute(
-                "SELECT * FROM strategy_logs ORDER BY timestamp DESC LIMIT %s OFFSET %s",
-                (limit, offset)
+                "SELECT * FROM strategy_logs WHERE user_id = %s OR user_id IS NULL ORDER BY timestamp DESC LIMIT %s OFFSET %s",
+                (user_id, limit, offset)
             )
             rows = cursor.fetchall()
         conn.close()
@@ -1240,16 +1181,52 @@ def get_strategy_logs(limit: int = 10, offset: int = 0):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/logs")
-def clear_strategy_logs():
-    """Clear all strategy logs"""
+
+@router.get("/logs-debug")
+def debug_logs():
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM strategy_logs")
+            cursor.execute("SELECT id, user_id, trader_instance_id, symbols FROM strategy_logs ORDER BY timestamp DESC LIMIT 10")
+            rows = cursor.fetchall()
+            
+            cursor.execute("SELECT id, user_id, status, is_enabled FROM trader_instances")
+            instances = cursor.fetchall()
+            
+            return {
+                "debug_logs": [dict(r) for r in rows],
+                "instances": [dict(i) for i in instances]
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
+@router.delete("/logs")
+def clear_strategy_logs(user_id: str = None):
+    """Clear strategy logs for the active trader instance"""
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+        
+    try:
+        from app.routers.strategy import _get_active_client
+        from app.services.workspace_service import list_trader_instances
+        
+        # 确定当前实盘实例
+        instances = list_trader_instances(user_id)
+        primary = next((i for i in instances if i["status"] == "RUNNING"), None)
+        if not primary:
+            primary = next((i for i in instances if i["is_enabled"]), None)
+            
+        instance_id = str(primary["id"]) if primary else None
+        
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            if instance_id:
+                cursor.execute("DELETE FROM strategy_logs WHERE trader_instance_id = %s", (instance_id,))
+            else:
+                cursor.execute("DELETE FROM strategy_logs WHERE user_id = %s", (user_id,))
             conn.commit()
         conn.close()
-        return {"success": True, "message": "Strategy logs cleared successfully"}
+        return {"success": True, "message": "Strategy logs cleared successfully for active instance"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

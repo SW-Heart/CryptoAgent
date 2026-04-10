@@ -13,9 +13,9 @@ import {
 const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }) => (
   <button
     onClick={onClick}
-    className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2.5 rounded-xl transition-all duration-200 group ${active
-        ? 'bg-gradient-to-r from-white/10 to-white/5 text-white border border-white/10 shadow-lg shadow-black/20'
-        : 'text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent'
+    className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2.5 rounded-xl transition-all duration-200 group focus:outline-none ${active
+      ? 'bg-gradient-to-r from-white/10 to-white/5 text-white border border-white/10 shadow-lg shadow-black/20'
+      : 'text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent'
       }`}
   >
     <Icon className={`w-5 h-5 flex-shrink-0 ${active ? 'text-white' : 'group-hover:scale-110 duration-200'}`} />
@@ -55,7 +55,7 @@ const Sidebar = ({
         </div>
         {!collapsed && (
           <span className="text-lg font-bold tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent whitespace-nowrap">
-            OG AI Agent
+            OG AI
           </span>
         )}
       </div>
@@ -80,7 +80,7 @@ const Sidebar = ({
       {/* Collapse Toggle Bubble */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="absolute -right-3.5 top-1/2 -translate-y-1/2 w-7 h-7 bg-[#0a0d0f] border border-white/10 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-emerald-600 hover:border-emerald-600 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all z-10 group shadow-lg"
+        className="absolute -right-3.5 top-1/2 -translate-y-1/2 w-7 h-7 bg-[#0a0d0f] border border-white/10 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-emerald-600 hover:border-emerald-600 hover:shadow-[0_0_15px_rgba(16,185,129,0.5)] transition-all z-10 group shadow-lg focus:outline-none"
       >
         {collapsed ? <ChevronRight className="w-4 h-4 ml-0.5" /> : <ChevronLeft className="w-4 h-4 pr-0.5" />}
       </button>

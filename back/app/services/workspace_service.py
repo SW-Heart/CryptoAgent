@@ -974,6 +974,50 @@ def set_trader_runtime_action(user_id: str, trader_id: int, action: str) -> dict
                     ]
                     reason = "; ".join(reason_parts) if reason_parts else "Unknown readiness failure"
                     raise ValueError(f"Runtime not ready: {reason}")
+                
+                # Pre-flight API check
+                cursor.execute("SELECT provider, metadata_json, environment FROM exchange_accounts WHERE id = %s AND user_id = %s", (row["exchange_account_id"], user_id))
+                ea_row = cursor.fetchone()
+                if ea_row:
+                    import json
+                    from binance_client import decrypt_value
+                    meta = ea_row["metadata_json"]
+                    
+                    if isinstance(meta, str):
+                        try:
+                            meta = json.loads(meta)
+                        except Exception:
+                            meta = {}
+                    if not isinstance(meta, dict):
+                        meta = {}
+                        
+                    raw_key = meta.get("api_key", "")
+                    raw_secret = meta.get("api_secret", "")
+                    raw_passphrase = meta.get("passphrase", "")
+                    provider = ea_row.get("provider", "binance")
+                    environment = ea_row.get("environment", "demo")
+                    
+                    api_key = decrypt_value(raw_key) if raw_key and raw_key.startswith("gAAAA") else raw_key
+                    api_secret = decrypt_value(raw_secret) if raw_secret and raw_secret.startswith("gAAAA") else raw_secret
+                    passphrase = decrypt_value(raw_passphrase) if raw_passphrase and raw_passphrase.startswith("gAAAA") else raw_passphrase
+                    
+                    try:
+                        from exchange_factory import create_exchange_client
+                        # 仅做探活时，统一把 api_key 等灌进去（对 OKX 来说也需要用 passphrase 来走签名验证）
+                        client = create_exchange_client(
+                            provider=provider,
+                            api_key=api_key,
+                            api_secret=api_secret,
+                            passphrase=passphrase,
+                            environment=environment
+                        )
+                        balance = client.get_usdt_balance()
+                        if isinstance(balance, dict) and "error" in balance:
+                            raise ValueError(f"交易所凭证校验失败: {balance['error']}")
+                    except ValueError as e:
+                        raise e
+                    except Exception as e:
+                        raise ValueError(f"交易所配置无效或不可达: {str(e)}")
 
             if is_legacy_primary and has_user_api_keys(user_id):
                 if normalized_action == "start":
@@ -1206,6 +1250,7 @@ def test_llm_connectivity(config_data: dict):
 
 def create_exchange_account(user_id: str, data: dict):
     """Create a new exchange account connection with encrypted credentials."""
+    import uuid
     from app.database import get_db_connection
     from binance_client import encrypt_value
     
@@ -1213,7 +1258,8 @@ def create_exchange_account(user_id: str, data: dict):
     try:
         with conn.cursor() as cursor:
             name = data.get('name') or "Exchange"
-            slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or "exchange"
+            slug_base = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or "exchange"
+            slug = f"{slug_base}-{uuid.uuid4().hex[:6]}"
             
             # 加密存储 API 凭证
             raw_key = data.get('api_key') or ""

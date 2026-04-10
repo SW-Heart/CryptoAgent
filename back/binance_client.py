@@ -552,11 +552,15 @@ def save_user_strategy_config(user_id: str, symbols: str = None, strategy_enable
 # Binance Futures API Client
 # ==========================================
 
-class BinanceFuturesClient:
+from exchange_base import ExchangeClient
+
+
+class BinanceFuturesClient(ExchangeClient):
     """
     Binance Futures API Client (USDT-Margined).
     
     Handles authentication, request signing, and API calls.
+    Implements the unified ExchangeClient interface.
     """
     
     def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
@@ -1293,64 +1297,119 @@ class BinanceFuturesClient:
     
     def get_open_orders(self, symbol: Optional[str] = None) -> List[dict]:
         """
-        Get open orders.
-        
-        Args:
-            symbol: Optional trading pair filter
-        
-        Returns:
-            List of open orders
+        获取所有待成交的普通挂单。返回统一格式化后的数据。
         """
         params = {}
         if symbol:
             params["symbol"] = symbol
         
-        return self._request("GET", "/fapi/v1/openOrders", params)
+        res = self._request("GET", "/fapi/v1/openOrders", params)
+        if not isinstance(res, list):
+            return res  # 错误 dict 直接返回
+        
+        formatted = []
+        for o in res:
+            formatted.append({
+                "orderId": o.get("orderId"),
+                "symbol": o.get("symbol", ""),
+                "side": str(o.get("side", "")).upper(),
+                "type": str(o.get("type", "")).upper(),
+                "origQty": float(o.get("origQty", 0) or 0),
+                "executedQty": float(o.get("executedQty", 0) or 0),
+                "price": float(o.get("price", 0) or 0),
+                "avgPrice": float(o.get("avgPrice", 0) or 0),
+                "stopPrice": float(o.get("stopPrice", 0) or 0),
+                "reduceOnly": str(o.get("reduceOnly", "false")).lower() == "true",
+                "closePosition": str(o.get("closePosition", "false")).lower(),
+                "positionSide": o.get("positionSide", "BOTH"),
+                "status": o.get("status", "NEW"),
+                "time": int(o.get("time", 0) or 0),
+                "updateTime": int(o.get("updateTime", 0) or 0)
+            })
+        return formatted
     
     def get_open_algo_orders(self, symbol: Optional[str] = None) -> List[dict]:
         """
-        Get open algorithmic orders (Conditional orders like Stop Loss, Take Profit).
+        获取所有待触发的条件单（止损/止盈）。
         
-        Args:
-            symbol: Optional trading pair filter
-        
-        Returns:
-            List of open algo orders
+        注意: Algo API 返回的字段名与普通订单不同:
+        - quantity (非 origQty)
+        - triggerPrice (非 stopPrice)
+        - orderType (非 type)
+        - algoId (非 orderId)
+        - algoStatus (非 status)
         """
         params = {}
         if symbol:
             params["symbol"] = symbol
         
-        return self._request("GET", "/fapi/v1/openAlgoOrders", params)
+        res = self._request("GET", "/fapi/v1/openAlgoOrders", params)
+        if not isinstance(res, list):
+            return res  # 错误 dict 或空
+        
+        formatted = []
+        for o in res:
+            # Algo API 字段映射到统一格式
+            order_type = str(o.get("orderType") or o.get("type", "")).upper()
+            formatted.append({
+                "algoId": o.get("algoId"),
+                "orderId": o.get("algoId"),  # UI 统一用 orderId
+                "symbol": o.get("symbol", ""),
+                "side": str(o.get("side", "")).upper(),
+                "type": order_type,
+                "origQty": float(o.get("quantity") or o.get("origQty", 0) or 0),
+                "executedQty": float(o.get("executedQty", 0) or 0),
+                "price": float(o.get("price", 0) or 0),
+                "stopPrice": float(o.get("triggerPrice") or o.get("stopPrice", 0) or 0),
+                "activationPrice": float(o.get("activationPrice", 0) or 0),
+                "callbackRate": float(o.get("callbackRate", 0) or 0),
+                "reduceOnly": str(o.get("reduceOnly", "false")).lower() == "true",
+                "closePosition": str(o.get("closePosition", "false")).lower(),
+                "positionSide": o.get("positionSide", "BOTH"),
+                "algoStatus": o.get("algoStatus", ""),
+                "status": o.get("algoStatus", "NEW"),
+                "time": int(o.get("time", 0) or 0),
+                "updateTime": int(o.get("updateTime", 0) or 0)
+            })
+        return formatted
 
     
     def get_order_history(self, symbol: str, limit: int = 50) -> List[dict]:
         """
-        Get order history.
-        
-        Args:
-            symbol: Trading pair
-            limit: Number of orders to return
-        
-        Returns:
-            List of orders
+        获取历史订单。返回统一格式化后的数据。
         """
-        return self._request("GET", "/fapi/v1/allOrders", {
+        res = self._request("GET", "/fapi/v1/allOrders", {
             "symbol": symbol,
             "limit": limit
         })
+        if not isinstance(res, list):
+            return res
+        
+        formatted = []
+        for o in res:
+            formatted.append({
+                "orderId": o.get("orderId"),
+                "symbol": o.get("symbol", ""),
+                "side": str(o.get("side", "")).upper(),
+                "type": str(o.get("type", "")).upper(),
+                "origQty": float(o.get("origQty", 0) or 0),
+                "executedQty": float(o.get("executedQty", 0) or 0),
+                "price": float(o.get("price", 0) or 0),
+                "avgPrice": float(o.get("avgPrice", 0) or 0),
+                "stopPrice": float(o.get("stopPrice", 0) or 0),
+                "reduceOnly": str(o.get("reduceOnly", "false")).lower() == "true",
+                "closePosition": str(o.get("closePosition", "false")).lower(),
+                "status": o.get("status", ""),
+                "time": int(o.get("time", 0) or 0),
+                "updateTime": int(o.get("updateTime", 0) or 0)
+            })
+        return formatted
     
     def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None) -> List[dict]:
         """
-        Get trade history.
+        获取成交历史。返回统一格式化后的数据。
         
-        Args:
-            symbol: Trading pair
-            limit: Number of trades to return
-            fromId: Trade ID to fetch from (for pagination/incremental sync)
-        
-        Returns:
-            List of trades
+        Binance 原始字段 price/qty/commission 等是字符串，这里统一转为 float。
         """
         params = {
             "symbol": symbol,
@@ -1359,7 +1418,28 @@ class BinanceFuturesClient:
         if fromId:
             params["fromId"] = fromId
             
-        return self._request("GET", "/fapi/v1/userTrades", params)
+        res = self._request("GET", "/fapi/v1/userTrades", params)
+        if not isinstance(res, list):
+            return res
+        
+        formatted = []
+        for t in res:
+            formatted.append({
+                "id": t.get("id"),
+                "symbol": t.get("symbol", ""),
+                "orderId": t.get("orderId"),
+                "side": str(t.get("side", "")).upper(),
+                "price": float(t.get("price", 0) or 0),
+                "qty": float(t.get("qty", 0) or 0),
+                "quoteQty": float(t.get("quoteQty", 0) or 0),
+                "realizedPnl": float(t.get("realizedPnl", 0) or 0),
+                "commission": float(t.get("commission", 0) or 0),
+                "commissionAsset": t.get("commissionAsset", "USDT"),
+                "time": int(t.get("time", 0) or 0),
+                "positionSide": t.get("positionSide", "BOTH"),
+                "maker": t.get("maker", False)
+            })
+        return formatted
     
     def get_mark_price(self, symbol: str) -> dict:
         """
@@ -1468,7 +1548,22 @@ class BinanceFuturesClient:
         if end_time:
             params["endTime"] = end_time
         
-        return self._request("GET", "/fapi/v1/income", params)
+        res = self._request("GET", "/fapi/v1/income", params)
+        
+        if isinstance(res, list):
+            formatted = []
+            for record in res:
+                formatted.append({
+                    "symbol": record.get("symbol", ""),
+                    "type": record.get("incomeType", ""),
+                    "amount": float(record.get("income", 0)),
+                    "asset": record.get("asset", "USDT"),
+                    "time": record.get("time", 0),
+                    "info": record.get("info", "")
+                })
+            return formatted
+            
+        return res
     
     def get_funding_rate(self, symbol: str, limit: int = 100) -> List[dict]:
         """
@@ -1658,6 +1753,10 @@ class BinanceFuturesClient:
             return {"success": True, "balance": result}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def get_exchange_name(self) -> str:
+        """Return exchange name for logging and UI display."""
+        return "Binance"
 
 
 # ==========================================
