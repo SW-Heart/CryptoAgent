@@ -17,6 +17,31 @@
   body {
     overflow-x: hidden;
     @apply h-full;
+    background-color: #060809;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  *:focus {
+    outline: none !important;
+  }
+
+  *:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  button:focus,
+  button:focus-visible,
+  a:focus,
+  [tabindex]:focus, 
+  div:focus,
+  main:focus,
+  aside:focus {
+    outline: none !important;
+    box-shadow: none !important;
   }
 
   body {

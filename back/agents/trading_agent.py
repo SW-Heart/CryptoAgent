@@ -26,6 +26,7 @@ from tools.binance_trading_tools import (
     binance_open_position as open_position,
     binance_close_position as close_position,
     binance_update_stop_loss as update_stop_loss,
+    binance_update_take_profit as update_take_profit,
     binance_place_trailing_stop as place_trailing_stop,
 )
 
@@ -321,13 +322,15 @@ build_strategy_context(
 返回的 JSON 中包含：account(余额)、positions(持仓)、open_orders(当前挂单)、
 macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 
-### Step 2: 确认账户状态
+### Step 2: 确认账户状态 [关键反重复步骤]
 - 检查 account.available (可用余额)
 - 检查 positions.list (已有持仓及方向)
-- 检查 open_orders.list (已有的未成交挂单)
-- 如果已有同方向同标的仓位 → 不重复开仓，考虑调整止损
-- **如果某标的已有 STOP_MARKET 或 TAKE_PROFIT_MARKET 挂单 → 不再重复挂止损/止盈**
-- **只有在需要调整止损价格时才使用 update_stop_loss**
+- **⚠️ 重点检查每个持仓的 existing_tp_orders 和 existing_sl_orders 字段**
+  - 如果 existing_sl_orders 已有止损挂单 → 禁止再挂新止损，使用 update_stop_loss 调整价格
+  - 如果 existing_tp_orders 已有止盈挂单 → 禁止再挂新止盈，使用 update_take_profit 调整价格
+  - **例外**：阶段性止盈（TP1/TP2/TP3 按不同仓位比例分批止盈）允许存在多个 TP 订单
+- 如果已有同方向同标的仓位 → 不重复开仓，考虑调整止损/止盈
+- 检查 open_orders.list 确认全局挂单状态
 
 ### Step 3: 多维度信号评估
 对每个标的，综合以下维度判断：
@@ -378,11 +381,20 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 ### Step 6: 持仓管理
 
 已有持仓时的处理规则：
-- **同方向已有仓**: 不重复开仓，检查是否应移动止损
+- **同方向已有仓**: 不重复开仓，检查是否应移动止损或止盈
   - 盈利 > 1倍风险 → update_stop_loss 到成本价 (保本)
   - 盈利 > 2倍风险 → update_stop_loss 到 +1R 位置
+  - 如需调整止盈价 → 使用 update_take_profit（不要新挂 TP 单）
 - **反方向强信号**: 先 close_position 平现仓，再开新仓
 - **持仓亏损中**: 只要未触及止损线则持有，不手动平仓
+
+### Step 7: 止盈止损管理 [严格执行]
+
+- **全仓止盈/止损**：每个仓位最多只允许存在 1 个 TP 和 1 个 SL 挂单
+  - 不得重复创建，只能用 update_stop_loss / update_take_profit 修改价格
+- **阶段性止盈 (TP1/TP2)**：可以为同一仓位设置多个不同数量的 TP 订单
+  - 例如：TP1 平仓 50% 在价位 A，TP2 平仓剩余 50% 在价位 B
+  - 使用 open_position 开仓时的 take_profit 设 TP1，然后额外挂 TP2
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -405,7 +417,8 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 - ❌ 禁止单笔 margin 超过可用余额的 20%
 - ❌ 禁止忽略已有持仓直接反向开仓（必须先平仓）
 - ❌ 禁止在 trend.direction="neutral" 且无明确信号时开仓
-- ❌ 禁止在 open_orders 中已有同标的 STOP_MARKET/TAKE_PROFIT_MARKET 挂单时重复挂止损/止盈
+- ❌ 禁止在 existing_sl_orders 非空时再新增全仓止损单（应使用 update_stop_loss 修改价格）
+- ❌ 禁止在 existing_tp_orders 非空时再新增全仓止盈单（应使用 update_take_profit 修改价格，阶段性分批止盈除外）
 """]
 
     # 5. 为所有工具预绑定 user_id，确保 LLM 调用时自动使用正确的用户身份
@@ -435,6 +448,10 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
         """设置追踪止损。"""
         return place_trailing_stop(symbol=symbol, callback_rate=callback_rate, activation_price=activation_price, user_id=_uid)
 
+    def _update_take_profit(symbol: str, new_take_profit: float) -> dict:
+        """更新指定标的的止盈价格（只替换现有 TP 订单，不影响 SL）。"""
+        return update_take_profit(symbol=symbol, new_take_profit=new_take_profit, user_id=_uid)
+
     # 6. Create Agent instance
     return Agent(
         name="TradingStrategy",
@@ -445,6 +462,7 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
             _open_position,           # 📤 开仓 (user_id 已绑定)
             _close_position,          # 📤 平仓 (user_id 已绑定)
             _update_stop_loss,        # 📤 调整止损 (user_id 已绑定)
+            _update_take_profit,      # 📤 调整止盈 (user_id 已绑定)
             _place_trailing_stop,     # 📤 追踪止损 (user_id 已绑定)
             log_strategy_analysis,    # 📝 日志记录
         ]],

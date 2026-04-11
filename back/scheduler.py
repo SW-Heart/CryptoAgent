@@ -101,8 +101,8 @@ def _run_scheduler_loop():
     # Schedule Binance position sync every 30 seconds (for real trading users)
     schedule.every(30).seconds.do(sync_binance_users_positions)
     
-    # Schedule orphan order cleanup every 5 minutes (清理无仓位的孤儿止盈止损挂单)
-    schedule.every(5).minutes.do(cleanup_orphan_orders)
+    # Schedule orphan order cleanup every 2 minutes (清理无仓位的孤儿止盈止损挂单)
+    schedule.every(2).minutes.do(cleanup_orphan_orders)
     
     # Run position update immediately
     update_positions_prices()
@@ -641,16 +641,47 @@ def cleanup_orphan_orders():
     孤儿订单 = 已经没有对应持仓的止损/止盈/条件挂单。
     这些订单通常是因为仓位被止损或止盈触发自动平仓后，
     另一侧的挂单没有被自动取消而遗留下来的。
+    
+    支持双路径：
+    - 旧系统: user_binance_keys + user_trading_status
+    - 新系统: exchange_accounts + trader_instances (Workspace)
     """
     try:
-        from binance_client import get_all_active_trading_users
         from tools.binance_trading_tools import binance_cancel_orphan_orders
         
-        users = get_all_active_trading_users()
-        if not users:
+        # 统一获取所有活跃用户（同时覆盖旧系统和新系统）
+        user_ids = set()
+        
+        # 路径 A: 旧系统
+        try:
+            from binance_client import get_all_active_trading_users
+            legacy_users = get_all_active_trading_users()
+            if legacy_users:
+                user_ids.update(legacy_users)
+        except Exception as e:
+            print(f"[OrphanCleanup] Legacy user fetch error: {e}")
+        
+        # 路径 B: 新系统 Workspace（直接查询，不依赖 get_all_active_trading_users 的覆盖度）
+        try:
+            conn = get_db()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT DISTINCT ti.user_id
+                    FROM trader_instances ti
+                    WHERE ti.status = 'RUNNING'
+                      AND ti.is_enabled = TRUE
+                      AND ti.exchange_account_id IS NOT NULL
+                """)
+                for row in cursor.fetchall():
+                    user_ids.add(row["user_id"])
+            conn.close()
+        except Exception as e:
+            print(f"[OrphanCleanup] Workspace user fetch error: {e}")
+        
+        if not user_ids:
             return
         
-        for user_id in users:
+        for user_id in user_ids:
             try:
                 result = binance_cancel_orphan_orders(user_id=user_id)
                 if result.get("error"):
@@ -659,8 +690,6 @@ def cleanup_orphan_orders():
                     print(f"[OrphanCleanup] User {user_id[:8]}: cleaned {result['cancelled_normal']} normal + {result['cancelled_algo']} algo orphan orders")
             except Exception as e:
                 print(f"[OrphanCleanup] Exception for user {user_id[:8]}: {e}")
-    except ImportError:
-        pass
     except Exception as e:
         print(f"[OrphanCleanup] Error: {e}")
 

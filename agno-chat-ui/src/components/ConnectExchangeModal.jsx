@@ -121,7 +121,8 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
     );
 
     // Dynamic placeholder based on environment
-    const placeholderText = environment === 'live' ? "例如：我的币安实盘主账户" : "例如：我的币安模拟账户";
+    const platformName = selectedPlatform?.name || '交易所';
+    const placeholderText = environment === 'live' ? `例如：我的${platformName}实盘主账户` : `例如：我的${platformName}模拟账户`;
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title="连接交易所账户" maxWidth="max-w-md" footer={modalFooter}>
@@ -198,6 +199,19 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                     {platform === 'okx' && (
                         <Input label="Passphrase" type="password" placeholder="请输入 API Passphrase" value={formData.passphrase} onChange={v => { setFormData(f => ({ ...f, passphrase: v })); setError(null); }} />
                     )}
+
+                    {/* Help link for API Key application */}
+                    <a
+                        href={platform === 'okx'
+                            ? 'https://www.okx.com/docs-v5/zh/#overview-api-key-creation'
+                            : 'https://www.binance.com/zh-CN/support/faq/%E5%A6%82%E4%BD%95%E5%88%9B%E5%BB%BAapi-360002502072'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors w-fit ml-1"
+                    >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span>不知道如何获取 API Key？查看 {selectedPlatform?.name} 官方教程 →</span>
+                    </a>
 
                     <div className="space-y-2 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10 animate-in slide-in-from-top-2">
                         <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest ml-1 flex items-center justify-between">

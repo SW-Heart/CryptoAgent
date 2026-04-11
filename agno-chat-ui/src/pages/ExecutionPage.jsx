@@ -16,13 +16,14 @@ import {
     Wallet,
     CheckCircle2,
     AlertCircle,
-    Edit3,
     Cpu,
     Target,
     BarChart3,
     Plus,
     Globe,
-    Trash2
+    Trash2,
+    Eye,
+    EyeOff
 } from 'lucide-react';
 import { getJson, postJson, putJson, deleteJson } from '../services/apiClient';
 import Button from '../components/common/Button';
@@ -33,12 +34,13 @@ import ConfirmModal from '../components/ConfirmModal';
 
 // --- Sub-components (StatCard, CustomDropdown, etc.) ---
 
-function StatCard({ icon: Icon, label, value, subValue, trend, tone = 'emerald', headerRight }) {
+function StatCard({ icon: Icon, label, value, subValue, trend, tone = 'emerald', headerRight, hidden, onToggleHidden }) {
     const tones = {
         emerald: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/10',
         amber: 'text-amber-400 bg-amber-500/10 border-amber-500/10',
         rose: 'text-rose-400 bg-rose-500/10 border-rose-500/10',
     };
+    const EyeIcon = hidden ? EyeOff : Eye;
     return (
         <div className="flex-1 min-w-[200px] rounded-2xl bg-[#0e1215]/50 border border-white/5 hover:border-emerald-500/20 transition-all group relative">
             {/* Background Layer with Overflow Hidden for the Blur */}
@@ -50,21 +52,53 @@ function StatCard({ icon: Icon, label, value, subValue, trend, tone = 'emerald',
             <div className="relative z-10 p-5">
                 <div className="flex items-center justify-between mb-4">
                     <div className={`p-2.5 rounded-xl border ${tones[tone]}`}><Icon className="w-5 h-5" /></div>
-                    {headerRight ? headerRight : trend !== undefined && (
-                        <div className={`flex items-center gap-1 text-xs font-bold ${trend >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {trend >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                            {Math.abs(trend).toFixed(1)}%
-                        </div>
-                    )}
+                    <div className="flex items-center gap-2">
+                        {headerRight ? headerRight : trend !== undefined && (
+                            <div className={`flex items-center gap-1 text-xs font-bold ${trend >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {trend >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                                {Math.abs(trend).toFixed(1)}%
+                            </div>
+                        )}
+                        {onToggleHidden && (
+                            <button onClick={onToggleHidden} className="p-1 rounded-lg text-slate-600 hover:text-slate-400 hover:bg-white/5 transition-all focus:outline-none">
+                                <EyeIcon className="w-3.5 h-3.5" />
+                            </button>
+                        )}
+                    </div>
                 </div>
                 <div className="flex flex-col gap-1">
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">{label}</span>
-                    <div className="text-2xl font-black text-white tracking-tight">{value}</div>
-                    {subValue && <div className="text-[10px] font-medium text-slate-500 tracking-wide uppercase opacity-60">{subValue}</div>}
+                    <div className="text-2xl font-black text-white tracking-tight">{hidden ? <span className="text-slate-600 select-none">****</span> : value}</div>
+                    {subValue && <div className="text-[10px] font-medium text-slate-500 tracking-wide uppercase opacity-60">{hidden ? '' : subValue}</div>}
                 </div>
             </div>
         </div>
     );
+}
+
+// --- Logo URL mapping for exchanges and LLM providers ---
+const EXCHANGE_LOGOS = {
+    binance: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg',
+    okx: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg',
+};
+const LLM_LOGOS = {
+    deepseek: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/deepseek.svg',
+    openai: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/openai.svg',
+    anthropic: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Claude.svg',
+    google: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg',
+    gemini: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg',
+};
+
+function OptionLogo({ src, fallback }) {
+    const [err, setErr] = useState(false);
+    if (!src || err) {
+        return fallback ? (
+            <div className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[8px] font-black text-slate-400">
+                {fallback.charAt(0).toUpperCase()}
+            </div>
+        ) : null;
+    }
+    return <img src={src} alt="" className="w-4 h-4 rounded-sm object-contain" onError={() => setErr(true)} />;
 }
 
 function CustomDropdown({ label, options, value, onChange, disabled, icon: Icon }) {
@@ -93,8 +127,11 @@ function CustomDropdown({ label, options, value, onChange, disabled, icon: Icon 
                 onClick={() => setIsOpen(!isOpen)}
                 className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 bg-[#0e1215]/60 border border-white/5 rounded-xl text-xs font-bold hover:border-white/10 transition-all focus:outline-none ${disabled ? 'opacity-40 cursor-not-allowed' : 'text-slate-200'}`}
             >
-                <span className="truncate">{selectedOption ? selectedOption.name : '未选择'}</span>
-                <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                <span className="flex items-center gap-2 truncate">
+                    {selectedOption?.logo && <OptionLogo src={selectedOption.logo} fallback={selectedOption.name} />}
+                    {selectedOption ? selectedOption.name : '未选择'}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-slate-500 flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </button>
             {isOpen && !disabled && (
                 <div className="absolute top-[calc(100%+4px)] left-0 right-0 z-[100] bg-[#111516] border border-white/10 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 border-t-emerald-500/50">
@@ -103,8 +140,9 @@ function CustomDropdown({ label, options, value, onChange, disabled, icon: Icon 
                             <button
                                 key={opt.id}
                                 onClick={() => { onChange(opt.id); setIsOpen(false); }}
-                                className={`w-full text-left px-4 py-3 text-[11px] font-bold transition-colors ${String(opt.id) === String(value) ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+                                className={`w-full text-left px-4 py-3 text-[11px] font-bold transition-colors flex items-center gap-2.5 ${String(opt.id) === String(value) ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
                             >
+                                {opt.logo && <OptionLogo src={opt.logo} fallback={opt.name} />}
                                 {opt.name}
                             </button>
                         ))}
@@ -188,6 +226,9 @@ export default function ExecutionPage({ userId }) {
         exchange_account_id: '',
         llm_config_id: ''
     });
+    const [hideBalance, setHideBalance] = useState(false);
+    const [hidePnl, setHidePnl] = useState(false);
+    const [hideWinRate, setHideWinRate] = useState(false);
 
     const isRunning = activeTrader?.status === 'RUNNING';
 
@@ -344,9 +385,11 @@ export default function ExecutionPage({ userId }) {
 
         try {
             await postJson(`/api/workspace/trader-instances/${activeTrader.id}/runtime-action?user_id=${userId}`, { action: lowerAction });
-            await fetchData();
             if (lowerAction === 'start') {
-                await refreshMarketRef.current();
+                // 启动后并行拉取配置数据和市场数据，避免串行等待
+                await Promise.all([fetchData(), refreshMarketRef.current()]);
+            } else {
+                await fetchData();
             }
             showFeedback(`${lowerAction === 'start' ? '已成功启动' : '已成功停止'}`, "success");
         } catch (err) {
@@ -367,6 +410,34 @@ export default function ExecutionPage({ userId }) {
             showFeedback("应用失败", "error");
         } finally {
             setSaving(false);
+        }
+    };
+
+    // 合并"保存配置 + 启动"的优化流程，避免冗余 fetchData
+    const handleStartTrading = async () => {
+        if (!activeTrader || acting || saving) return;
+        setActing(true);
+        setDataLoading(true);
+        setWallet(null);
+        setPositions([]);
+        setOrders([]);
+        setTradeHistory([]);
+        setPositionHistory([]);
+        setIncomeHistory([]);
+        setLogs([]);
+
+        try {
+            // 1. 保存配置（不再调用 fetchData，因为马上就要启动了）
+            await putJson(`/api/workspace/trader-instances/${activeTrader.id}?user_id=${userId}`, pendingChanges);
+            // 2. 启动 Agent
+            await postJson(`/api/workspace/trader-instances/${activeTrader.id}/runtime-action?user_id=${userId}`, { action: 'start' });
+            // 3. 并行拉取配置状态 + 市场数据
+            await Promise.all([fetchData(), refreshMarketRef.current()]);
+            showFeedback("已成功启动", "success");
+        } catch (err) {
+            showFeedback(err.message || "启动失败，请重试", "error");
+        } finally {
+            setActing(false);
         }
     };
 
@@ -415,6 +486,7 @@ export default function ExecutionPage({ userId }) {
         { key: 'year', label: '近一年' },
         { key: 'month', label: '近一月' },
         { key: 'week', label: '近一周' },
+        { key: '3days', label: '近3天' },
         { key: 'today', label: '今日' },
     ];
 
@@ -425,6 +497,7 @@ export default function ExecutionPage({ userId }) {
             year: 365 * 24 * 60 * 60 * 1000,
             month: 30 * 24 * 60 * 60 * 1000,
             week: 7 * 24 * 60 * 60 * 1000,
+            '3days': 3 * 24 * 60 * 60 * 1000,
             today: 24 * 60 * 60 * 1000,
         };
         const cutoff = statsPeriod === 'all' ? 0 : now - (periodMs[statsPeriod] || Infinity);
@@ -500,47 +573,38 @@ export default function ExecutionPage({ userId }) {
                         </div>
                     </div>
                     <div className="flex items-center gap-4">
-                        <div className="w-44"><CustomDropdown label="交易账户" options={accounts.map(a => ({ id: a.id, name: a.display_name }))} value={pendingChanges.exchange_account_id} onChange={id => setPendingChanges(p => ({ ...p, exchange_account_id: id }))} icon={Globe} disabled={isRunning} /></div>
-                        <div className="w-40"><CustomDropdown label="执行模型" options={llmConfigs.map(c => ({ id: c.id, name: c.name }))} value={pendingChanges.llm_config_id} onChange={id => setPendingChanges(p => ({ ...p, llm_config_id: id }))} icon={Cpu} disabled={isRunning} /></div>
+                        <div className="w-44"><CustomDropdown label="交易账户" options={accounts.map(a => ({ id: a.id, name: a.display_name, logo: EXCHANGE_LOGOS[a.exchange?.toLowerCase()] }))} value={pendingChanges.exchange_account_id} onChange={id => setPendingChanges(p => ({ ...p, exchange_account_id: id }))} icon={Globe} disabled={isRunning} /></div>
+                        <div className="w-40"><CustomDropdown label="执行模型" options={llmConfigs.map(c => ({ id: c.id, name: c.name, logo: LLM_LOGOS[c.provider?.toLowerCase()] }))} value={pendingChanges.llm_config_id} onChange={id => setPendingChanges(p => ({ ...p, llm_config_id: id }))} icon={Cpu} disabled={isRunning} /></div>
                         <div className="w-44"><CustomDropdown label="策略配置" options={strategies.map(s => ({ id: s.id, name: s.name }))} value={pendingChanges.strategy_profile_id} onChange={id => setPendingChanges(p => ({ ...p, strategy_profile_id: id }))} icon={Target} disabled={isRunning} /></div>
                     </div>
                 </div>
                 <div className="flex items-center gap-3 pl-6 border-l border-white/5">
-                    <Button variant="outline" size="sm" onClick={() => onOpenSettings('strategies')} className="text-[10px] font-black uppercase tracking-widest h-9 px-4">编辑策略</Button>
                     {isRunning ? (
                         <Button variant="danger" size="sm" icon={Square} onClick={() => handleAction('STOP')} disabled={acting} className="h-9 px-6 font-black uppercase text-[10px]">停止运行</Button>
                     ) : (
-                        <Button variant="primary" size="sm" icon={Play} onClick={() => handleSaveInstance().then(() => handleAction('START'))} disabled={acting || saving} className="h-9 px-6 font-black uppercase text-[10px]">开始运行</Button>
-                    )}
-                    {!isRunning && (
-                        <div className="flex items-center gap-1">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={handleClearConfig}
-                                className="h-9 px-4 text-slate-500 border-white/5 hover:bg-rose-500/10 hover:text-rose-500 hover:border-rose-500/20 transition-all font-black text-[10px] uppercase tracking-widest"
-                            >
-                                清除配置
-                            </Button>
-                        </div>
+                        <Button variant="primary" size="sm" icon={Play} onClick={handleStartTrading} disabled={acting || saving} className="h-9 px-6 font-black uppercase text-[10px]">开始运行</Button>
                     )}
                 </div>
             </header>
 
             {/* Dashboard Stats */}
             {isRunning && (
-                <div className="grid grid-cols-4 gap-6 flex-shrink-0 animate-in fade-in duration-700">
+                <div className="grid grid-cols-4 gap-6 flex-shrink-0 relative z-40">
                     <StatCard
                         icon={Wallet}
                         label="账户总权益"
                         value={wallet ? `${Number(wallet.equity || wallet.current_balance || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />}
                         tone="emerald"
+                        hidden={hideBalance}
+                        onToggleHidden={() => setHideBalance(h => !h)}
                     />
                     <StatCard
                         icon={DollarSign}
                         label="可用余额"
                         value={wallet ? `${Number(wallet.available_balance || ((wallet.current_balance || 0) - (wallet.margin_in_use || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />}
                         tone="amber"
+                        hidden={hideBalance}
+                        onToggleHidden={() => setHideBalance(h => !h)}
                     />
                     <StatCard
                         icon={BarChart3}
@@ -556,6 +620,8 @@ export default function ExecutionPage({ userId }) {
                         ) : (wallet ? '0.00 USDT' : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />)}
                         subValue={filteredStats.totalCount > 0 ? `${filteredStats.totalCount} 笔已平仓` : (wallet ? '0 笔已平仓' : undefined)}
                         tone={totalPnL >= 0 ? 'emerald' : 'rose'}
+                        hidden={hidePnl}
+                        onToggleHidden={() => setHidePnl(h => !h)}
                     />
                     <StatCard
                         icon={Target}
@@ -564,15 +630,17 @@ export default function ExecutionPage({ userId }) {
                         value={filteredStats.totalCount > 0 ? `${winRate.toFixed(1)}%` : (wallet ? '0.0%' : <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />)}
                         subValue={filteredStats.totalCount > 0 ? `${filteredStats.winCount} 盈 / ${filteredStats.totalCount - filteredStats.winCount} 亏  共 ${filteredStats.totalCount} 笔` : (wallet ? '0 笔交易' : undefined)}
                         tone={winRate >= 50 ? 'emerald' : 'rose'}
+                        hidden={hideWinRate}
+                        onToggleHidden={() => setHideWinRate(h => !h)}
                     />
                 </div>
             )}
 
             {/* Split Workspace */}
             {isRunning ? (
-                <div className="flex-1 flex gap-8 min-h-0 animate-in fade-in duration-1000">
-                    <main className="flex-[7] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-sm relative">
-                        <div className="flex border-b border-white/5 bg-black/10 px-4 overflow-x-auto">
+                <div className="flex-1 flex gap-8 min-h-0 outline-none focus:outline-none ring-0">
+                    <main className="flex-[7] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl relative outline-none focus:outline-none ring-0 focus:ring-0 hover:outline-none transform-gpu">
+                        <div className="flex border-b border-white/5 bg-black/10 px-4 overflow-x-auto outline-none focus:outline-none ring-0">
                             {['positions', 'orders', 'history', 'posHistory', 'income'].map(tab => (
                                 <button key={tab} onClick={() => setActiveTab(tab)} className={`px-5 py-4 text-[10px] font-black uppercase tracking-widest relative transition-all whitespace-nowrap focus:outline-none ${activeTab === tab ? 'text-emerald-400' : 'text-slate-200'}`}>
                                     {{ 'positions': '当前仓位', 'orders': '待成交委托', 'history': '历史成交', 'posHistory': '仓位历史', 'income': '资金流水' }[tab]}
@@ -882,7 +950,7 @@ export default function ExecutionPage({ userId }) {
                                                     <td className="py-3.5 px-5 text-xs font-mono text-slate-400">{timeStr}</td>
                                                     <td className="py-3.5 px-5 font-bold text-sm">{(item.symbol || '--').replace('USDT', '')}</td>
                                                     <td className={`py-3.5 px-5 text-xs font-bold ${typeColor}`}>{typeLabel}</td>
-                                                    <td className={`py-3.5 px-5 text-right font-mono font-bold ${amount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{amount >= 0 ? '+' : ''}{amount.toFixed(4)}</td>
+                                                    <td className={`py-3.5 px-5 text-right font-mono text-xs ${amount >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{amount >= 0 ? '+' : ''}{amount.toFixed(4)}</td>
                                                     <td className="py-3.5 px-5 text-right text-xs text-slate-400">{item.asset || 'USDT'}</td>
                                                 </tr>
                                             );
@@ -895,8 +963,8 @@ export default function ExecutionPage({ userId }) {
                             {!isRunning && positions.length === 0 && activeTab === 'positions' && <div className="h-full flex items-center justify-center opacity-30 italic text-[10px] uppercase tracking-[0.2em] font-black">待机模式 - 扫描未启动</div>}
                         </div>
                     </main>
-                    <aside className="flex-[3] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl backdrop-blur-sm relative min-w-[340px]">
-                        <div className="flex items-center justify-between border-b border-white/5 bg-black/10 px-6 h-[49px]">
+                    <aside className="flex-[3] flex flex-col bg-[#0e1215]/50 border border-white/5 rounded-3xl overflow-hidden shadow-2xl relative min-w-[340px] outline-none focus:outline-none ring-0 focus:ring-0 hover:outline-none transform-gpu">
+                        <div className="flex items-center justify-between border-b border-white/5 bg-black/10 px-6 h-[49px] outline-none focus:outline-none ring-0">
                             <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-emerald-400" /><h3 className="text-[10px] font-black text-white uppercase tracking-widest">Agent决策日志</h3></div>
                             <button onClick={() => setShowClearLogsConfirm(true)} className="p-1 hover:bg-white/5 hover:text-rose-400 rounded-lg text-slate-500 transition-all cursor-pointer" title="清空日志">
                                 <Trash2 className="w-4 h-4" />
@@ -919,13 +987,28 @@ export default function ExecutionPage({ userId }) {
                     </aside>
                 </div>
             ) : (
-                <div className="flex-1 flex items-center justify-center bg-[#0e1215]/30 border border-dashed border-white/5 rounded-[40px] text-slate-500 backdrop-blur-sm animate-in fade-in duration-700 mt-2">
-                    <div className="text-center">
-                        <div className="p-4 rounded-full bg-slate-800/50 mb-4 inline-block">
-                            <Activity className="w-8 h-8 text-slate-500" />
+                <div className="flex-1 flex items-center justify-center rounded-[32px] mt-2 outline-none focus:outline-none ring-0 focus:ring-0 hover:outline-none transform-gpu relative overflow-hidden" style={{ background: 'radial-gradient(ellipse at 50% 40%, rgba(16,185,129,0.04) 0%, rgba(14,18,21,0.5) 70%)' }}>
+                    {/* Subtle animated grid background */}
+                    <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)', backgroundSize: '48px 48px' }} />
+                    
+                    <div className="text-center relative z-10">
+                        {/* Animated pulse rings */}
+                        <div className="relative inline-flex items-center justify-center mb-6">
+                            <div className="absolute w-24 h-24 rounded-full border border-emerald-500/5 animate-ping" style={{ animationDuration: '3s' }} />
+                            <div className="absolute w-16 h-16 rounded-full border border-emerald-500/10" />
+                            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border border-emerald-500/20 flex items-center justify-center backdrop-blur-sm">
+                                <Zap className="w-5 h-5 text-emerald-500/60" />
+                            </div>
                         </div>
-                        <p className="text-sm font-medium text-slate-400">系统进入休眠状态，资源已释放，数据面板已隐藏</p>
-                        <p className="text-[10px] mt-2 text-emerald-500/50 uppercase tracking-widest font-black">当策略开始运行后将自动恢复显示</p>
+                        <p className="text-sm font-bold text-slate-300 tracking-wide">交易引擎待命中</p>
+                        <p className="text-[11px] mt-2 text-slate-500 font-medium max-w-[280px] leading-relaxed">
+                            选择好交易账户、模型和策略后，点击<span className="text-emerald-400/80 font-bold">「开始运行」</span>即可启动
+                        </p>
+                        <div className="flex items-center justify-center gap-1.5 mt-4">
+                            <div className="w-1 h-1 rounded-full bg-emerald-500/40 animate-pulse" />
+                            <div className="w-1 h-1 rounded-full bg-emerald-500/30 animate-pulse" style={{ animationDelay: '0.5s' }} />
+                            <div className="w-1 h-1 rounded-full bg-emerald-500/20 animate-pulse" style={{ animationDelay: '1s' }} />
+                        </div>
                     </div>
                 </div>
             )}

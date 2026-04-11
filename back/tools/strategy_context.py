@@ -200,8 +200,9 @@ def build_strategy_context(
 
     # ============ 1. 必选模块 (Core) ============
     result["account"] = _fetch_account(user_id)
-    result["positions"] = _fetch_positions(user_id)
     result["open_orders"] = _fetch_open_orders(user_id)
+    # 传入已获取的 open_orders，让 _fetch_positions 把每个仓位关联的 TP/SL 挂单内嵌进去
+    result["positions"] = _fetch_positions(user_id, open_orders=result["open_orders"])
     result["macro"] = _fetch_macro()
     result["funding"] = _fetch_funding(symbol_list, user_id)
 
@@ -384,14 +385,53 @@ def _fetch_account(user_id: str = None) -> Dict:
     return result
 
 
-def _fetch_positions(user_id: str = None) -> Dict:
-    """获取当前持仓列表（支持 user_binance_keys + exchange_accounts 双路径）。"""
+def _fetch_positions(user_id: str = None, open_orders: Dict = None) -> Dict:
+    """获取当前持仓列表，并内嵌每个仓位关联的 TP/SL 挂单信息。
+    
+    Args:
+        user_id: 用户 ID
+        open_orders: 已获取的挂单数据（来自 _fetch_open_orders），用于交叉匹配
+    """
     result = {"count": 0, "list": []}
+
+    # 条件订单类型分类
+    TP_TYPES = {"TAKE_PROFIT_MARKET", "TAKE_PROFIT"}
+    SL_TYPES = {"STOP_MARKET", "STOP", "TRAILING_STOP_MARKET"}
+
+    def _match_orders_for_symbol(symbol_raw: str):
+        """从 open_orders 中匹配该 symbol 的 TP/SL 挂单"""
+        tp_orders = []
+        sl_orders = []
+        if not open_orders or not open_orders.get("list"):
+            return tp_orders, sl_orders
+        
+        # symbol_raw 是不含 USDT 的简称（如 BTC）
+        for order in open_orders["list"]:
+            if order.get("symbol") != symbol_raw:
+                continue
+            order_type = order.get("type", "")
+            if order_type in TP_TYPES:
+                tp_orders.append({
+                    "type": order_type,
+                    "stop_price": order.get("stop_price", 0),
+                    "quantity": order.get("quantity", 0),
+                    "source": order.get("source", "unknown"),
+                })
+            elif order_type in SL_TYPES:
+                sl_orders.append({
+                    "type": order_type,
+                    "stop_price": order.get("stop_price", 0),
+                    "quantity": order.get("quantity", 0),
+                    "source": order.get("source", "unknown"),
+                })
+        return tp_orders, sl_orders
 
     def _parse_positions(positions_list):
         for pos in positions_list:
+            symbol = pos.get("symbol", "").replace("USDT", "")
+            tp_orders, sl_orders = _match_orders_for_symbol(symbol)
             result["list"].append({
-                "symbol": pos.get("symbol", "").replace("USDT", ""),
+                "symbol": symbol,
                 "direction": "LONG" if pos.get("direction") == "LONG" else "SHORT",
                 "margin": pos.get("isolated_margin", 0),
                 "entry_price": pos.get("entry_price", 0),
@@ -399,6 +439,8 @@ def _fetch_positions(user_id: str = None) -> Dict:
                 "pnl": pos.get("unrealized_pnl", 0),
                 "roi": pos.get("roi_percent", 0),
                 "leverage": pos.get("leverage", 1),
+                "existing_tp_orders": tp_orders,
+                "existing_sl_orders": sl_orders,
             })
         result["count"] = len(result["list"])
 

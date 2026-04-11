@@ -613,13 +613,28 @@ def binance_close_position(
         fee = executed_qty * avg_price * FEE_RATE
         realized_pnl = pnl - fee
         
-        # Cancel associated SL/TP orders if fully closed (普通订单 + Algo条件订单)
-        if close_percent == 100:
-            try:
+        # Cancel associated SL/TP orders if no remaining position
+        # 不再只检查 close_percent == 100，而是平仓后主动检测该 symbol 是否还有剩余仓位
+        try:
+            if close_percent == 100:
+                # 全平仓 → 直接清理所有挂单
                 cancel_result = client.cancel_all_orders_and_algo(symbol)
-                print(f"[BinanceTrading] Cancelled orders on full close: {cancel_result}")
-            except Exception as e:
-                print(f"[BinanceTrading] Failed to cancel orders: {e}")
+                print(f"[BinanceTrading] Cancelled all orders on full close: {cancel_result}")
+            else:
+                # 部分平仓 → 检查是否还有剩余仓位，没有则清理
+                remaining_positions = client.get_positions()
+                has_remaining = False
+                if isinstance(remaining_positions, list):
+                    for rp in remaining_positions:
+                        if rp.get("symbol") == symbol:
+                            has_remaining = True
+                            break
+                
+                if not has_remaining:
+                    cancel_result = client.cancel_all_orders_and_algo(symbol)
+                    print(f"[BinanceTrading] No remaining position for {symbol} after partial close, cleaned up orphan orders: {cancel_result}")
+        except Exception as e:
+            print(f"[BinanceTrading] Failed to cancel orders after close: {e}")
         
         return {
             "success": True,
@@ -901,6 +916,130 @@ def binance_update_stop_loss(
             "symbol": symbol,
             "new_stop_loss": new_stop_loss,
             "sl_order_id": sl_result.get("orderId")
+        }
+        
+    except Exception as e:
+        return {"error": f"Unexpected error: {str(e)}"}
+
+
+def binance_update_take_profit(
+    symbol: str,
+    new_take_profit: float,
+    user_id: str = None
+) -> dict:
+    """
+    更新持仓的止盈价格（只替换现有的 TP 订单，不影响 SL 订单）。
+    
+    使用方法:
+        update_take_profit(symbol="BTC", new_take_profit=100000)
+    
+    Args:
+        symbol: 交易对 (BTC, ETH, SOL 或 BTCUSDT)
+        new_take_profit: 新止盈价格
+        user_id: 用户ID (可选，自动从上下文获取)
+    
+    Returns:
+        dict with update status
+    
+    Example:
+        update_take_profit("BTC", 100000)  # 将BTC止盈移到100000
+    """
+    user_id = _get_effective_user_id(user_id)
+    symbol = get_symbol_usdt(symbol)
+    
+    client, err = _get_trading_client(user_id)
+    if err:
+        return {"error": err}
+    
+    try:
+        # Get current position
+        positions = client.get_positions()
+        if "error" in positions:
+            return {"error": f"Failed to get positions: {positions['error']}"}
+        
+        position = None
+        for pos in positions:
+            if pos.get("symbol") == symbol:
+                position = pos
+                break
+        
+        if not position:
+            return {"error": f"No open position found for {symbol}"}
+        
+        direction = position.get("direction")
+        quantity = position.get("quantity", 0)
+        
+        # Check Position Mode
+        try:
+            mode_resp = client.get_position_mode()
+            is_hedge_mode = mode_resp.get("dualSidePosition", False) if isinstance(mode_resp, dict) else False
+        except Exception:
+            is_hedge_mode = False
+        
+        # 1. 只取消现有的 TP 类订单（保留 SL 订单）
+        tp_types = {"TAKE_PROFIT_MARKET", "TAKE_PROFIT"}
+        cancelled_count = 0
+        
+        # 取消普通 TP 挂单
+        try:
+            normal_orders = client.get_open_orders(symbol)
+            if isinstance(normal_orders, list):
+                for order in normal_orders:
+                    if order.get("type", "") in tp_types:
+                        order_id = order.get("orderId")
+                        if order_id:
+                            try:
+                                client.cancel_order(symbol, order_id)
+                                cancelled_count += 1
+                            except Exception as e:
+                                print(f"[BinanceTrading] Failed to cancel TP order {order_id}: {e}")
+        except Exception as e:
+            print(f"[BinanceTrading] Failed to get orders for TP cancel: {e}")
+        
+        # 取消 Algo TP 挂单
+        try:
+            algo_orders = client.get_open_algo_orders()
+            if isinstance(algo_orders, list):
+                for order in algo_orders:
+                    if order.get("symbol") == symbol and order.get("type", "") in tp_types:
+                        algo_id = order.get("algoId")
+                        if algo_id:
+                            try:
+                                client._request("DELETE", "/fapi/v1/algoOrder", {"algoId": algo_id})
+                                cancelled_count += 1
+                            except Exception as e:
+                                print(f"[BinanceTrading] Failed to cancel algo TP {algo_id}: {e}")
+        except Exception:
+            pass
+        
+        print(f"[BinanceTrading] Cancelled {cancelled_count} existing TP orders for {symbol}")
+        
+        # 2. Place new TP order
+        new_take_profit = round_price(symbol, new_take_profit)
+        tp_side = "SELL" if direction == "LONG" else "BUY"
+        position_side = direction if is_hedge_mode else None
+        use_reduce_only = not is_hedge_mode
+        
+        tp_result = client.place_take_profit_market_order(
+            symbol=symbol,
+            side=tp_side,
+            quantity=quantity,
+            stop_price=new_take_profit,
+            reduce_only=use_reduce_only,
+            position_side=position_side
+        )
+        
+        if isinstance(tp_result, dict) and "error" in tp_result:
+            return {"error": f"Failed to place TP: {tp_result['error']}"}
+        
+        tp_order_id = tp_result.get("algoId") or tp_result.get("orderId")
+        
+        return {
+            "success": True,
+            "symbol": symbol,
+            "new_take_profit": new_take_profit,
+            "tp_order_id": tp_order_id,
+            "cancelled_old_tp_count": cancelled_count,
         }
         
     except Exception as e:
