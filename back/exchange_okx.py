@@ -135,7 +135,7 @@ class OKXFuturesClient(ExchangeClient):
         return inst_id.split('-')[0] + inst_id.split('-')[1]
 
     def _fetch_instruments(self):
-        """缓存合约信息以获取合约乘数 (ctVal)"""
+        """缓存合约信息以获取合约乘数 (ctVal) 和精度信息"""
         now = time.time()
         # 1 小时缓存
         if now - self._instruments_last_fetch < 3600 and self._instruments_cache:
@@ -148,11 +148,34 @@ class OKXFuturesClient(ExchangeClient):
                 lines = data.get("data", [])
                 for line in lines:
                     inst_id = line["instId"]
+                    # lotSz: 数量步长 (e.g. "0.01"), tickSz: 价格步长 (e.g. "0.1")
+                    lot_sz = line.get("lotSz", "1")
+                    tick_sz = line.get("tickSz", "0.01")
+                    min_sz = line.get("minSz", "1")
                     self._instruments_cache[inst_id] = {
                         "ctVal": float(line["ctVal"]),
                         "ctMult": float(line.get("ctMult", 1)),
+                        "lotSz": lot_sz,
+                        "tickSz": tick_sz,
+                        "minSz": min_sz,
+                        "qty_precision": self._sz_to_precision(lot_sz),
+                        "price_precision": self._sz_to_precision(tick_sz),
                     }
                 self._instruments_last_fetch = now
+
+    @staticmethod
+    def _sz_to_precision(sz_str: str) -> int:
+        """将步长字符串 (如 '0.01') 转换为精度位数 (如 2)"""
+        try:
+            sz = float(sz_str)
+            if sz >= 1:
+                return 0
+            s = str(sz)
+            if '.' in s:
+                return len(s.split('.')[1].rstrip('0')) or 0
+            return 0
+        except (ValueError, TypeError):
+            return 2  # 安全默认值
 
     def _get_ct_val(self, symbol: str) -> float:
         """获取合约乘数，默认返回 1.0 (异常备用)"""
@@ -162,6 +185,21 @@ class OKXFuturesClient(ExchangeClient):
         if inst:
             return inst["ctVal"]
         return 1.0
+
+    def get_instrument_info(self, symbol: str) -> dict:
+        """覆盖基类方法，从 OKX 合约缓存动态获取精度信息。"""
+        self._fetch_instruments()
+        inst_id = self._convert_symbol(symbol)
+        inst = self._instruments_cache.get(inst_id)
+        if inst:
+            return {
+                "qty_precision": inst.get("qty_precision", 3),
+                "price_precision": inst.get("price_precision", 2),
+                "min_qty": float(inst.get("minSz", 1)),
+                "min_notional": 5.0,
+                "ct_val": inst["ctVal"],
+            }
+        return super().get_instrument_info(symbol)
 
     # ==========================================
     # 接口实现

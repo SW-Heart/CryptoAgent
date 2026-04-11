@@ -21,13 +21,13 @@ load_dotenv()
 # 统一数据引擎 (唯一的数据入口)
 from tools.strategy_context import build_strategy_context
 
-# 交易执行工具 (精简集)
-from tools.binance_trading_tools import (
-    binance_open_position as open_position,
-    binance_close_position as close_position,
-    binance_update_stop_loss as update_stop_loss,
-    binance_update_take_profit as update_take_profit,
-    binance_place_trailing_stop as place_trailing_stop,
+# 交易执行工具 (精简集 — 使用交易所无关的通用名称)
+from tools.exchange_trading_tools import (
+    open_position,
+    close_position,
+    update_stop_loss,
+    update_take_profit,
+    place_trailing_stop,
 )
 
 # 日志工具

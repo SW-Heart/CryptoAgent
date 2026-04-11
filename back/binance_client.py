@@ -796,6 +796,56 @@ class BinanceFuturesClient(ExchangeClient):
         
         return positions
     
+    def get_exchange_name(self) -> str:
+        return "Binance"
+
+    def get_instrument_info(self, symbol: str) -> dict:
+        """
+        从 Binance exchangeInfo API 动态获取交易对精度信息。
+        结果缓存 1 小时，避免重复请求。
+        """
+        if not hasattr(self, '_instrument_cache'):
+            self._instrument_cache = {}
+            self._instrument_cache_time = 0
+        
+        import time as _time
+        now = _time.time()
+        
+        # 1 小时缓存
+        if now - self._instrument_cache_time < 3600 and self._instrument_cache:
+            if symbol in self._instrument_cache:
+                return self._instrument_cache[symbol]
+        
+        # 获取 exchangeInfo
+        try:
+            result = self._request("GET", "/fapi/v1/exchangeInfo", signed=False)
+            if isinstance(result, dict) and "symbols" in result:
+                for info in result["symbols"]:
+                    sym = info.get("symbol", "")
+                    self._instrument_cache[sym] = {
+                        "qty_precision": info.get("quantityPrecision", 3),
+                        "price_precision": info.get("pricePrecision", 2),
+                        "min_qty": self._extract_filter(info, "LOT_SIZE", "minQty", 0.001),
+                        "min_notional": self._extract_filter(info, "MIN_NOTIONAL", "notional", 5.0),
+                        "ct_val": 1.0,
+                    }
+                self._instrument_cache_time = now
+        except Exception as e:
+            print(f"[BinanceClient] Failed to fetch exchangeInfo: {e}")
+        
+        return self._instrument_cache.get(symbol, super().get_instrument_info(symbol))
+
+    @staticmethod
+    def _extract_filter(symbol_info: dict, filter_type: str, key: str, default=0):
+        """从 Binance exchangeInfo 的 filters 数组中提取特定值。"""
+        for f in symbol_info.get("filters", []):
+            if f.get("filterType") == filter_type:
+                try:
+                    return float(f.get(key, default))
+                except (ValueError, TypeError):
+                    return default
+        return default
+
     # ==========================================
     # Trading Endpoints
     # ==========================================

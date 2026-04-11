@@ -86,9 +86,9 @@ def _get_account_summary(user_id: str = None) -> Dict:
     }
     
     try:
-        from tools.binance_trading_tools import binance_get_positions_summary
+        from tools.exchange_trading_tools import get_positions_summary
         
-        summary = binance_get_positions_summary(user_id=user_id)
+        summary = get_positions_summary(user_id=user_id)
         if "error" not in summary:
             # 使用 margin_balance（总权益）而不是 available_balance（可用余额）
             # 这样 Agent 才能正确计算仓位大小

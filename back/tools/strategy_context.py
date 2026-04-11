@@ -344,8 +344,8 @@ def _fetch_account(user_id: str = None) -> Dict:
 
     # 先尝试标准路径
     try:
-        from tools.binance_trading_tools import binance_get_positions_summary
-        summary = binance_get_positions_summary(user_id=user_id)
+        from tools.exchange_trading_tools import get_positions_summary
+        summary = get_positions_summary(user_id=user_id)
         if "error" not in summary:
             result["balance"] = summary.get("margin_balance", 0)
             result["available"] = summary.get("available_balance", 0)
@@ -446,8 +446,8 @@ def _fetch_positions(user_id: str = None, open_orders: Dict = None) -> Dict:
 
     # 先尝试标准路径
     try:
-        from tools.binance_trading_tools import binance_get_positions_summary
-        summary = binance_get_positions_summary(user_id=user_id)
+        from tools.exchange_trading_tools import get_positions_summary
+        summary = get_positions_summary(user_id=user_id)
         if "error" not in summary:
             _parse_positions(summary.get("open_positions", []))
             return result

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 def _get_active_client(user_id: str):
     from app.services.workspace_service import list_trader_instances
     from tools.trading_tools import set_current_trader_id
-    from tools.binance_trading_tools import _get_trading_client
+    from tools.exchange_trading_tools import _get_trading_client
     
     instances = list_trader_instances(user_id)
     primary = next((i for i in instances if i.get("status") == "RUNNING"), None)
@@ -198,7 +198,7 @@ def get_wallet(user_id: str = None):
         
     try:
         from app.services.workspace_service import list_trader_instances, list_exchange_accounts, _normalize_json
-        from tools.binance_trading_tools import binance_get_positions_summary
+        from tools.exchange_trading_tools import get_positions_summary
         from binance_client import BinanceFuturesClient, has_user_api_keys
         # 1. 尝试从 Workspace 查找当前的实盘账户绑定
         client, err = _get_active_client(user_id)
@@ -374,7 +374,7 @@ def get_positions(status: str = "OPEN", user_id: str = None):
     import requests
     
     def _format_binance_positions(result):
-        """Convert binance_get_positions_summary result to unified frontend format."""
+        """Convert get_positions_summary result to unified frontend format."""
         positions = []
         for pos in result.get("open_positions", []):
             positions.append({
@@ -405,11 +405,11 @@ def get_positions(status: str = "OPEN", user_id: str = None):
     # 实盘数据获取
     if user_id:
         try:
-            from tools.binance_trading_tools import binance_get_positions_summary
+            from tools.exchange_trading_tools import get_positions_summary
             # 使用提取出的公用方法获取最新 active_client
             client, err = _get_active_client(user_id)
             if client:
-                result = binance_get_positions_summary(user_id)
+                result = get_positions_summary(user_id)
                 if isinstance(result, dict) and "error" not in result:
                     return {"source": "exchange", "positions": _format_binance_positions(result)}
                 else:
@@ -857,94 +857,18 @@ def get_position_history(
                 except Exception as e:
                     print(f"[Strategy] Native get_position_history for {sym} failed: {e}")
                 
+            # 2. Fallback: 使用 position_builder 从 trades 聚合
             try:
+                from position_builder import build_position_history
+                
                 trades = client.get_trade_history(symbol=sym, limit=min(limit * 5, 500))
-                if not isinstance(trades, list):
-                    continue
-                
-                # 按时间正序排列以便追踪仓位生命周期
-                trades.sort(key=lambda x: x.get("time", 0))
-                
-                # 追踪仓位状态，将交易聚合成仓位周期
-                current_pos = None  # 当前追踪的仓位
-                
-                for trade in trades:
-                    side = trade.get("side", "")
-                    qty = float(trade.get("qty", 0))
-                    price = float(trade.get("price", 0))
-                    r_pnl = float(trade.get("realizedPnl", 0))
-                    commission = float(trade.get("commission", 0))
-                    trade_time = trade.get("time", 0)
-                    
-                    if current_pos is None:
-                        # 开新仓
-                        current_pos = {
-                            "symbol": sym,
-                            "direction": "LONG" if side == "BUY" else "SHORT",
-                            "entry_trades": [],
-                            "close_trades": [],
-                            "total_entry_qty": 0,
-                            "total_entry_cost": 0,
-                            "total_close_qty": 0,
-                            "total_close_cost": 0,
-                            "realized_pnl": 0,
-                            "total_commission": 0,
-                            "open_time": trade_time,
-                            "close_time": None,
-                            "leverage": 10,  # 默认值
-                        }
-                    
-                    # 判断这笔交易是开仓还是平仓
-                    is_opening = (current_pos["direction"] == "LONG" and side == "BUY") or \
-                                 (current_pos["direction"] == "SHORT" and side == "SELL")
-                    
-                    if is_opening:
-                        current_pos["total_entry_qty"] += qty
-                        current_pos["total_entry_cost"] += qty * price
-                        current_pos["entry_trades"].append(trade)
-                    else:
-                        current_pos["total_close_qty"] += qty
-                        current_pos["total_close_cost"] += qty * price
-                        current_pos["close_trades"].append(trade)
-                        current_pos["realized_pnl"] += r_pnl
-                        current_pos["close_time"] = trade_time
-                    
-                    current_pos["total_commission"] += commission
-                    
-                    # 如果已平仓量 >= 开仓量，这个仓位周期结束
-                    if current_pos["total_close_qty"] > 0 and \
-                       current_pos["total_close_qty"] >= current_pos["total_entry_qty"] * 0.99:  # 0.99 容差
-                        
-                        entry_price = current_pos["total_entry_cost"] / current_pos["total_entry_qty"] \
-                            if current_pos["total_entry_qty"] > 0 else 0
-                        close_price = current_pos["total_close_cost"] / current_pos["total_close_qty"] \
-                            if current_pos["total_close_qty"] > 0 else 0
-                        
-                        # 计算收益率 (基于开仓成本)
-                        entry_notional = current_pos["total_entry_qty"] * entry_price
-                        margin = entry_notional / current_pos["leverage"] if current_pos["leverage"] > 0 else entry_notional
-                        roi = (current_pos["realized_pnl"] / margin * 100) if margin > 0 else 0
-                        
-                        all_positions.append({
-                            "symbol": sym.replace("USDT", ""),
-                            "symbol_full": sym,
-                            "direction": current_pos["direction"],
-                            "leverage": current_pos["leverage"],
-                            "margin_mode": "全仓",
-                            "close_type": "全部平仓",
-                            "realized_pnl": round(current_pos["realized_pnl"], 4),
-                            "roi_percent": round(roi, 2),
-                            "closed_quantity": current_pos["total_close_qty"],
-                            "entry_price": round(entry_price, 2),
-                            "close_price": round(close_price, 2),
-                            "max_quantity": current_pos["total_entry_qty"],
-                            "total_commission": round(current_pos["total_commission"], 4),
-                            "open_time": current_pos["open_time"],
-                            "close_time": current_pos["close_time"],
-                        })
-                        
-                        current_pos = None  # 重置，等待下一个仓位周期
-                
+                if isinstance(trades, list):
+                    closed_positions = build_position_history(
+                        trades=trades,
+                        symbol=sym,
+                        default_leverage=10,
+                    )
+                    all_positions.extend(closed_positions)
             except Exception as e:
                 print(f"[Strategy] Error building position history for {sym}: {e}")
         
@@ -1011,9 +935,9 @@ def get_funding_rate(symbol: str, limit: int = 10, user_id: str = None):
         user_id: User ID (可选)
     """
     try:
-        from tools.binance_trading_tools import binance_get_funding_rate
+        from tools.exchange_trading_tools import get_funding_rate
         
-        result = binance_get_funding_rate(
+        result = get_funding_rate(
             symbol=symbol,
             limit=limit,
             user_id=user_id
@@ -1034,8 +958,8 @@ def get_funding_rate(symbol: str, limit: int = 10, user_id: str = None):
 def get_adl_risk(user_id: str):
     """获取 ADL (自动减仓) 风险等级。"""
     try:
-        from tools.binance_trading_tools import binance_get_adl_risk
-        result = binance_get_adl_risk(user_id=user_id)
+        from tools.exchange_trading_tools import get_adl_risk
+        result = get_adl_risk(user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -1049,8 +973,8 @@ def get_adl_risk(user_id: str):
 def get_force_orders(user_id: str, symbol: str = None, limit: int = 20):
     """获取强平订单历史。"""
     try:
-        from tools.binance_trading_tools import binance_get_force_orders
-        result = binance_get_force_orders(symbol=symbol, limit=limit, user_id=user_id)
+        from tools.exchange_trading_tools import get_force_orders
+        result = get_force_orders(symbol=symbol, limit=limit, user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -1064,8 +988,8 @@ def get_force_orders(user_id: str, symbol: str = None, limit: int = 20):
 def get_leverage_bracket(user_id: str, symbol: str = None):
     """获取杠杆档位信息。"""
     try:
-        from tools.binance_trading_tools import binance_get_leverage_info
-        result = binance_get_leverage_info(symbol=symbol, user_id=user_id)
+        from tools.exchange_trading_tools import get_leverage_info
+        result = get_leverage_info(symbol=symbol, user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -1079,8 +1003,8 @@ def get_leverage_bracket(user_id: str, symbol: str = None):
 def get_commission_rate_api(user_id: str, symbol: str):
     """获取佣金费率。"""
     try:
-        from tools.binance_trading_tools import binance_get_commission_rate
-        result = binance_get_commission_rate(symbol=symbol, user_id=user_id)
+        from tools.exchange_trading_tools import get_commission_rate
+        result = get_commission_rate(symbol=symbol, user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -1101,8 +1025,8 @@ def place_trailing_stop(
 ):
     """设置跟踪止损订单。"""
     try:
-        from tools.binance_trading_tools import binance_place_trailing_stop
-        result = binance_place_trailing_stop(
+        from tools.exchange_trading_tools import place_trailing_stop
+        result = place_trailing_stop(
             symbol=symbol,
             callback_rate=callback_rate,
             quantity=quantity,
@@ -1123,8 +1047,8 @@ def place_trailing_stop(
 def get_position_mode(user_id: str):
     """获取当前持仓模式。"""
     try:
-        from tools.binance_trading_tools import binance_get_position_mode
-        result = binance_get_position_mode(user_id=user_id)
+        from tools.exchange_trading_tools import get_position_mode
+        result = get_position_mode(user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result
@@ -1138,8 +1062,8 @@ def get_position_mode(user_id: str):
 def change_position_mode(user_id: str, dual_side: bool):
     """切换持仓模式（需先平掉所有仓位）。"""
     try:
-        from tools.binance_trading_tools import binance_change_position_mode
-        result = binance_change_position_mode(dual_side=dual_side, user_id=user_id)
+        from tools.exchange_trading_tools import change_position_mode
+        result = change_position_mode(dual_side=dual_side, user_id=user_id)
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result

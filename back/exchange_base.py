@@ -55,11 +55,21 @@ class ExchangeClient(ABC):
         """
         获取 USDT 余额摘要。
         
-        Returns (统一键名):
+        Returns (统一键名 — snake_case):
             {
-                "totalWalletBalance": float,     # 总钱包余额
-                "availableBalance": float,       # 可用余额
-                "totalUnrealizedProfit": float,  # 总未实现盈亏
+                "wallet_balance": float,       # 钱包总余额 (USDT)
+                "available_balance": float,    # 可用余额
+                "margin_balance": float,       # 保证金余额 (含未实现盈亏)
+                "unrealized_pnl": float,       # 总未实现盈亏
+                "assets": [                    # 各资产明细
+                    {
+                        "asset": "USDT",
+                        "walletBalance": float,
+                        "marginBalance": float,
+                        "unrealizedProfit": float,
+                        "availableBalance": float
+                    }
+                ]
             }
         """
         pass
@@ -71,25 +81,181 @@ class ExchangeClient(ABC):
     @abstractmethod
     def get_positions(self) -> List[dict]:
         """
-        获取所有持仓。
+        获取所有持仓（仅含非零仓位）。
         
-        Returns (每个持仓的统一键名):
+        Returns (每个持仓的统一键名 — snake_case):
             [
                 {
-                    "symbol": str,           # 交易对 (e.g. "BTCUSDT")
-                    "positionAmt": float,    # 持仓数量（正=多，负=空）
-                    "entryPrice": float,     # 开仓均价
-                    "markPrice": float,      # 标记价格
-                    "unRealizedProfit": float,# 未实现盈亏
-                    "leverage": int,         # 杠杆倍数
-                    "positionSide": str,     # "LONG" / "SHORT" / "BOTH"
-                    "marginType": str,       # "cross" / "isolated"
-                    "liquidationPrice": float,# 强平价格
+                    "symbol": str,              # 统一格式: BTCUSDT（无分隔符/后缀）
+                    "direction": str,           # "LONG" | "SHORT"
+                    "quantity": float,          # 持仓数量（正数, 方向已由 direction 表示）
+                    "entry_price": float,       # 开仓均价
+                    "mark_price": float,        # 标记价格
+                    "unrealized_pnl": float,    # 未实现盈亏
+                    "leverage": int,            # 杠杆倍数
+                    "margin_type": str,         # "cross" | "isolated"
+                    "liquidation_price": float, # 强平价格
                 },
                 ...
             ]
+        
+        注意:
+            - symbol 必须为统一格式 XXUSDT，不含 "-"、"_" 或 "-SWAP" 后缀
+            - quantity 必须为正数、以 base coin 为单位（OKX 合约张数需乘以 ctVal）
+            - leverage 必须为 int 类型
         """
         pass
+
+    # ==========================================
+    # 合约信息与精度
+    # ==========================================
+
+    def get_instrument_info(self, symbol: str) -> dict:
+        """
+        获取交易对的精度与最小量信息。
+        
+        子类可覆盖此方法从交易所 API 动态获取。
+        默认实现返回安全的保守值。
+        
+        Returns:
+            {
+                "qty_precision": int,       # 数量小数位
+                "price_precision": int,     # 价格小数位
+                "min_qty": float,           # 最小下单量
+                "min_notional": float,      # 最小名义价值 (USDT)
+                "ct_val": float,            # 合约面值 (OKX用, 其他交易所=1.0)
+            }
+        """
+        return {
+            "qty_precision": 3,
+            "price_precision": 2,
+            "min_qty": 0.001,
+            "min_notional": 5.0,
+            "ct_val": 1.0,
+        }
+
+    def format_quantity(self, symbol: str, quantity: float) -> float:
+        """按交易所精度规则格式化数量。"""
+        info = self.get_instrument_info(symbol)
+        return round(quantity, info["qty_precision"])
+
+    def format_price(self, symbol: str, price: float) -> float:
+        """按交易所精度规则格式化价格。"""
+        info = self.get_instrument_info(symbol)
+        return round(price, info["price_precision"])
+
+    # ==========================================
+    # 缓存层 (减少高频 API 调用)
+    # ==========================================
+
+    def get_cached_balance(self, ttl: int = 5) -> dict:
+        """
+        获取带 TTL 缓存的余额信息。
+        
+        在同一个 Agent 执行周期内（通常 5-10 秒），多次调用不会重复请求 API。
+        下单操作后应调用 invalidate_cache() 清除缓存。
+        
+        Args:
+            ttl: 缓存有效期（秒），默认 5 秒
+            
+        Returns:
+            与 get_usdt_balance() 格式相同
+        """
+        import time
+        now = time.time()
+        if hasattr(self, '_balance_cache') and self._balance_cache is not None:
+            if now - self._balance_cache_time < ttl:
+                return self._balance_cache
+        
+        result = self.get_usdt_balance()
+        if "error" not in result:
+            self._balance_cache = result
+            self._balance_cache_time = now
+        return result
+
+    def get_cached_positions(self, ttl: int = 5) -> list:
+        """
+        获取带 TTL 缓存的持仓列表。
+        
+        Args:
+            ttl: 缓存有效期（秒），默认 5 秒
+            
+        Returns:
+            与 get_positions() 格式相同
+        """
+        import time
+        now = time.time()
+        if hasattr(self, '_positions_cache') and self._positions_cache is not None:
+            if now - self._positions_cache_time < ttl:
+                return self._positions_cache
+        
+        result = self.get_positions()
+        if isinstance(result, list):
+            self._positions_cache = result
+            self._positions_cache_time = now
+        return result
+
+    def invalidate_cache(self):
+        """清除余额和持仓缓存（下单/平仓后调用）。"""
+        self._balance_cache = None
+        self._balance_cache_time = 0
+        self._positions_cache = None
+        self._positions_cache_time = 0
+
+    # ==========================================
+    # 高层便捷方法
+    # ==========================================
+
+    def open_long(self, symbol: str, quantity: float, **kwargs) -> dict:
+        """
+        做多开仓的便捷方法。
+        
+        Args:
+            symbol: 交易对 (如 BTCUSDT)
+            quantity: 数量
+            **kwargs: 传递给 place_market_order 的其他参数 (reduce_only, position_side 等)
+        
+        Returns:
+            下单结果 dict
+        """
+        result = self.place_market_order(symbol, "BUY", quantity, position_side="LONG", **kwargs)
+        self.invalidate_cache()
+        return result
+
+    def open_short(self, symbol: str, quantity: float, **kwargs) -> dict:
+        """做空开仓的便捷方法。"""
+        result = self.place_market_order(symbol, "SELL", quantity, position_side="SHORT", **kwargs)
+        self.invalidate_cache()
+        return result
+
+    def close_long(self, symbol: str, quantity: float, **kwargs) -> dict:
+        """平多仓的便捷方法。"""
+        result = self.place_market_order(symbol, "SELL", quantity, reduce_only=True, position_side="LONG", **kwargs)
+        self.invalidate_cache()
+        return result
+
+    def close_short(self, symbol: str, quantity: float, **kwargs) -> dict:
+        """平空仓的便捷方法。"""
+        result = self.place_market_order(symbol, "BUY", quantity, reduce_only=True, position_side="SHORT", **kwargs)
+        self.invalidate_cache()
+        return result
+
+    def get_position_for_symbol(self, symbol: str) -> Optional[dict]:
+        """
+        获取指定交易对的持仓（如果有）。
+        
+        Args:
+            symbol: 交易对 (如 BTCUSDT)
+        
+        Returns:
+            持仓 dict 或 None
+        """
+        positions = self.get_cached_positions()
+        if isinstance(positions, list):
+            for pos in positions:
+                if pos.get("symbol") == symbol:
+                    return pos
+        return None
 
     # ==========================================
     # 下单操作
@@ -317,8 +483,21 @@ class ExchangeClient(ABC):
             limit: 返回数量
             fromId: 起始成交ID
         
-        Returns:
-            成交记录列表
+        Returns (统一键名):
+            [
+                {
+                    "id": int | str,            # 成交ID
+                    "symbol": str,              # 统一格式 XXUSDT
+                    "orderId": str | int,       # 关联订单ID
+                    "side": str,                # "BUY" | "SELL" 大写
+                    "price": float,             # 成交价格 (必须 float)
+                    "qty": float,               # 成交数量 (必须 float)
+                    "realizedPnl": float,       # 已实现盈亏
+                    "commission": float,        # 手续费
+                    "time": int,                # 毫秒时间戳
+                    "positionSide": str,        # 可选: "LONG" | "SHORT" | "BOTH"
+                }
+            ]
         """
         pass
 
@@ -335,8 +514,23 @@ class ExchangeClient(ABC):
             symbol: 交易对
             limit: 返回数量
         
-        Returns:
-            订单记录列表
+        Returns (统一键名):
+            [
+                {
+                    "orderId": str | int,
+                    "symbol": str,              # 统一格式 XXUSDT
+                    "side": str,                # "BUY" | "SELL" 大写
+                    "type": str,                # "LIMIT" | "MARKET" | ...
+                    "origQty": float,
+                    "executedQty": float,
+                    "price": float,
+                    "avgPrice": float,
+                    "reduceOnly": bool,
+                    "status": str,              # "FILLED" | "CANCELED" | "EXPIRED"
+                    "time": int,                # 毫秒时间戳
+                    "updateTime": int,
+                }
+            ]
         """
         pass
 
@@ -359,13 +553,18 @@ class ExchangeClient(ABC):
                 {
                     "symbol": str,              # 交易对 (可能为空)
                     "type": str,                # "REALIZED_PNL" | "FUNDING_FEE" | "COMMISSION" | "TRANSFER" | ...
-                    "amount": float,            # 金额
+                    "amount": float,            # 金额 (注意: 不是 "income"!)
                     "asset": str,               # "USDT"
-                    "time": int,                # 毫秒时间戳
+                    "time": int,                # 毫秒时间戳 (必须 int)
                     "info": str                 # 备注 (可选)
                 },
                 ...
             ]
+        
+        注意:
+            - Binance 原始字段为 income/incomeType，必须在客户端层映射为 amount/type
+            - OKX type="2" 的记录需拆分为 COMMISSION + REALIZED_PNL 两条
+            - amount 和 time 必须为 float / int，不可透传字符串
         """
         pass
 

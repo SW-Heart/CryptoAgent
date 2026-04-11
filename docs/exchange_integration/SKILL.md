@@ -483,3 +483,305 @@ print("All field validations passed!")
 4. 本地 DB Fallback
 
 **建议**: 后续可抽取为 `OrderNormalizer` 类，与路由层解耦。
+
+---
+
+## 7. 错误处理规范
+
+### 7.1 API 响应错误处理
+
+所有交易所客户端方法必须遵循：
+
+```python
+def some_method(self, ...) -> dict | list:
+    res = self._request(...)
+    if "error" in res:
+        return res  # 透传错误，不抛异常（查询类方法）
+        # 或 return []（列表返回类方法）
+```
+
+**规则：**
+- 查询类方法（get_xxx）：返回 `{"error": "..."}` 或空列表 `[]`，**不抛异常**
+- 下单类方法（place_xxx）：返回 `{"error": "..."}` 或成功结果 `{"orderId": "...", ...}`
+- 上层调用方必须检查 `"error" in result`
+
+### 7.2 限频 (Rate Limit) 处理
+
+| 交易所 | HTTP 限频 | 处理方式 |
+|--------|----------|---------|
+| Binance | `429 Too Many Requests` | 等待 `Retry-After` 秒后重试 |
+| OKX | `code != "0"` + msg 含 "Too many" | 指数退避重试 (1s → 2s → 4s) |
+
+**当前状态**: OKX 客户端检测 `status_code == 429` 返回 `{"error": "Rate limit exceeded"}`，但**未实现自动重试**。
+
+**建议实现** (客户端基类层):
+
+```python
+import time
+
+def _request_with_retry(self, method, endpoint, max_retries=3, **kwargs):
+    """带退避重试的请求包装器"""
+    for attempt in range(max_retries):
+        result = self._request(method, endpoint, **kwargs)
+        if isinstance(result, dict) and result.get("code") == 429:
+            wait = 2 ** attempt
+            time.sleep(wait)
+            continue
+        return result
+    return {"error": "Rate limit exceeded after retries"}
+```
+
+### 7.3 网络超时
+
+| 场景 | 当前超时 | 建议 |
+|------|---------|------|
+| OKX 普通请求 | 15s | ✅ 合理 |
+| Binance 默认 | SDK 默认 | ⚠️ 建议显式设为 10-15s |
+| 下单请求 | 与查询相同 | ⚠️ 下单可考虑稍长 (20s) |
+
+### 7.4 OKX 部分成功 (code=1)
+
+OKX 批量操作可能返回 `code=1`（部分成功），需逐条检查 `sCode`:
+
+```python
+# OKX 批量下单时 code=1 表示部分成功
+if okx_resp.code == "1":
+    for item in data:
+        if item["sCode"] != "0":
+            log_error(f"Order failed: {item['sMsg']}")
+```
+
+---
+
+## 8. Agent 工具层适配指南
+
+### 8.1 架构关系
+
+```
+┌─────────────────────────────────────────┐
+│  Agent (trading_agent.py)               │
+│  调用 open_position / close_position    │
+├─────────────────────────────────────────┤
+│  Tools 分发层                            │
+│  exchange_trading_tools.py               │
+│  ┌─────────────────────────────────┐    │
+│  │ _get_trading_client(user_id)    │    │
+│  │  → exchange_factory.py          │    │
+│  │  → create_exchange_client(...)  │    │
+│  │  → ExchangeClient 子类实例      │    │
+│  └─────────────────────────────────┘    │
+├─────────────────────────────────────────┤
+│  ExchangeClient (统一接口)               │
+│  BinanceFuturesClient / OKXFuturesClient│
+└─────────────────────────────────────────┘
+```
+
+### 8.2 `_get_trading_client()` 工作流程
+
+```python
+def _get_trading_client(user_id, require_trading_enabled=True):
+    """
+    双路径获取交易所客户端:
+    
+    路径 A: 旧系统 (user_binance_keys 表)
+        → has_user_api_keys(user_id)
+        → get_user_binance_client(user_id)
+        
+    路径 B: 新系统 (exchange_accounts 表)
+        → 查询 trader_instances → exchange_accounts
+        → 解密 metadata_json 中的 API 凭证
+        → exchange_factory.create_exchange_client(provider, ...)
+    """
+```
+
+**关键点**:
+- 路径 B 通过 `provider` 字段自动选择交易所，无需硬编码 Binance
+- `environment` 参数控制 live/testnet/demo 环境
+- API 密钥支持 Fernet 加密存储 (`gAAAA` 前缀)
+
+### 8.3 接入新交易所时工具层需要做的事
+
+**不需要改的：**
+- `_get_trading_client()` — 自动通过工厂方法分发
+- `binance_open_position()` — 使用 `client.place_market_order()` 统一接口
+- `binance_close_position()` — 使用 `client.get_positions()` + `client.place_market_order()`
+
+**可能需要改的：**
+- 如果新交易所的持仓模式有特殊逻辑（如不支持 Hedge Mode），`open_position` 中的 mode 判断需适配
+- `round_quantity()` / `round_price()` 的硬编码精度需要扩展（或改为动态获取）
+
+### 8.4 上下文变量传播
+
+Agent 执行链中关键的上下文变量：
+
+```python
+from contextvars import ContextVar
+
+_current_user_id: ContextVar[str]      # 当前用户ID
+_current_trader_id: ContextVar[int]    # 当前Trader实例ID
+_session_actions: ContextVar[list]     # 当前会话的执行动作记录
+
+# 中间件在请求入口设置:
+set_current_user(user_id)
+set_current_trader_id(trader_id)
+
+# 工具函数在内部读取:
+user_id = get_current_user()
+trader_id = get_current_trader_id()
+```
+
+> ⚠️ 使用 `ContextVar` 而非 `threading.local()`，因为 FastAPI 是异步框架。
+
+---
+
+## 9. 标准化测试套件
+
+### 9.1 设计原则
+
+> 参考: nofx/trader/exchange_sync_test.go
+
+新交易所接入后，必须通过**交易所无关**的标准化测试，确保返回值格式完全一致。
+
+### 9.2 测试文件位置
+
+```
+back/tests/test_exchange_unified.py
+```
+
+### 9.3 必须覆盖的验证场景
+
+```python
+# back/tests/test_exchange_unified.py
+
+def validate_balance(balance: dict):
+    """验证余额返回格式"""
+    assert "wallet_balance" in balance, f"Missing wallet_balance! Got: {balance.keys()}"
+    assert "available_balance" in balance
+    assert "margin_balance" in balance
+    assert "unrealized_pnl" in balance
+    assert isinstance(balance["wallet_balance"], float)
+    assert isinstance(balance["available_balance"], float)
+
+def validate_position(pos: dict):
+    """验证持仓返回格式"""
+    assert "symbol" in pos and "USDT" in pos["symbol"], f"Symbol format wrong: {pos.get('symbol')}"
+    assert "-" not in pos["symbol"], f"Symbol should not contain '-': {pos['symbol']}"
+    assert "direction" in pos and pos["direction"] in ("LONG", "SHORT")
+    assert "quantity" in pos and isinstance(pos["quantity"], float) and pos["quantity"] > 0
+    assert "entry_price" in pos and isinstance(pos["entry_price"], float)
+    assert "mark_price" in pos and isinstance(pos["mark_price"], float)
+    assert "leverage" in pos and isinstance(pos["leverage"], int)
+    assert "margin_type" in pos and pos["margin_type"] in ("cross", "isolated")
+
+def validate_trade(trade: dict):
+    """验证成交记录格式"""
+    assert "symbol" in trade
+    assert "side" in trade and trade["side"] in ("BUY", "SELL")
+    assert "price" in trade and isinstance(trade["price"], float)
+    assert "qty" in trade and isinstance(trade["qty"], float)
+    assert "time" in trade and isinstance(trade["time"], int)
+
+def validate_income(record: dict):
+    """验证资金流水格式"""
+    assert "amount" in record, f"Missing 'amount'! Got keys: {record.keys()}"
+    assert "type" in record, f"Missing 'type'! Got keys: {record.keys()}"
+    assert isinstance(record["amount"], float), f"amount must be float, got {type(record['amount'])}"
+    assert isinstance(record["time"], int), f"time must be int, got {type(record['time'])}"
+
+def validate_order(order: dict):
+    """验证挂单/历史订单格式"""
+    assert "orderId" in order
+    assert "symbol" in order
+    assert "side" in order and order["side"] in ("BUY", "SELL")
+    assert isinstance(order.get("origQty", 0), float)
+    assert isinstance(order.get("time", 0), int)
+```
+
+### 9.4 运行方式
+
+```bash
+# 需设置环境变量
+export TEST_EXCHANGE=okx
+export TEST_API_KEY=xxx
+export TEST_API_SECRET=xxx
+export TEST_PASSPHRASE=xxx  # OKX only
+
+cd back && python -m pytest tests/test_exchange_unified.py -v
+```
+
+### 9.5 新交易所接入 PR Checklist (补充)
+
+在原有 §5 Checklist 基础上增加：
+
+- [ ] **标准化测试**: `test_exchange_unified.py` 所有 validate_xxx 通过
+- [ ] **错误场景**: 传入无效 symbol 返回 `{"error": ...}` 而非抛异常
+- [ ] **空数据场景**: 无持仓时 `get_positions()` 返回 `[]` 而非 `{"error": ...}`
+
+---
+
+## 10. 远期路线图
+
+### 10.1 后台订单同步 (OrderSync) — 优先级 P4
+
+**目标**: 每 30 秒后台增量同步交易记录到本地数据库，实现：
+- 追踪外部（手动/其他bot）的交易
+- 减少仓位历史的 API 调用
+- 支持仓位快照恢复
+
+**参考**: nofx/trader/binance/order_sync.go
+
+**关键设计**:
+1. 基于 `lastSyncTime` + `fromId` 增量同步
+2. 多重检测: COMMISSION 收入 + 活跃持仓 + 已实现盈亏
+3. 同步后触发 PositionBuilder 更新本地仓位记录
+
+### 10.2 统一仓位重建 (PositionBuilder) — 优先级 P2
+
+**目标**: 将 `strategy.py` 中 `/position-history` 端点的 trade-based 聚合逻辑抽取为独立模块。
+
+**参考**: nofx/trader/position_rebuild.go
+
+**算法**:
+1. 按时间排序所有 trades
+2. `RealizedPnL == 0` → 开仓 trade → 加入 FIFO 队列
+3. `RealizedPnL != 0` → 平仓 trade → FIFO 匹配 → 生成 ClosedPosition 记录
+4. 精度容差 1e-8 处理浮点误差
+
+### 10.3 动态精度获取 — 优先级 P2
+
+**目标**: 替换 `QTY_PRECISION` / `PRICE_PRECISION` 硬编码。
+
+**方案**:
+```python
+class ExchangeClient(ABC):
+    @abstractmethod
+    def get_instrument_info(self, symbol: str) -> dict:
+        """获取交易对的精度信息"""
+        return {
+            "qty_precision": int,     # 数量小数位
+            "price_precision": int,   # 价格小数位
+            "min_qty": float,         # 最小下单量
+            "min_notional": float,    # 最小名义价值
+        }
+    
+    def format_quantity(self, symbol: str, qty: float) -> float:
+        """按精度规则格式化数量"""
+        info = self.get_instrument_info(symbol)
+        return round(qty, info["qty_precision"])
+```
+
+### 10.4 WebSocket 实时行情 — 优先级 P4
+
+**目标**: 替代轮询 REST API 获取实时价格。
+
+**影响范围**:
+- `get_mark_price()` → 改为从 WS 缓存读取
+- 前端 TradingView 行情推送
+- 持仓未实现盈亏实时更新
+
+### 10.5 GridTrader 适配器模式 — 优先级 P4
+
+**目标**: 参考 nofx 的 `GridTrader` 接口，支持限价单网格交易策略。
+
+**参考**: nofx/trader/types/interface.go → GridTrader interface
+

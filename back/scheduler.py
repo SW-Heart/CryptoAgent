@@ -138,7 +138,7 @@ def sync_binance_users_positions():
     """
     try:
         from binance_client import get_all_active_trading_users
-        from tools.binance_trading_tools import binance_get_positions_summary
+        from tools.exchange_trading_tools import get_positions_summary
         
         # Get all users with trading enabled
         users = get_all_active_trading_users()
@@ -151,7 +151,7 @@ def sync_binance_users_positions():
         for user_id in users:
             try:
                 # 1. Sync Positions (Status)
-                summary = binance_get_positions_summary(user_id)
+                summary = get_positions_summary(user_id)
                 if "error" in summary:
                     print(f"[Scheduler] Error syncing positions for {user_id[:8]}: {summary['error']}")
                 
@@ -188,7 +188,7 @@ def sync_user_account_stats(user_id: str):
     # 路径 B: 新系统 Workspace
     if not client:
         try:
-            from tools.binance_trading_tools import _get_trading_client
+            from tools.exchange_trading_tools import _get_trading_client
             client, err = _get_trading_client(user_id, require_trading_enabled=False)
             if err:
                 # print(f"[Stats] No client available for {user_id[:8]}: {err}")
@@ -647,7 +647,7 @@ def cleanup_orphan_orders():
     - 新系统: exchange_accounts + trader_instances (Workspace)
     """
     try:
-        from tools.binance_trading_tools import binance_cancel_orphan_orders
+        from tools.exchange_trading_tools import cancel_orphan_orders
         
         # 统一获取所有活跃用户（同时覆盖旧系统和新系统）
         user_ids = set()
@@ -683,7 +683,7 @@ def cleanup_orphan_orders():
         
         for user_id in user_ids:
             try:
-                result = binance_cancel_orphan_orders(user_id=user_id)
+                result = cancel_orphan_orders(user_id=user_id)
                 if result.get("error"):
                     print(f"[OrphanCleanup] Error for user {user_id[:8]}: {result['error']}")
                 elif (result.get("cancelled_normal", 0) + result.get("cancelled_algo", 0)) > 0:
