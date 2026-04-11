@@ -426,6 +426,9 @@ export default function ExecutionPage({ userId }) {
         setIncomeHistory([]);
         setLogs([]);
 
+        // 乐观更新：立即切换到运行态面板，无需等待后端返回
+        setActiveTrader(prev => ({ ...prev, status: 'RUNNING' }));
+
         try {
             // 1. 保存配置（不再调用 fetchData，因为马上就要启动了）
             await putJson(`/api/workspace/trader-instances/${activeTrader.id}?user_id=${userId}`, pendingChanges);
@@ -435,6 +438,8 @@ export default function ExecutionPage({ userId }) {
             await Promise.all([fetchData(), refreshMarketRef.current()]);
             showFeedback("已成功启动", "success");
         } catch (err) {
+            // 启动失败，回滚乐观更新
+            setActiveTrader(prev => ({ ...prev, status: 'STOPPED' }));
             showFeedback(err.message || "启动失败，请重试", "error");
         } finally {
             setActing(false);
@@ -1093,8 +1098,8 @@ function DecisionCard({ log, traderInstances, accounts, llmConfigs }) {
     const account = accounts?.find(a => String(a.id) === String(trader?.exchange_account_id));
     const llm = llmConfigs?.find(l => String(l.id) === String(trader?.llm_config_id));
 
-    const exchangeName = account ? account.exchange : (log.trader_instance_id ? '配置已删' : '迁移数据');
-    const modelName = llm ? llm.provider : (log.trader_instance_id ? '配置已删' : '未知体系');
+    const exchangeName = account ? account.exchange : null;
+    const modelName = llm ? llm.provider : null;
 
     const renderProviderLogo = (name, type) => {
         const lowerName = name?.toLowerCase() || '';
@@ -1126,9 +1131,29 @@ function DecisionCard({ log, traderInstances, accounts, llmConfigs }) {
             );
         }
 
-        // Fallback to text if missing logo
-        const colorClass = type === 'exchange' ? 'bg-white/5 border-white/10 text-slate-400' : 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400';
-        return <span className={`px-1.5 py-[1px] rounded border text-[8px] capitalize tracking-widest ${colorClass}`}>{name}</span>;
+        // No recognized provider — don't render anything
+        return null;
+    };
+
+    // Action label translation map
+    const ACTION_LABELS = {
+        'OPEN_LONG': '开多',
+        'OPEN_SHORT': '开空',
+        'CLOSE_LONG': '平多',
+        'CLOSE_SHORT': '平空',
+        'ADJUST_SL': '调整止损',
+        'ADJUST_TP': '调整止盈',
+        'SET_SL': '设置止损',
+        'SET_TP': '设置止盈',
+        'ADD_POSITION': '加仓',
+        'REDUCE_POSITION': '减仓',
+        'HOLD': '持仓观望',
+        'CANCEL_ORDER': '取消委托',
+        'REVERSE': '反手',
+    };
+    const translateAction = (act) => {
+        const upper = act?.toUpperCase?.() || '';
+        return ACTION_LABELS[upper] || act;
     };
 
     return (
@@ -1136,19 +1161,19 @@ function DecisionCard({ log, traderInstances, accounts, llmConfigs }) {
             <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                     <span className="text-[9px] font-mono text-slate-500 font-bold">{formattedDate}</span>
-                    {renderProviderLogo(exchangeName, 'exchange')}
-                    {renderProviderLogo(modelName, 'llm')}
+                    {exchangeName && renderProviderLogo(exchangeName, 'exchange')}
+                    {modelName && renderProviderLogo(modelName, 'llm')}
                 </div>
                 <div className="flex items-center gap-1.5">
                     <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">本轮决策：</span>
                     {!isExecution && (
-                        <div className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase bg-amber-500/10 text-amber-500 border border-amber-500/20">
-                            等待
+                        <div className="px-2 py-0.5 rounded-[4px] text-[8px] font-black bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                            持仓观望
                         </div>
                     )}
                     {isExecution && activeActions.map((act, i) => (
-                        <div key={i} className="px-2 py-0.5 rounded-[4px] text-[8px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            {act}
+                        <div key={i} className="px-2 py-0.5 rounded-[4px] text-[8px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            {translateAction(act)}
                         </div>
                     ))}
                 </div>
