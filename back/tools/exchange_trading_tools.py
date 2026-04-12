@@ -890,8 +890,44 @@ def binance_update_stop_loss(
             print(f"[BinanceTrading] Check position mode failed: {e}")
             is_hedge_mode = False
         
-        # Cancel existing orders
-        client.cancel_all_orders(symbol)
+        # 1. 只取消现有的 SL 类订单（保留 TP 订单）
+        sl_types = {"STOP_MARKET", "STOP", "TRAILING_STOP_MARKET"}
+        cancelled_count = 0
+        
+        # 取消普通 SL 挂单
+        try:
+            normal_orders = client.get_open_orders(symbol)
+            if isinstance(normal_orders, list):
+                for order in normal_orders:
+                    if order.get("type", "") in sl_types:
+                        order_id = order.get("orderId")
+                        if order_id:
+                            try:
+                                client.cancel_order(symbol, str(order_id))
+                                cancelled_count += 1
+                            except Exception as e:
+                                print(f"[Trading] Failed to cancel SL order {order_id}: {e}")
+        except Exception as e:
+            print(f"[Trading] Failed to get orders for SL cancel: {e}")
+        
+        # 取消 Algo SL 挂单（统一接口，适用于所有交易所）
+        try:
+            algo_orders = client.get_open_algo_orders()
+            if isinstance(algo_orders, list):
+                for order in algo_orders:
+                    order_type = order.get("algoType") or order.get("type", "")
+                    if order.get("symbol") == symbol and order_type in sl_types:
+                        algo_id = order.get("algoId") or order.get("orderId")
+                        if algo_id:
+                            try:
+                                client.cancel_algo_order(symbol, str(algo_id))
+                                cancelled_count += 1
+                            except Exception as e:
+                                print(f"[Trading] Failed to cancel algo SL {algo_id}: {e}")
+        except Exception:
+            pass
+        
+        print(f"[Trading] Cancelled {cancelled_count} existing SL orders for {symbol}")
         
         # Place new SL order
         new_stop_loss = round_price(symbol, new_stop_loss)
@@ -990,30 +1026,31 @@ def binance_update_take_profit(
                         order_id = order.get("orderId")
                         if order_id:
                             try:
-                                client.cancel_order(symbol, order_id)
+                                client.cancel_order(symbol, str(order_id))
                                 cancelled_count += 1
                             except Exception as e:
-                                print(f"[BinanceTrading] Failed to cancel TP order {order_id}: {e}")
+                                print(f"[Trading] Failed to cancel TP order {order_id}: {e}")
         except Exception as e:
-            print(f"[BinanceTrading] Failed to get orders for TP cancel: {e}")
+            print(f"[Trading] Failed to get orders for TP cancel: {e}")
         
-        # 取消 Algo TP 挂单
+        # 取消 Algo TP 挂单（统一接口，适用于所有交易所）
         try:
             algo_orders = client.get_open_algo_orders()
             if isinstance(algo_orders, list):
                 for order in algo_orders:
-                    if order.get("symbol") == symbol and order.get("type", "") in tp_types:
-                        algo_id = order.get("algoId")
+                    order_type = order.get("algoType") or order.get("type", "")
+                    if order.get("symbol") == symbol and order_type in tp_types:
+                        algo_id = order.get("algoId") or order.get("orderId")
                         if algo_id:
                             try:
-                                client._request("DELETE", "/fapi/v1/algoOrder", {"algoId": algo_id})
+                                client.cancel_algo_order(symbol, str(algo_id))
                                 cancelled_count += 1
                             except Exception as e:
-                                print(f"[BinanceTrading] Failed to cancel algo TP {algo_id}: {e}")
+                                print(f"[Trading] Failed to cancel algo TP {algo_id}: {e}")
         except Exception:
             pass
         
-        print(f"[BinanceTrading] Cancelled {cancelled_count} existing TP orders for {symbol}")
+        print(f"[Trading] Cancelled {cancelled_count} existing TP orders for {symbol}")
         
         # 2. Place new TP order
         new_take_profit = round_price(symbol, new_take_profit)

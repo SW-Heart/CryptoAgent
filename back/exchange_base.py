@@ -374,6 +374,34 @@ class ExchangeClient(ABC):
     # ==========================================
 
     @abstractmethod
+    def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """
+        取消单笔普通挂单。
+        
+        Args:
+            symbol: 交易对
+            order_id: 订单 ID
+        
+        Returns:
+            取消结果 dict
+        """
+        pass
+
+    @abstractmethod
+    def cancel_algo_order(self, symbol: str, algo_id: str) -> dict:
+        """
+        取消单笔条件单（止损/止盈/跟踪止损）。
+        
+        Args:
+            symbol: 交易对
+            algo_id: 条件单 ID
+        
+        Returns:
+            取消结果 dict
+        """
+        pass
+
+    @abstractmethod
     def cancel_all_orders(self, symbol: str) -> dict:
         """
         取消某交易对的所有普通挂单。

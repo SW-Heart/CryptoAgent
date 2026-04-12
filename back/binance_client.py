@@ -1084,6 +1084,21 @@ class BinanceFuturesClient(ExchangeClient):
             "orderId": order_id
         })
     
+    def cancel_algo_order(self, symbol: str, algo_id: str) -> dict:
+        """
+        取消单笔 Algo/条件订单。
+        
+        Args:
+            symbol: 交易对
+            algo_id: Algo 订单 ID
+        
+        Returns:
+            取消结果 dict
+        """
+        return self._request("DELETE", "/fapi/v1/algoOrder", {
+            "algoId": algo_id
+        })
+    
     def cancel_all_orders(self, symbol: str) -> dict:
         """
         Cancel all open orders for a symbol.

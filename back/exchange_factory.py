@@ -2,6 +2,9 @@ from typing import Optional
 from exchange_base import ExchangeClient
 from binance_client import BinanceFuturesClient
 from exchange_okx import OKXFuturesClient
+from exchange_bybit import BybitFuturesClient
+from exchange_bitget import BitgetFuturesClient
+from exchange_gate import GateFuturesClient
 
 def create_exchange_client(
     provider: str,
@@ -39,6 +42,25 @@ def create_exchange_client(
             api_secret=api_secret,
             passphrase=passphrase or "",
             simulated=is_simulated
+        )
+    elif provider == "bybit":
+        return BybitFuturesClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            environment=environment
+        )
+    elif provider == "bitget":
+        return BitgetFuturesClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase or "",
+            environment=environment
+        )
+    elif provider == "gate":
+        return GateFuturesClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            environment=environment
         )
     else:
         raise ValueError(f"不支持的交易所提供商: {provider}")

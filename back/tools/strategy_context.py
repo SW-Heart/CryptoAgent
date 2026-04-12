@@ -430,6 +430,8 @@ def _fetch_positions(user_id: str = None, open_orders: Dict = None) -> Dict:
         for pos in positions_list:
             symbol = pos.get("symbol", "").replace("USDT", "")
             tp_orders, sl_orders = _match_orders_for_symbol(symbol)
+            if tp_orders or sl_orders:
+                print(f"[StrategyContext] Position {symbol}: matched {len(tp_orders)} TP + {len(sl_orders)} SL orders")
             result["list"].append({
                 "symbol": symbol,
                 "direction": "LONG" if pos.get("direction") == "LONG" else "SHORT",
@@ -486,6 +488,7 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
     try:
         # 1. 获取普通挂单
         normal_orders = client.get_open_orders()
+        normal_count = 0
         if isinstance(normal_orders, list):
             for order in normal_orders:
                 order_type = order.get("type", "")
@@ -507,13 +510,17 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
                     "reduce_only": str(order.get("reduceOnly", "")).lower() == "true",
                     "source": "normal",
                 })
+                normal_count += 1
         
         # 2. 获取 Algo/条件挂单
+        algo_count = 0
         try:
             algo_orders = client.get_open_algo_orders()
             if isinstance(algo_orders, list):
                 for order in algo_orders:
-                    order_type = order.get("type", "")
+                    # 优先使用 algoType（OKX/Bitget 返回此字段区分 TP/SL），
+                    # fallback 到 type（Binance 直接在 type 中标识）
+                    order_type = order.get("algoType") or order.get("type", "")
                     side = order.get("side", "")
                     symbol = order.get("symbol", "").replace("USDT", "")
                     
@@ -521,16 +528,24 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
                         "symbol": symbol,
                         "type": order_type,
                         "side": side,
-                        "quantity": _safe_float(order.get("quantity") or order.get("origQty")),
+                        "quantity": _safe_float(order.get("origQty") or order.get("quantity")),
                         "price": _safe_float(order.get("price")),
                         "stop_price": _safe_float(order.get("triggerPrice") or order.get("stopPrice")),
                         "reduce_only": str(order.get("reduceOnly", "")).lower() == "true",
                         "source": "algo",
                     })
+                    algo_count += 1
         except Exception as e:
             print(f"[StrategyContext] _fetch_open_orders algo error: {e}")
         
         result["count"] = len(result["list"])
+        print(f"[StrategyContext] _fetch_open_orders: {normal_count} normal + {algo_count} algo = {result['count']} total orders")
+        if result["count"] > 0:
+            types_summary = {}
+            for o in result["list"]:
+                t = o.get("type", "UNKNOWN")
+                types_summary[t] = types_summary.get(t, 0) + 1
+            print(f"[StrategyContext] Order types: {types_summary}")
     except Exception as e:
         result["error"] = str(e)
     

@@ -336,9 +336,18 @@ def log_strategy_round(round_id: str, symbols: str, response: dict, user_id: str
                 return
             
             cursor.execute("""
-                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp", user_id, trader_instance_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s)
-            """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000], user_id, trader_instance_id))
+                SELECT l.provider 
+                FROM llm_configs l 
+                JOIN trader_instances t ON t.llm_config_id = l.id 
+                WHERE t.id = %s
+            """, (trader_instance_id,))
+            llm_row = cursor.fetchone()
+            llm_provider = llm_row["provider"] if (llm_row and "provider" in llm_row) else None
+            
+            cursor.execute("""
+                INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp", user_id, trader_instance_id, llm_provider)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+            """, (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response[:5000], user_id, trader_instance_id, llm_provider))
             
             conn.commit()
         conn.close()

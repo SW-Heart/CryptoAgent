@@ -143,8 +143,17 @@ def log_strategy_analysis(
         import json
         
         cursor.execute("""
-            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp", user_id, trader_instance_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s)
+            SELECT l.provider 
+            FROM llm_configs l 
+            JOIN trader_instances t ON t.llm_config_id = l.id 
+            WHERE t.id = %s
+        """, (ctx_trader_id,))
+        llm_row = cursor.fetchone()
+        llm_provider = llm_row["provider"] if (llm_row and "provider" in llm_row) else None
+        
+        cursor.execute("""
+            INSERT INTO strategy_logs (round_id, symbols, market_analysis, position_check, strategy_decision, actions_taken, raw_response, "timestamp", user_id, trader_instance_id, llm_provider)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
         """, (
             round_id,
             symbols,
@@ -154,7 +163,8 @@ def log_strategy_analysis(
             json.dumps(actual_actions),
             f"Strategy analysis at {round_id}: {strategy_decision[:500]}",
             ctx_user_id,
-            str(ctx_trader_id) if ctx_trader_id else None
+            str(ctx_trader_id) if ctx_trader_id else None,
+            llm_provider
         ))
         conn.commit()
     conn.close()

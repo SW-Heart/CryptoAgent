@@ -362,8 +362,8 @@ class TestExchangeName:
 
     def test_exchange_name_returns_string(self, client):
         name = client.get_exchange_name()
-        assert isinstance(name, str) and len(name) > 0
-        assert name in ("Binance", "OKX"), f"Unknown exchange name: {name}"
+        assert isinstance(name, str)
+        assert name in ("Binance", "OKX", "Bybit", "Bitget", "Gate"), f"Unknown exchange name: {name}"
 
 
 # ==========================================

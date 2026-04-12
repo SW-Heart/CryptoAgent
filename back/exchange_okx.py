@@ -444,6 +444,30 @@ class OKXFuturesClient(ExchangeClient):
         # Returning success for compatibility.
         return {"success": True}
 
+    def cancel_order(self, symbol: str, order_id: str) -> dict:
+        inst_id = self._convert_symbol(symbol)
+        body = {"instId": inst_id, "ordId": order_id}
+        res = self._request("POST", "/api/v5/trade/cancel-order", body=body)
+        if "error" in res:
+            return res
+        data = res.get("data", [])
+        if data and data[0].get("sCode") == "0":
+            return {"success": True, "orderId": order_id}
+        msg = data[0].get("sMsg", "Unknown error") if data else "No data"
+        return {"error": f"OKX cancel failed: {msg}"}
+
+    def cancel_algo_order(self, symbol: str, algo_id: str) -> dict:
+        inst_id = self._convert_symbol(symbol)
+        body = [{"instId": inst_id, "algoId": algo_id}]
+        res = self._request("POST", "/api/v5/trade/cancel-algos", body=body)
+        if "error" in res:
+            return res
+        data = res.get("data", [])
+        if data and data[0].get("sCode") == "0":
+            return {"success": True, "algoId": algo_id}
+        msg = data[0].get("sMsg", "Unknown error") if data else "No data"
+        return {"error": f"OKX cancel algo failed: {msg}"}
+
     def cancel_all_orders(self, symbol: str) -> dict:
         inst_id = self._convert_symbol(symbol)
         
@@ -561,7 +585,7 @@ class OKXFuturesClient(ExchangeClient):
                 "orderId": o["algoId"],  # mapping for UI
                 "symbol": sym,
                 "side": o["side"].upper(),
-                "type": "CONDITIONAL",
+                "type": algo_type,
                 "algoType": algo_type,
                 "triggerCondition": "ge" if "ge" in str(o) else "le", # OKX doesn't expose ge/le clearly in simple conditional sometimes, logic can be complex
                 "origQty": float(o.get("sz", 0)) * ct_val,

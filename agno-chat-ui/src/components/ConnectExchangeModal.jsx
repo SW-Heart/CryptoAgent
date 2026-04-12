@@ -60,7 +60,10 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
 
     const platforms = [
         { id: 'okx', name: 'OKX', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg', comingSoon: false },
-        { id: 'binance', name: 'Binance', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg', comingSoon: false }
+        { id: 'binance', name: 'Binance', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg', comingSoon: false },
+        { id: 'bybit', name: 'Bybit', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/bybit.svg', comingSoon: false },
+        { id: 'bitget', name: 'Bitget', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Bitget.svg', comingSoon: false },
+        { id: 'gate', name: 'Gate.io', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/gate.io.svg', comingSoon: false }
     ];
 
     const handleSubmit = async () => {
@@ -196,14 +199,20 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
 
                     <Input label="Secret Key" type="password" placeholder="请输入 Secret Key" value={formData.api_secret} onChange={v => { setFormData(f => ({ ...f, api_secret: v })); setError(null); }} />
                     
-                    {platform === 'okx' && (
-                        <Input label="Passphrase" type="password" placeholder="请输入 API Passphrase" value={formData.passphrase} onChange={v => { setFormData(f => ({ ...f, passphrase: v })); setError(null); }} />
+                    {(platform === 'okx' || platform === 'bitget') && (
+                        <Input label="Passphrase" type="password" placeholder={`请输入 ${selectedPlatform?.name} 的 API Passphrase`} value={formData.passphrase} onChange={v => { setFormData(f => ({ ...f, passphrase: v })); setError(null); }} />
                     )}
 
                     {/* Help link for API Key application */}
                     <a
                         href={platform === 'okx'
                             ? 'https://www.okx.com/docs-v5/zh/#overview-api-key-creation'
+                            : platform === 'bybit'
+                            ? 'https://www.bybit.com/zh-MY/help-center/article/How-to-create-your-API-key?category=ae1012f19fad1c184e'
+                            : platform === 'bitget'
+                            ? 'https://www.bitget.com/zh-CN/account/newapi'
+                            : platform === 'gate'
+                            ? 'https://www.gate.io/zh/help/trade/api/23114/how-to-create-api-keys'
                             : 'https://www.binance.com/zh-CN/support/faq/%E5%A6%82%E4%BD%95%E5%88%9B%E5%BB%BAapi-360002502072'}
                         target="_blank"
                         rel="noopener noreferrer"

@@ -345,7 +345,12 @@ function LLMSection({ userId, onUpdate }) {
         openai: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/openai.svg",
         deepseek: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/deepseek.svg",
         anthropic: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Claude.svg",
-        google: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg"
+        google: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg",
+        gemini: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg",
+        qwen: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/qwen.svg",
+        minimax: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/MiniMax.svg",
+        kimi: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/kimi.svg",
+        glm: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/%E6%99%BA%E8%B0%B1.svg"
     };
 
     if (loading) {
@@ -368,8 +373,8 @@ function LLMSection({ userId, onUpdate }) {
                     <div key={cfg.id} className="p-6 rounded-3xl border border-white/5 bg-[#0e1215]/50 flex items-center justify-between group hover:border-emerald-500/20 transition-all">
                         <div className="flex items-center gap-5">
                             <div className="w-5 h-5 flex items-center justify-center">
-                                {llmIcons[cfg.provider] ? (
-                                    <img src={llmIcons[cfg.provider]} alt={cfg.provider} className="w-full h-full object-contain" />
+                                {llmIcons[cfg.provider?.toLowerCase()] ? (
+                                    <img src={llmIcons[cfg.provider?.toLowerCase()]} alt={cfg.provider} className="w-full h-full object-contain" />
                                 ) : (
                                     <Cpu className="w-5 h-5 text-emerald-400" />
                                 )}
@@ -483,7 +488,10 @@ function ExchangeSection({ userId, onUpdate }) {
 
     const exchangeIcons = {
         binance: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg",
-        okx: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg"
+        okx: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg",
+        bybit: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/bybit.svg",
+        bitget: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Bitget.svg",
+        gate: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/gate.io.svg"
     };
 
     if (loading) {
@@ -506,8 +514,8 @@ function ExchangeSection({ userId, onUpdate }) {
                     <div key={acc.id} className="p-6 rounded-3xl border border-white/5 bg-[#0e1215]/50 flex items-center justify-between group hover:border-emerald-500/20 transition-all">
                         <div className="flex items-center gap-5">
                             <div className="w-5 h-5 flex items-center justify-center">
-                                {exchangeIcons[acc.provider] ? (
-                                    <img src={exchangeIcons[acc.provider]} alt={acc.provider} className="w-full h-full object-contain" />
+                                {exchangeIcons[acc.provider?.toLowerCase()] ? (
+                                    <img src={exchangeIcons[acc.provider?.toLowerCase()]} alt={acc.provider} className="w-full h-full object-contain" />
                                 ) : (
                                     <Globe className="w-5 h-5 text-slate-400" />
                                 )}

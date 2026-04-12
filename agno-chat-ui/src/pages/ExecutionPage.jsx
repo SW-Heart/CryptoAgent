@@ -80,6 +80,9 @@ function StatCard({ icon: Icon, label, value, subValue, trend, tone = 'emerald',
 const EXCHANGE_LOGOS = {
     binance: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg',
     okx: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg',
+    bybit: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/bybit.svg',
+    bitget: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Bitget.svg',
+    gate: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/gate.io.svg',
 };
 const LLM_LOGOS = {
     deepseek: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/deepseek.svg',
@@ -87,6 +90,10 @@ const LLM_LOGOS = {
     anthropic: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Claude.svg',
     google: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg',
     gemini: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg',
+    qwen: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/qwen.svg",
+    minimax: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/MiniMax.svg",
+    kimi: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/kimi.svg",
+    glm: "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/%E6%99%BA%E8%B0%B1.svg"
 };
 
 function OptionLogo({ src, fallback }) {
@@ -1099,28 +1106,16 @@ function DecisionCard({ log, traderInstances, accounts, llmConfigs }) {
     const llm = llmConfigs?.find(l => String(l.id) === String(trader?.llm_config_id));
 
     const exchangeName = account ? account.exchange : null;
-    const modelName = llm ? llm.provider : null;
+    const modelName = log.llm_provider || (llm ? llm.provider : null);
 
     const renderProviderLogo = (name, type) => {
         const lowerName = name?.toLowerCase() || '';
         
         let logoUrl = null;
         if (type === 'exchange') {
-            if (lowerName === 'binance') {
-                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/binance.svg";
-            } else if (lowerName === 'okx') {
-                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg";
-            }
+            logoUrl = EXCHANGE_LOGOS[lowerName];
         } else {
-            if (lowerName === 'openai') {
-                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/openai.svg";
-            } else if (lowerName === 'anthropic' || lowerName.includes('claude')) {
-                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Claude.svg";
-            } else if (lowerName === 'deepseek') {
-                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/deepseek.svg";
-            } else if (lowerName === 'google' || lowerName === 'gemini') {
-                logoUrl = "https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/google.svg";
-            }
+            logoUrl = LLM_LOGOS[lowerName] || (lowerName.includes('claude') ? LLM_LOGOS['anthropic'] : null);
         }
 
         if (logoUrl) {
