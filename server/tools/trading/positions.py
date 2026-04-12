@@ -115,6 +115,11 @@ def binance_open_position(
         quantity = notional_value / calc_price
         quantity = round_quantity(symbol, quantity)
         
+        # [SAFETY CHECK] Min Quantity and Non-Zero
+        if quantity <= 0:
+            min_qty = get_min_order_size(symbol)
+            return {"error": f"Calculated quantity is rounded to 0. The minimum order quantity for {symbol} is {min_qty}. Your order value ({notional_value:.2f} USDT) is too small given current price {calc_price}. Please increase margin or leverage."}
+        
         # [SAFETY CHECK] Min Notional Value
         if notional_value < 6.0:
             return {"error": f"Calculated order value {notional_value:.2f} is too small. Binance requires Min Notional > 5.0 (Safe > 6.0)."}
