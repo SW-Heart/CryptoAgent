@@ -1,6 +1,36 @@
 # 更新日志 / Changelog
 
-## [2026-01-01] Trading Agent 优化
+## [2026-04-12] Phase 4 架构专业化与极致性能优化
+
+### ⚡️ 核心性能飙升
+- **消除 API 延迟**: 为 Workspace 同步引入基于 `user_id` 的 60s TTL 缓存，消除设置界面由于重复 DB 同步造成的 3+ 秒高延迟。
+- **解密计算重构**: 修复 `Fernet` 实例化导致的 100,000 次 PBKDF2 重复推导 CPU 阻塞瓶颈，改为模块级全局单例。
+
+### 🏗️ 后端深度模块化
+- **交易模块解耦**: 原臃肿的 `exchange_trading_tools` 被完全解体，演变为强垂直的 `tools/trading/` (`orders.py`, `positions.py`, `risk.py`, `cleanup.py`)。
+- **市场模块打散**: 将信息收集拆分为 `tools/market/` (`onchain.py`, `news.py`, `composite.py` 等)。
+- **部署架构升级**: 引入 `deploy/` 目录，修复 `Dockerfile` 复制路径问题，提供 React+FastAPI 双环境结合的现代化部署方案。
+
+### 🐛 调度器与 Agent 关键修复
+- **重复触发拦截**: 修复杂乱的 `last_analyzed_at` 后置更新机制导致的 60 分钟间隔却在 3 分钟内重复触发策略的问题。
+- **UI 状态回显**: 在实盘开仓/平仓统一接入 `add_session_action` 动作追踪管道，解决前端日志卡片永远显示“持仓观望”的问题，修复“正在同步中”的幽灵日志流。
+
+---
+
+## [2026-04-10] 多交易所适配 (Multi-Exchange Architecture)
+
+- **抽象层映射**: 将底层客户端升级为工厂模式路由，抽象出 `UnifiedExchangeClient`。
+- **全面覆盖**: 现已支持 **Binance**, **OKX**, **Bitget** 甚至 **Gate** 的统一标准挂单及资产查询流。
+- **交互优化**: 优化了 Dashboard 界面的数据聚合和组件分发。
+
+---
+
+## [2026-04-09] 专业看盘看板集成
+
+- **TradingView 植入**: 重磅上线专业级 Market 看板，内嵌 TradingView 无缝看盘方案。
+- **交易面板加固**: 修复了 Binance 可用余额获取、历史持仓及开仓失败等系列核心资产链路 Bug。
+
+---## [2026-01-01] Trading Agent 优化
 
 ### 🔧 工具合并优化 (Token 消耗减少 81%)
 
