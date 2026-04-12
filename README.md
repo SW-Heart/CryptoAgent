@@ -1,254 +1,75 @@
-# Alpha Intelligence - Crypto AI Agent Platform
+# 🤖 CryptoAgent: 开发者与 AI 助手工程手册 (Internal)
 
-> 🤖 一个基于多 Agent 架构的加密货币智能分析与交易平台
+> **项目状态**: 生产现代化重构已完成 (Phase 4)
+> **核心架构**: Agno Agentic Core + FastAPI Async + React 18 High-Fidelity UI + Dockerized Deployment
 
-## ✨ 功能特性
-
-| 模块 | 功能 | 说明 |
-|------|------|------|
-| 💬 **AI Chat** | 智能对话 | 与 Alpha（加密分析专家）实时问答，支持多周期技术分析、市场情绪、新闻解读 |
-| 📈 **Strategy Nexus** | 策略中枢 | 虚拟合约交易模拟，Agent 自动分析并执行策略 |
-| 📰 **Daily Report** | 每日早报 | 自动生成中英双语加密早报，支持邮件订阅 |
-| 📊 **Dashboard** | 仪表盘 | 恐惧贪婪指数、热门币种、关键点位、新闻摘要一览 |
+本手册旨在为内部开发人员及协作 AI 助手提供项目深度技术细节，以便进行高效的逻辑维护与功能扩展。
 
 ---
 
-## 🏗️ 系统架构
+## 🏗️ 1. 系统架构深度解构
 
-### AI Agent 体系
+### 1.1 Agent 决策流 (Agno Core)
+系统采用 **双层 Agent 架构**，逻辑层级如下：
+*   **CryptoAnalyst (数据感知层)**:
+    *   **职责**: 负责多源异步数据采集，现已完全拆分到 `tools/market/` 模块下（包含 `composite.py`, `data_sources.py`, `onchain.py`, `news.py` 等）。
+    *   **输出**: 格式化的市场共振综述（Market Resonance Summary）。
+*   **TradingStrategy (决策执行层)**:
+    *   **职责**: 接收感知层数据，结合用户配置的 `StrategyProfile`（单笔风控、杠杆策略），通过 `scheduler.py` 调度执行结构化决策。
+    *   **防重复锁**: 使用单实例运行锁 (`_running_trader_instances`) 及乐观锁 (`last_analyzed_at`) 确保多线程并发不导致重复开仓。
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      AgentOS (Agno)                         │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│  CryptoAnalyst  │  TradingStrategy│    DailyReporter        │
-│  (主分析Agent)   │  (交易策略Agent) │    (日报生成Agent)       │
-├─────────────────┴─────────────────┴─────────────────────────┤
-│                       工具层 (Tools)                         │
-│ ┌─────────────┬─────────────┬─────────────┬───────────────┐ │
-│ │crypto_tools │trading_tools│etf_tools    │technical_     │ │
-│ │(市场数据)    │(交易执行)    │(ETF资金流)   │analysis       │ │
-│ └─────────────┴─────────────┴─────────────┴───────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 数据流
-
-```
-外部数据源                    后端                      前端
-┌──────────┐              ┌──────────┐              ┌──────────┐
-│ Binance  │──价格/K线──▶ │          │              │          │
-│ CoinGecko│──市值/趋势──▶│ FastAPI  │◀─── REST ───▶│  React   │
-│ Etherscan│──链上数据──▶ │    +     │              │    +     │
-│ Farside  │──ETF资金流─▶ │  Agno    │◀── WebSocket─│  Vite    │
-│ CryptoPa.│──新闻情绪──▶ │          │              │          │
-└──────────┘              └──────────┘              └──────────┘
-                               │
-                        ┌──────┴──────┐
-                        │  Scheduler  │
-                        │ (定时任务)   │
-                        │ • 4h策略分析 │
-                        │ • 8am日报   │
-                        │ • 价格警报  │
-                        └─────────────┘
-```
+### 1.2 多交易所抽象层 (Multi-Exchange Factory)
+已完成跨交易所的底层适配，消除对单一 Binance 实例的强依赖：
+*   **核心模块**: `server/exchanges/factory.py` 提供工厂模式路由。
+*   **支持平台**: 现不仅支持 Binance，还拓展至 OKX、Bitget，统一了 `open_position`, `close_position`, `cancel_algo_order` 等抽象接口。
+*   **模块化解耦**: 传统的 `exchange_trading_tools.py` 已降级为向下兼容层，核心逻辑彻底按业务领域拆分至 `tools/trading/` (如 `positions`, `orders`, `risk`, `cleanup`)。
 
 ---
 
-## 📁 项目结构
+## 🗄️ 2. 后端数据持久化与高并发优化
 
-```
-zidingyi/
-├── agno-chat-ui/                # 前端 (React + Vite)
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── chat/            # 聊天界面
-│   │   │   ├── dashboard/       # 仪表盘组件
-│   │   │   ├── DailyReport.jsx  # 日报页面
-│   │   │   ├── StrategyNexus.jsx# 策略中枢
-│   │   │   └── ...
-│   │   ├── services/            # API 服务封装
-│   │   ├── locales/             # 国际化 (en/zh)
-│   │   └── context/             # React Context (Auth)
-│   └── .env.example
-│
-├── back/                        # 后端 (Python + FastAPI)
-│   ├── main.py                  # 入口 (AgentOS 初始化)
-│   │
-│   ├── # === AI Agents ===
-│   ├── crypto_agent.py          # 主分析 Agent (CryptoAnalyst)
-│   ├── trading_agent.py         # 交易策略 Agent (TradingStrategy)
-│   ├── daily_report_agent.py    # 日报生成 Agent (DailyReporter)
-│   │
-│   ├── # === Agent 工具集 ===
-│   ├── crypto_tools.py          # 市场数据工具 (价格/情绪/新闻)
-│   ├── trading_tools.py         # 交易执行工具 (开仓/平仓/警报)
-│   ├── etf_tools.py             # ETF 资金流工具 (Farside API)
-│   ├── technical_analysis.py    # 技术分析工具 (EMA/MACD/Vegas)
-│   ├── pattern_recognition.py   # 形态识别 (趋势线/形态/波浪)
-│   ├── indicator_memory.py      # 指标可靠性记忆 (OSS 存储)
-│   │
-│   ├── # === 业务路由 ===
-│   ├── app/routers/
-│   │   ├── dashboard.py         # /api/dashboard/* (恐慌指数/新闻)
-│   │   ├── sessions.py          # /api/sessions/* (会话管理)
-│   │   ├── credits.py           # /api/credits/* (积分/钱包)
-│   │   ├── strategy.py          # /api/strategy/* (策略记录/持仓)
-│   │   └── daily_report.py      # /api/daily-report/* (日报/订阅)
-│   │
-│   ├── scheduler.py             # 定时任务调度器
-│   ├── .env.example             # 环境变量模板
-│   └── requirements.txt
-│
-└── README.md
-```
+### 2.1 数据库连接池 [CRITICAL]
+基于 PostgreSQL 的高频轮询业务优化配置：
+*   **代码规范**: 严禁直接调用 `conn.close()`。必须使用 `with get_db() as conn:` 或 `try...finally` 块确保连接强制归还。
+
+### 2.2 性能与安全优化 (Performance & Security)
+*   **Workspace TTL 缓存**: 在 `workspace_service.py` 的 `sync_legacy_workspace_state` 引入基于 user_id 的 60s 内存缓存，彻底消除了由高频数据库全表轮询和 Upsert 引发的 UI 查询 3秒 延迟。
+*   **加密密钥单例化**: 修复了之前按需初始化 `Fernet` 导致每次加解密都执行 100,000 次 `PBKDF2` 哈希计算造成的严重 CPU 阻塞，改为模块级缓存机制。
 
 ---
 
-## 🚀 快速开始
+## 💻 3. 前端工程化与 UI 架构
 
-### 环境要求
+### 3.1 组件原子化
+Web 端的 Execution 页面已经完成了原子化重构：
+*   将庞大的逻辑分拆为独立的 `DecisionCard.jsx`, `Dropdowns.jsx`, `StatCard.jsx`。
+*   引入了高频轮询的数据防抖与 ANSI 到 HTML 的全彩原生终端日志解析，显著提升 Agent 日志反馈界面的高级感。
 
-- **Node.js** >= 18
-- **Python** >= 3.10
-- **pnpm** (推荐) 或 npm
-
-### 1. 后端配置
-
-```bash
-cd back
-
-# 1. 复制环境变量模板
-cp .env.example .env
-
-# 2. 编辑 .env，填入 API 密钥 (见下方表格)
-vim .env
-
-# 3. 安装依赖
-pip install -r requirements.txt
-
-# 4. 启动服务 (开发模式)
-fastapi dev main.py
-# 或
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
-
-### 2. 前端配置
-
-```bash
-cd agno-chat-ui
-
-# 1. 复制环境变量模板
-cp .env.example .env
-
-# 2. 编辑 .env，填入 Supabase 配置
-vim .env
-
-# 3. 安装依赖
-pnpm install
-
-# 4. 启动开发服务器
-pnpm dev
-```
-
-### 3. 访问
-
-- 前端: http://localhost:5173
-- 后端 API: http://localhost:8000
-- Agent 文档: http://localhost:8000/docs
+### 3.2 UI 动效系统
+*   使用 Framer Motion，所有 Modal 已采用 React `createPortal` 挂载，彻底解决在复杂 `absolute` 流中的堆叠上下文问题。
 
 ---
 
-## 🔑 API 密钥配置
+## 🛠️ 4. AI 助手维护指南 (Agent Rules)
 
-| 服务 | 用途 | 必需 | 获取地址 |
-|------|------|:----:|----------|
-| **DeepSeek** | AI 模型 (LLM) | ✅ | https://platform.deepseek.com/ |
-| **Serper** | Google 搜索 | ✅ | https://serper.dev/ |
-| **Supabase** | 用户认证 | ✅ | https://supabase.com/ |
-| CryptoPanic | 加密新闻 + 情绪 | 推荐 | https://cryptopanic.com/developers/api/ |
-| Etherscan | ETH 链上数据 | 可选 | https://etherscan.io/myapikey |
-| Exa | 深度新闻搜索 | 可选 | https://exa.ai/ |
-| 阿里云 OSS | 指标可靠性存储 | 可选 | https://ram.console.aliyun.com/ |
-| SMTP | 日报邮件发送 | 可选 | (企业邮箱配置) |
+当协作 AI 进行代码修改时，必须遵循以下 **“铁律”**：
+
+1.  **DB 读写自闭环**: 任何涉及数据库的函数，起始位置必须是 `conn = get_db_connection()`，且必须配套 `finally: conn.close()`。
+2.  **动作追踪完整性**: 在新增或修改实盘交易工具 (`binance_open_position` 等) 时，必须保证在交易成功后调用 `add_session_action("ACTION_NAME")`，否则前端决策卡片将错误显示为“持仓观望”。
+3.  **加密解密高昂成本**: 绝不允许在每一行查询结构里循环创建新的加解密器实例，必须重用。
+4.  **按需引入与统一入口**: 新增交易所 SDK 开发，需严格遵守 `UnifiedExchangeClient` 接口，在 `exchanges/` 里完成封装，最终统一挂载至 `factory.py`。
 
 ---
 
-## 🛠️ 技术栈
+## 📊 5. 容器化部署架构 (Dockerization)
 
-### 后端
-| 组件 | 技术 |
-|------|------|
-| Web 框架 | FastAPI |
-| AI Agent | [Agno](https://github.com/agno-agi/agno) |
-| LLM | DeepSeek Chat |
-| 数据库 | SQLite (本地) |
-| 定时任务 | schedule + threading |
-
-### 前端
-| 组件 | 技术 |
-|------|------|
-| 框架 | React 18 + Vite |
-| 样式 | TailwindCSS |
-| 国际化 | i18next |
-| 认证 | Supabase Auth |
-| 状态 | React Context |
-
-### 外部数据源
-| 数据 | 来源 |
-|------|------|
-| 价格/K线 | Binance API |
-| 市值/趋势 | CoinGecko API |
-| ETF 资金流 | Farside Investors (自建爬虫) |
-| 恐惧贪婪 | Alternative.me |
-| 链上数据 | Etherscan API |
-| DeFi TVL | DefiLlama API |
+当前系统已支持 `Docker Compose` 一键部署验证。
+*   **路径**: 部署及编排文件位于 `deploy/` 目录。
+*   **双阶段构建**: `deploy/Dockerfile` 实现了 Frontend Vite 的预编译及 Backend FastAPI 的单容器结合，通过 `nginx.conf` 暴露端口 80。
+*   **命令规范**: 要求在**项目根目录**运行打包，指定路径：`docker buildx build -f deploy/Dockerfile -t xxx .`
+*   **环境变量**: API 密钥统一交由 `.env` 或 Docker Compose 管理，宿主机不要留空变量以免覆盖 `.env` 配置。
 
 ---
-
-## 📋 Scheduler 定时任务
-
-| 任务 | 频率 | 说明 |
-|------|------|------|
-| 策略分析 | 每 4 小时 | 调用 TradingStrategy Agent 分析 BTC/ETH/SOL |
-| 价格监控 | 每 1 分钟 | 检查持仓 SL/TP，更新浮动盈亏 |
-| 价格警报 | 每 1 分钟 | 检查用户设置的价格警报，触发后调用 Agent |
-| 日报生成 | 每日 8:00 AM | 生成中英文日报，发送订阅邮件 |
-
----
-
-## 📝 Agent 使用示例
-
-### CryptoAnalyst (主分析)
-```
-用户: BTC 现在适合做多吗？
-Agent: [调用技术分析 + 情绪 + ETF 数据，给出多维共振分析]
-```
-
-### TradingStrategy (交易策略)
-```
-系统: [每4小时自动触发]
-Agent: [分析市场状态 → 评分 → 决策 → 开仓/等待/设置警报]
-```
-
-### DailyReporter (日报)
-```
-系统: [每日8:00 AM触发]
-Agent: [收集数据 → 分析趋势 → 生成早报 → 发送邮件]
-```
-
----
-
-## 📄 License
-
-MIT
-
----
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
----
-
-*Built with ❤️ by Alpha Intelligence Team*
+**版本控制**: v2.2.0 (Framework Modularization)
+**最后更新**: 2026-04-13 
+**维护者**: Antigravity AI Engine

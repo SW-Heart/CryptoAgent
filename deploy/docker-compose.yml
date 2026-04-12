@@ -1,0 +1,36 @@
+services:
+  db:
+    image: ankane/pgvector:latest
+    container_name: crypto_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: cryptoagent
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: crpi-kkdialo4iggzlbcd.ap-southeast-1.personal.cr.aliyuncs.com/sw_crypto/agent:latest
+    container_name: crypto_app
+    ports:
+      - "8080:80"
+    environment:
+      - DB_URL=postgresql://postgres:password@db:5432/cryptoagent
+      # 让 env_file 处理所有 API Keys，避免宿主机环境变量为空覆盖了 .env 文件
+    env_file:
+      - ../server/.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  postgres_data:
