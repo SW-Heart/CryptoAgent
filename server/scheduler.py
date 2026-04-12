@@ -580,11 +580,21 @@ def trigger_strategy():
         if not should_run:
             continue
 
+        # Skip if this trader instance is already running an analysis
+        tid = trader["trader_instance_id"]
+        if tid in _running_trader_instances:
+            print(f"[Scheduler] Trader #{tid} is already running analysis, skipping")
+            continue
+
         # Throttling to avoid API rate limits
         if idx > 0:
             time.sleep(2)
         
         _run_trader_instance(trader, round_id)
+
+
+# Per-instance lock: prevent concurrent execution of the same trader instance
+_running_trader_instances: set = set()
 
 
 def _run_trader_instance(trader: dict, round_id: str):
@@ -596,6 +606,23 @@ def _run_trader_instance(trader: dict, round_id: str):
     prompt = trader["prompt_template"]
     
     print(f"[Scheduler] Executing Trader #{trader_instance_id} (Profile #{profile_id}) for User {user_id[:8]}... (Interval: {trader['trading_interval']}m)")
+    
+    # Mark as running to prevent re-entry
+    _running_trader_instances.add(trader_instance_id)
+    
+    # Optimistic lock: update last_analyzed_at BEFORE the Agent call
+    # This prevents duplicate triggers while the Agent is processing (1-2 min)
+    try:
+        conn = get_db()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE strategy_profiles SET last_analyzed_at = %s WHERE id = %s",
+                (datetime.now(), profile_id)
+            )
+            conn.commit()
+        conn.close()
+    except Exception as db_e:
+        print(f"[Scheduler] Failed to set optimistic lock for Profile #{profile_id}: {db_e}")
     
     try:
         # Build the individualized prompt - simplified since analysis framework is now
@@ -618,8 +645,7 @@ def _run_trader_instance(trader: dict, round_id: str):
         
         if response.status_code == 200:
             print(f"[Scheduler] Trader #{trader_instance_id} completed successfully")
-            
-            # Update last_analyzed_at on the strategy profile
+            # Refresh last_analyzed_at to Agent completion time (more accurate for next interval)
             try:
                 conn = get_db()
                 with conn.cursor() as cursor:
@@ -638,6 +664,9 @@ def _run_trader_instance(trader: dict, round_id: str):
     except Exception as e:
         print(f"[Scheduler] Exception executing Trader #{trader_instance_id}: {e}")
         log_strategy_round(round_id, symbols, {"content": f"Exception: {str(e)}"}, user_id=user_id, trader_instance_id=str(trader_instance_id))
+    finally:
+        # Always release the per-instance lock
+        _running_trader_instances.discard(trader_instance_id)
 
 
 
