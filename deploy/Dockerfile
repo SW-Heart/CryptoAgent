@@ -54,7 +54,7 @@ COPY server /app/server
 COPY --from=frontend-build /app/frontend/dist /app/static
 
 # Copy Nginx config
-COPY nginx.conf /etc/nginx/nginx.conf
+COPY deploy/nginx.conf /etc/nginx/nginx.conf
 
 # Set environment
 ENV PYTHONPATH=/app/server
