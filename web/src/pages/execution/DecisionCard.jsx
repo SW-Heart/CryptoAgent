@@ -38,17 +38,33 @@ export default function DecisionCard({ log, traderInstances, accounts, llmConfig
             const actions = JSON.parse(log.actions_taken);
             if (Array.isArray(actions)) {
                 activeActions = actions.filter(a => typeof a === 'string' && !a.toUpperCase().startsWith('HOLD'));
-                if (activeActions.length > 0) isExecution = true;
             } else if (typeof actions === 'string' && !actions.toUpperCase().startsWith('HOLD')) {
                 activeActions = [actions];
-                isExecution = true;
             }
         }
     } catch {
         if (log.actions_taken && !log.actions_taken.toUpperCase().includes('HOLD') && log.actions_taken !== '[]') {
             activeActions = [log.actions_taken];
-            isExecution = true;
         }
+    }
+
+    // Fallback: If no action parsed from actions_taken, try extracting from the strategy decision markdown.
+    // E.g. looking for keywords: OPEN_LONG, ADJUST_SL, SET_TP, BUY, SELL, ADJUST_TP, CLOSE_LONG
+    if (activeActions.length === 0 && log.strategy_decision) {
+        const keywords = ['OPEN_LONG', 'OPEN_SHORT', 'CLOSE_LONG', 'CLOSE_SHORT', 'ADJUST_SL', 'ADJUST_TP', 'SET_SL', 'SET_TP', 'ADD_POSITION', 'REDUCE_POSITION', 'REVERSE'];
+        const decisionText = log.strategy_decision.toUpperCase();
+        
+        for (const kw of keywords) {
+            if (decisionText.includes(kw)) {
+                activeActions.push(kw);
+            }
+        }
+        // Deduplicate
+        activeActions = [...new Set(activeActions)];
+    }
+
+    if (activeActions.length > 0) {
+        isExecution = true;
     }
 
     const trader = traderInstances?.find(t => String(t.id) === String(log.trader_instance_id));
@@ -80,45 +96,86 @@ export default function DecisionCard({ log, traderInstances, accounts, llmConfig
         return null;
     };
 
-    // Action label translation map
-    const ACTION_LABELS = {
-        'OPEN_LONG': '开多',
-        'OPEN_SHORT': '开空',
-        'CLOSE_LONG': '平多',
-        'CLOSE_SHORT': '平空',
-        'ADJUST_SL': '调整止损',
-        'ADJUST_TP': '调整止盈',
-        'SET_SL': '设置止损',
-        'SET_TP': '设置止盈',
-        'ADD_POSITION': '加仓',
-        'REDUCE_POSITION': '减仓',
-        'HOLD': '持仓观望',
-        'CANCEL_ORDER': '取消委托',
-        'REVERSE': '反手',
-    };
+    // 解析带有 symbol（如 ADJUST_SL_BTC）和参数（如 PARTIAL_CLOSE_LONG_BTC_50%）的复杂动作标签
     const translateAction = (act) => {
-        const upper = act?.toUpperCase?.() || '';
-        return ACTION_LABELS[upper] || act;
+        const upper = typeof act === 'string' ? act.toUpperCase() : '';
+        if (!upper) return act;
+        
+        const prefixMap = [
+            { match: 'PARTIAL_CLOSE_LONG_', label: '部分平多' },
+            { match: 'PARTIAL_CLOSE_SHORT_', label: '部分平空' },
+            { match: 'OPEN_LONG_', label: '开多' },
+            { match: 'OPEN_SHORT_', label: '开空' },
+            { match: 'CLOSE_LONG_', label: '平多' },
+            { match: 'CLOSE_SHORT_', label: '平空' },
+            { match: 'ADJUST_SL_', label: '调整止损' },
+            { match: 'ADJUST_TP_', label: '调整止盈' },
+            { match: 'MODIFY_ORDER_', label: '修改挂单' },
+            { match: 'CANCEL_ORDER_', label: '撤销挂单' },
+            { match: 'REVERSE_', label: '反手' },
+            { match: 'SET_SL_', label: '设置止损' },
+            { match: 'SET_TP_', label: '设置止盈' },
+        ];
+
+        for (const { match, label } of prefixMap) {
+            if (upper.startsWith(match)) {
+                return label;
+            }
+        }
+        
+        const exactMap = {
+            'HOLD': '持仓观望',
+            'ADD_POSITION': '加仓',
+            'REDUCE_POSITION': '减仓',
+            'OPEN_LONG': '开多',
+            'OPEN_SHORT': '开空',
+            'CLOSE_LONG': '平多',
+            'CLOSE_SHORT': '平空',
+            'ADJUST_SL': '调整止损',
+            'ADJUST_TP': '调整止盈',
+            'MODIFY_ORDER': '修改挂单',
+            'CANCEL_ORDER': '撤销挂单',
+            'REVERSE': '反手',
+            'SET_SL': '设置止损',
+            'SET_TP': '设置止盈',
+        };
+        
+        return exactMap[upper] || act;
     };
 
+    // 获取去重后的简化中文标签
+    let displayActions = isExecution 
+        ? Array.from(new Set(activeActions.map(act => translateAction(act)))) 
+        : [];
+        
+    // 极致UI压缩：智能合并同时操作的盈损标签
+    if (displayActions.includes('调整止损') && displayActions.includes('调整止盈')) {
+        displayActions = displayActions.filter(a => a !== '调整止损' && a !== '调整止盈');
+        displayActions.unshift('调整盈损');
+    }
+    if (displayActions.includes('设置止损') && displayActions.includes('设置止盈')) {
+        displayActions = displayActions.filter(a => a !== '设置止损' && a !== '设置止盈');
+        displayActions.unshift('设置盈损');
+    }
+
     return (
-        <div onClick={() => setOpen(!open)} className={`p-4 rounded-2xl border transition-all cursor-pointer ${open ? 'bg-[#0a0d0f] border-emerald-500/30' : 'bg-[#0e1215]/40 border-white/5 hover:border-white/10'}`}>
+        <div onClick={() => setOpen(!open)} className={`p-4 rounded-2xl border transition-all cursor-pointer flex-shrink-0 min-w-0 ${open ? 'bg-[#0a0d0f] border-emerald-500/30' : 'bg-[#0e1215]/40 border-white/5 hover:border-white/10'}`}>
             <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                     <span className="text-[9px] font-mono text-slate-500 font-bold">{formattedDate}</span>
                     {exchangeName && renderProviderLogo(exchangeName, 'exchange')}
                     {modelName && renderProviderLogo(modelName, 'llm')}
                 </div>
-                <div className="flex items-center gap-1.5">
-                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">本轮决策：</span>
+                <div className="flex items-center gap-1.5 flex-nowrap justify-end overflow-hidden">
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap flex-shrink-0">本轮决策：</span>
                     {!isExecution && (
-                        <div className="px-2 py-0.5 rounded-[4px] text-[8px] font-black bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                        <div className="px-2 py-0.5 rounded-[4px] text-[8px] font-black bg-amber-500/10 text-amber-500 border border-amber-500/20 whitespace-nowrap">
                             持仓观望
                         </div>
                     )}
-                    {isExecution && activeActions.map((act, i) => (
-                        <div key={i} className="px-2 py-0.5 rounded-[4px] text-[8px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            {translateAction(act)}
+                    {isExecution && displayActions.map((label, i) => (
+                        <div key={i} className="px-2 py-0.5 rounded-[4px] text-[8px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap overflow-hidden text-ellipsis">
+                            {label}
                         </div>
                     ))}
                 </div>

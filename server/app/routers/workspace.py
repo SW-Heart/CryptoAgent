@@ -1,7 +1,7 @@
 """
 Workspace router for product shell objects.
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
 from pydantic import BaseModel, Field
 import oss2
 import os
@@ -245,6 +245,53 @@ def post_trader_runtime_action(trader_id: int, user_id: str, request: TraderRunt
 
     try:
         return set_trader_runtime_action(user_id, trader_id, request.action)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/trader-instances/{trader_id}/trigger")
+def post_trader_trigger(trader_id: int, user_id: str, background_tasks: BackgroundTasks):
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    ti.id AS trader_instance_id,
+                    ti.user_id,
+                    ti.llm_config_id,
+                    ti.status,
+                    sp.id AS strategy_profile_id,
+                    sp.symbols,
+                    sp.timeframes,
+                    sp.trading_interval,
+                    sp.prompt_template,
+                    sp.last_analyzed_at
+                FROM trader_instances ti
+                INNER JOIN strategy_profiles sp ON sp.id = ti.strategy_profile_id
+                WHERE ti.id = %s AND ti.user_id = %s
+            """, (trader_id, user_id))
+            full_trader = cursor.fetchone()
+        finally:
+            conn.close()
+            
+        if not full_trader:
+            raise ValueError("Could not load full trader details")
+            
+        full_trader_dict = dict(full_trader)
+        if full_trader_dict.get("status") != "RUNNING":
+            raise ValueError("Trader must be in RUNNING state to trigger analysis manually")
+
+        from scheduler import _run_trader_instance
+        import time
+        round_id = time.strftime("%Y-%m-%d_%H:%M") + "_manual"
+        background_tasks.add_task(_run_trader_instance, full_trader_dict, round_id)
+        
+        return {"success": True, "message": "Manual trigger scheduled"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

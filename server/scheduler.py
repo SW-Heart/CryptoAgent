@@ -319,6 +319,23 @@ def log_strategy_round(round_id: str, symbols: str, response: dict, user_id: str
             parts = raw_response.split("### Strategy Decision")
             if len(parts) > 1:
                 strategy_decision = parts[1].strip()[:1000]
+                
+        # Parse actions taken dynamically from decision
+        if strategy_decision:
+            keywords = ["OPEN_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT", 
+                        "ADJUST_SL", "ADJUST_TP", "SET_SL", "SET_TP", "ADD_POSITION", 
+                        "REDUCE_POSITION", "CANCEL_ORDER", "REVERSE"]
+            
+            extracted = []
+            for line in strategy_decision.split('\n'):
+                if '|' in line and not line.strip().startswith('|--'):
+                    line_upper = line.upper()
+                    for kw in keywords:
+                        if kw in line_upper:
+                            extracted.append(kw)
+                            
+            if extracted:
+                actions_taken = json.dumps(list(dict.fromkeys(extracted)))
         
         # Check if Agent already logged this round within last 3 minutes (to avoid duplicates)
         # Agent may log with a slightly different round_id (1-2 min later)
@@ -645,6 +662,15 @@ def _run_trader_instance(trader: dict, round_id: str):
         
         if response.status_code == 200:
             print(f"[Scheduler] Trader #{trader_instance_id} completed successfully")
+            
+            # 将分析结果记录到数据库（策略执行日志）
+            try:
+                result_data = response.json()
+                from scheduler import log_strategy_round
+                log_strategy_round(round_id, symbols, result_data, user_id=user_id, trader_instance_id=str(trader_instance_id))
+            except Exception as log_e:
+                print(f"[Scheduler] Error parsing or saving strategy log: {log_e}")
+                
             # Refresh last_analyzed_at to Agent completion time (more accurate for next interval)
             try:
                 conn = get_db()

@@ -55,8 +55,9 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
     
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [ipCopied, setIpCopied] = useState(false);
 
-    const SERVER_IP = "47.243.12.88"; 
+    const SERVER_IP = "47.79.241.49"; 
 
     const platforms = [
         { id: 'okx', name: 'OKX', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg', comingSoon: false },
@@ -110,6 +111,8 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
 
     const handleCopyIp = () => {
         navigator.clipboard.writeText(SERVER_IP);
+        setIpCopied(true);
+        setTimeout(() => setIpCopied(false), 3000);
     };
 
     const selectedPlatform = platforms.find(p => p.id === platform);
@@ -225,7 +228,16 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                     <div className="space-y-2 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10 animate-in slide-in-from-top-2">
                         <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest ml-1 flex items-center justify-between">
                             IP 白名单配置
-                            <button onClick={handleCopyIp} className="hover:text-indigo-300 flex items-center gap-1 font-black text-[9px] uppercase tracking-wider"><Copy className="w-3 h-3"/> 复制 IP</button>
+                            <button 
+                                onClick={handleCopyIp} 
+                                className={`flex items-center gap-1 font-black text-[9px] uppercase tracking-wider transition-colors ${ipCopied ? 'text-emerald-400' : 'hover:text-indigo-300'}`}
+                            >
+                                {ipCopied ? (
+                                    <><CheckCircle2 className="w-3 h-3"/> 复制成功</>
+                                ) : (
+                                    <><Copy className="w-3 h-3"/> 复制 IP</>
+                                )}
+                            </button>
                         </label>
                         <div className="text-xs font-mono text-slate-300 break-all bg-black/20 p-2.5 rounded-xl border border-white/5">{SERVER_IP}</div>
                         <p className="text-[10px] text-slate-500 leading-relaxed font-medium">{selectedPlatform?.name || '交易平台'}强烈建议开启 IP 绑定。请将上方 IP 填入 API 设置的白名单中。</p>
