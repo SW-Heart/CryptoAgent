@@ -662,15 +662,10 @@ def _run_trader_instance(trader: dict, round_id: str):
         
         if response.status_code == 200:
             print(f"[Scheduler] Trader #{trader_instance_id} completed successfully")
+            # 注意: 策略日志由 Agent 自身通过 trading_tools.log_strategy 工具写入 strategy_logs，
+            # Scheduler 层不应重复调用 log_strategy_round，否则会因 3 分钟去重锁
+            # 导致 Agent 的精确日志（含 session_actions 跟踪）被拦截或产生竞争。
             
-            # 将分析结果记录到数据库（策略执行日志）
-            try:
-                result_data = response.json()
-                from scheduler import log_strategy_round
-                log_strategy_round(round_id, symbols, result_data, user_id=user_id, trader_instance_id=str(trader_instance_id))
-            except Exception as log_e:
-                print(f"[Scheduler] Error parsing or saving strategy log: {log_e}")
-                
             # Refresh last_analyzed_at to Agent completion time (more accurate for next interval)
             try:
                 conn = get_db()

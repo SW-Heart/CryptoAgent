@@ -443,6 +443,11 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
         return result
     
     try:
+        def _safe_float(v):
+            if v is None or v == "": return 0.0
+            try: return float(v)
+            except: return 0.0
+        
         # 1. 获取普通挂单
         normal_orders = client.get_open_orders()
         normal_count = 0
@@ -451,11 +456,6 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
                 order_type = order.get("type", "")
                 side = order.get("side", "")
                 symbol = order.get("symbol", "").replace("USDT", "")
-                
-                def _safe_float(v):
-                    if v is None or v == "": return 0.0
-                    try: return float(v)
-                    except: return 0.0
                 
                 result["list"].append({
                     "symbol": symbol,
