@@ -223,19 +223,36 @@ def _record_runtime_event(user_id: str, trader_id: int, event_type: str, summary
         conn.close()
 
 
-def sync_legacy_workspace_state(user_id: str):
+# Cache: avoid running the expensive legacy sync on every GET request.
+# Maps user_id → last_sync_timestamp. Expires after _SYNC_CACHE_TTL seconds.
+_sync_cache: dict[str, float] = {}
+_SYNC_CACHE_TTL = 60  # seconds
+
+
+def sync_legacy_workspace_state(user_id: str, force: bool = False):
     """
     Materialize product shell objects from existing user-level config.
 
     This keeps the new workspace model in sync with the current runtime
     until Strategy Lab and Trader Runtime fully replace legacy settings.
+
+    Uses a per-user TTL cache to avoid redundant DB round-trips on every
+    API GET request (the uncached path does ~9 DB queries + 3 UPSERTs).
     """
     if not user_id:
         return
 
+    import time as _time
+    now = _time.time()
+    if not force and user_id in _sync_cache and (now - _sync_cache[user_id]) < _SYNC_CACHE_TTL:
+        return  # recently synced, skip
+
     exchange_account_id = _sync_legacy_exchange_account(user_id)
     strategy_profile_id = _sync_legacy_strategy_profile(user_id)
     _sync_legacy_trader_instance(user_id, strategy_profile_id, exchange_account_id)
+
+    _sync_cache[user_id] = now
+
 
 
 def _sync_legacy_exchange_account(user_id: str):

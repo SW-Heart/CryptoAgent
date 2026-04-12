@@ -1,6 +1,6 @@
 from typing import Optional
 from exchanges.base import ExchangeClient
-from binance_client import BinanceFuturesClient
+from exchanges.binance import BinanceFuturesClient
 from exchanges.okx import OKXFuturesClient
 from exchanges.bybit import BybitFuturesClient
 from exchanges.bitget import BitgetFuturesClient
