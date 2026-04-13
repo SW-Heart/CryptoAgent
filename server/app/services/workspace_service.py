@@ -1247,6 +1247,17 @@ def test_llm_connectivity(config_data: dict):
         response = probe_agent.run("hi")
         
         if response and response.content:
+            # 3. Validate response content — reject if it contains auth/error keywords
+            content_lower = response.content.lower()
+            error_indicators = [
+                "authentication fail", "invalid", "unauthorized", "api key",
+                "error", "denied", "expired", "quota", "rate limit",
+                "forbidden", "not found", "401", "403", "429"
+            ]
+            for indicator in error_indicators:
+                if indicator in content_lower:
+                    return {"status": "error", "message": f"API Key 验证失败: {response.content[:200]}"}
+            
             return {"status": "success", "message": "连接测试成功，模型响应正常"}
         else:
             return {"status": "error", "message": "模型未返回有效内容，请检查后端配置"}
@@ -1256,7 +1267,7 @@ def test_llm_connectivity(config_data: dict):
         error_msg = str(e)
         
         # Friendly translations for common errors
-        if "Incorrect API key" in error_msg or "Authentication" in error_msg:
+        if "Incorrect API key" in error_msg or "Authentication" in error_msg or "invalid" in error_msg.lower():
             return {"status": "error", "message": "API Key 无效或已过期"}
         if "404" in error_msg or "not found" in error_msg.lower():
             return {"status": "error", "message": "模型 ID 不存在或接口地址 (Base URL) 错误"}

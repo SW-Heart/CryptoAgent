@@ -13,9 +13,11 @@ import {
     Check,
     Zap,
     MessageSquare,
-    ShieldCheck
+    ShieldCheck,
+    Wifi
 } from 'lucide-react';
 import { postJson } from '../../services/apiClient';
+import { showToast } from '../common/GlobalToast';
 
 // --- Icon Picker for Providers ---
 function ProviderIcon({ provider, size = "w-5 h-5", active = true }) {
@@ -48,7 +50,6 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
     const [showProviders, setShowProviders] = useState(false);
     const [testStatus, setTestStatus] = useState('none'); // none, testing, success, error
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
 
     const [formData, setFormData] = useState({
         name: '',
@@ -69,6 +70,24 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
         { id: 'custom', name: '自定义 (Custom)', defaultModel: '', defaultUrl: '' }
     ];
 
+    // 关闭弹窗时重置所有状态
+    const handleClose = () => {
+        setProvider('deepseek');
+        setShowProviders(false);
+        setTestStatus('none');
+        setLoading(false);
+        setFormData({
+            name: '',
+            model: 'deepseek-chat',
+            api_key: '',
+            base_url: 'https://api.deepseek.com/v1'
+        });
+        onClose();
+    };
+
+    // 任何表单变动都重置测试状态
+    const resetTest = () => { setTestStatus('none'); };
+
     const handleProviderChange = (p) => {
         setProvider(p.id);
         setShowProviders(false);
@@ -77,38 +96,38 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
             model: p.defaultModel,
             base_url: p.defaultUrl
         }));
-        setTestStatus('none');
+        resetTest();
     };
 
     const handleTestConnection = async () => {
         if (!formData.api_key.trim()) {
-            setError("请先输入 API Key 进行测试");
+            showToast("请输入 API Key", "error");
+            return;
+        }
+        if (!formData.model.trim()) {
+            showToast("请输入模型型号", "error");
             return;
         }
 
         setTestStatus('testing');
-        setError(null);
         try {
-            const res = await postJson(`/api/workspace/llm-configs/test`, formData);
+            const res = await postJson(`/api/workspace/llm-configs/test`, { ...formData, provider });
             if (res.status === 'success') {
                 setTestStatus('success');
+                showToast("连接验证通过，模型响应正常", "success");
             } else {
                 setTestStatus('error');
-                setError(res.message || "连接测试失败，请检查 API Key 或网络");
+                showToast(res.message || "连接测试失败，请检查 API Key", "error", 6000);
             }
         } catch (err) {
             setTestStatus('error');
-            setError("连接异常: " + err.message);
+            showToast("连接异常: " + err.message, "error", 6000);
         }
     };
 
     const handleSubmit = async () => {
         if (!formData.name.trim()) {
-            setError("请为该配置设置一个别名 (如：我的主力 DeepSeek)");
-            return;
-        }
-        if (testStatus !== 'success') {
-            setError("请先点击【测试连接】并通过验证后再保存");
+            showToast("请为该配置设置一个别名", "error");
             return;
         }
 
@@ -118,31 +137,52 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
                 ...formData,
                 provider
             });
+            showToast("LLM 配置已保存并启用", "success");
             onConnected?.();
-            onClose();
+            handleClose();
         } catch (err) {
-            setError("保存失败: " + err.message);
+            showToast("保存失败: " + err.message, "error");
         } finally {
             setLoading(false);
         }
     };
 
+    // 主按钮：两阶段 — 测试连接 → 保存并启用
+    const handlePrimaryAction = () => {
+        if (testStatus === 'success') {
+            handleSubmit();
+        } else {
+            handleTestConnection();
+        }
+    };
+
+    const isFormReady = formData.api_key.trim() && formData.model.trim();
+    const isBusy = loading || testStatus === 'testing';
+
     const modalFooter = (
         <div className="flex gap-3">
-            <Button variant="outline" className="flex-1 py-4" onClick={onClose}>取消</Button>
+            <Button variant="outline" className="flex-1 py-4" onClick={handleClose}>取消</Button>
             <Button
-                className="flex-1 py-4 shadow-xl shadow-indigo-500/20"
-                icon={loading ? Loader2 : CheckCircle2}
-                disabled={loading || testStatus !== 'success'}
-                onClick={handleSubmit}
+                className={`flex-1 py-4 shadow-xl transition-all duration-300 ${
+                    testStatus === 'success'
+                        ? 'shadow-emerald-500/20'
+                        : 'shadow-indigo-500/20'
+                }`}
+                icon={testStatus === 'success' ? CheckCircle2 : Wifi}
+                loading={isBusy}
+                disabled={isBusy || !isFormReady}
+                onClick={handlePrimaryAction}
             >
-                {loading ? "集成中..." : "保存并启用"}
+                {loading ? "保存中..." :
+                 testStatus === 'testing' ? "验证中..." :
+                 testStatus === 'success' ? "保存并启用" :
+                 "测试连接"}
             </Button>
         </div>
     );
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="配置决策大脑 (LLM)" maxWidth="max-w-md" footer={modalFooter}>
+        <Modal isOpen={isOpen} onClose={handleClose} title="配置决策大脑 (LLM)" maxWidth="max-w-md" footer={modalFooter}>
             <div className="space-y-6">
 
                 {/* Provider Selection */}
@@ -184,51 +224,39 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
                         label="配置别名"
                         placeholder="例如：主决策模型"
                         value={formData.name}
-                        onChange={v => { setFormData(f => ({ ...f, name: v })); setError(null); }}
+                        onChange={v => setFormData(f => ({ ...f, name: v }))}
                     />
 
                     <Input
                         label="模型型号 (Model ID)"
                         placeholder="例如：deepseek-chat"
                         value={formData.model}
-                        onChange={v => { setFormData(f => ({ ...f, model: v })); setTestStatus('none'); }}
+                        onChange={v => { setFormData(f => ({ ...f, model: v })); resetTest(); }}
                     />
 
-                    <div className="flex gap-2 items-end">
-                        <div className="flex-1">
-                            <Input
-                                label="API Key"
-                                type="password"
-                                placeholder="输入该平台的 API 秘钥"
-                                icon={Key}
-                                value={formData.api_key}
-                                onChange={v => { setFormData(f => ({ ...f, api_key: v })); setTestStatus('none'); }}
-                            />
-                        </div>
-                        <Button
-                            variant="secondary"
-                            className={`h-[52px] px-6 rounded-2xl font-black text-[10px] uppercase tracking-widest ${testStatus === 'success' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : ''}`}
-                            onClick={handleTestConnection}
-                            disabled={testStatus === 'testing' || !formData.api_key}
-                        >
-                            {testStatus === 'testing' ? <Loader2 className="w-4 h-4 animate-spin" /> :
-                                testStatus === 'success' ? <div className="flex items-center gap-1"><Check className="w-3 h-3" /> 已通</div> : "测试连接"}
-                        </Button>
-                    </div>
+                    <Input
+                        label="API Key"
+                        type="password"
+                        placeholder="输入该平台的 API 秘钥"
+                        icon={Key}
+                        value={formData.api_key}
+                        onChange={v => { setFormData(f => ({ ...f, api_key: v })); resetTest(); }}
+                    />
 
                     <Input
                         label="API 代理地址 (Base URL)"
                         placeholder="https://api.example.com/v1"
                         icon={Globe}
                         value={formData.base_url}
-                        onChange={v => { setFormData(f => ({ ...f, base_url: v })); setTestStatus('none'); }}
+                        onChange={v => { setFormData(f => ({ ...f, base_url: v })); resetTest(); }}
                     />
                 </div>
 
-                {error && (
-                    <div className="flex items-center gap-2 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[11px] font-black animate-in shake-200">
-                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                        <span>{error}</span>
+                {/* 测试成功 — Modal 内提示引导保存 */}
+                {testStatus === 'success' && (
+                    <div className="flex items-center gap-2 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[11px] font-black animate-in fade-in slide-in-from-bottom-2">
+                        <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                        <span>验证通过！点击下方按钮保存配置。</span>
                     </div>
                 )}
 
@@ -243,3 +271,4 @@ export default function ConnectLLMModal({ isOpen, onClose, onConnected, userId }
         </Modal>
     );
 }
+

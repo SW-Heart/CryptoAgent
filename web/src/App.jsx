@@ -9,6 +9,7 @@ import AuthModal from './components/modals/AuthModal';
 import UserMenu from './components/layout/UserMenu';
 import SettingsModal from './components/modals/SettingsModal';
 import ExecutionPage from './pages/ExecutionPage';
+import GlobalToastContainer from './components/common/GlobalToast';
 import { getJson } from './services/apiClient';
 import './i18n';
 
@@ -120,6 +121,7 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <GlobalToastContainer />
         <AppContent />
       </AuthProvider>
     </BrowserRouter>
