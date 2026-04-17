@@ -6,6 +6,7 @@ from tools.trading._config import *
 from binance_client import get_user_binance_client, get_user_trading_status
 from tools.trading_tools import add_session_action
 import requests
+from notifier import notifier
 
 def binance_get_usdt_balance(user_id: str = None) -> dict:
     """Get USDT balance for user."""
@@ -113,16 +114,45 @@ def binance_open_position(
         
         notional_value = margin * leverage
         quantity = notional_value / calc_price
-        quantity = round_quantity(symbol, quantity)
         
-        # [SAFETY CHECK] Min Quantity and Non-Zero
-        if quantity <= 0:
-            min_qty = get_min_order_size(symbol)
-            return {"error": f"Calculated quantity is rounded to 0. The minimum order quantity for {symbol} is {min_qty}. Your order value ({notional_value:.2f} USDT) is too small given current price {calc_price}. Please increase margin or leverage."}
+        # 使用交易所客户端动态获取精度信息，而非硬编码 Binance 配置
+        # OKX 合约以"张"为单位 (ctVal=0.01 ETH/张)，Binance 以"个"为单位 (ctVal=1.0)
+        inst_info = client.get_instrument_info(symbol)
+        ct_val = inst_info.get("ct_val", 1.0)
+        qty_precision = inst_info.get("qty_precision", 3)
+        min_qty = inst_info.get("min_qty", 0.001)
+        min_notional = inst_info.get("min_notional", 5.0)
         
-        # [SAFETY CHECK] Min Notional Value
-        if notional_value < 6.0:
-            return {"error": f"Calculated order value {notional_value:.2f} is too small. Binance requires Min Notional > 5.0 (Safe > 6.0)."}
+        exchange_name = client.get_exchange_name() if hasattr(client, 'get_exchange_name') else "Unknown"
+        
+        if ct_val != 1.0:
+            # 合约制交易所 (OKX): 用合约张数验证，而非 base coin 数量
+            contracts = quantity / ct_val
+            print(f"[Trading] {exchange_name} contract calc: notional={notional_value:.2f}, qty_base={quantity:.6f}, ct_val={ct_val}, contracts={contracts:.2f}, min_sz={min_qty}")
+            if contracts < 1:
+                # 连 1 张合约都买不起，才真正拒绝
+                min_notional_needed = ct_val * calc_price
+                err_msg = f"Order value too small for {exchange_name}. Need at least {min_notional_needed:.2f} USDT to buy 1 contract (ctVal={ct_val}). Current order: {notional_value:.2f} USDT. Increase margin or leverage."
+                print(f"[Trading] REJECTED: {err_msg}")
+                return {"error": err_msg}
+            # 合约张数取整（OKX 内部也会做，这里提前对齐）
+            quantity = int(contracts) * ct_val
+        else:
+            # 币本位交易所 (Binance): 按币的精度四舍五入
+            quantity = round_quantity(symbol, quantity)
+            
+            # [SAFETY CHECK] Min Quantity and Non-Zero
+            if quantity <= 0:
+                min_qty_display = get_min_order_size(symbol)
+                err_msg = f"Calculated quantity is rounded to 0. The minimum order quantity for {symbol} is {min_qty_display}. Your order value ({notional_value:.2f} USDT) is too small given current price {calc_price}. Please increase margin or leverage."
+                print(f"[Trading] REJECTED: {err_msg}")
+                return {"error": err_msg}
+        
+        # [SAFETY CHECK] Min Notional Value (通用，但阈值使用交易所的值)
+        if notional_value < min_notional:
+            err_msg = f"Calculated order value {notional_value:.2f} is too small. {exchange_name} requires Min Notional > {min_notional}."
+            print(f"[Trading] REJECTED: {err_msg}")
+            return {"error": err_msg}
         
         # Check Position Mode (One-Way or Hedge)
         try:
@@ -239,6 +269,8 @@ def binance_open_position(
         
         # Record session action for accurate decision logging
         add_session_action(f"OPEN_{direction}_{symbol}")
+        
+        notifier.send_event(user_id, "TRADE_OPEN", f"🟢 开仓提醒 - {symbol} {direction}", f"{msg}\n价格: {avg_price if avg_price > 0 else (price if order_type == 'LIMIT' else current_price)}\n杠杆: {leverage}x\n保证金: {margin} USDT", "INFO")
         
         return {
             "success": True,
@@ -394,8 +426,10 @@ def binance_close_position(
         # Record session action for accurate decision logging
         if close_percent >= 100:
             add_session_action(f"CLOSE_{direction}_{symbol}")
+            notifier.send_event(user_id, "TRADE_CLOSE", f"🔵 平仓提醒 - {symbol} {direction}", f"仓位已{reason}平仓\n平仓价格: {avg_price}\n实现盈亏: {round(realized_pnl, 2)} USDT", "INFO")
         else:
             add_session_action(f"PARTIAL_CLOSE_{direction}_{symbol}_{int(close_percent)}%")
+            notifier.send_event(user_id, "TRADE_CLOSE", f"🔵 部分平仓 ({close_percent}%) - {symbol} {direction}", f"部分平仓 ({reason})\n平仓价格: {avg_price}\n实现盈亏: {round(realized_pnl, 2)} USDT", "INFO")
         
         return {
             "success": True,

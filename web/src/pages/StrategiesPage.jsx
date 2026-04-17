@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     Plus,
     Trash2,
@@ -8,10 +8,14 @@ import {
     Loader2,
     CheckCircle2,
     AlertCircle,
-    Zap
+    Zap,
+    ChevronDown,
+    Check,
+    X
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import ConfirmModal from '../components/modals/ConfirmModal';
+import SymbolSelectModal from '../components/modals/SymbolSelectModal';
 import Toast from '../components/common/Toast';
 import { getJson, postJson, putJson, deleteJson } from '../services/apiClient';
 
@@ -26,6 +30,204 @@ const StrategyHelp = ({ title, content }) => (
     </div>
 );
 
+function TimeframeSelectDropdown({ options, value, onChange, disabled }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef(null);
+
+    // Provide a curated list of high-value standard timeframes for the popup options
+    const VALID_TIMEFRAMES = ["5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "1w"];
+
+    // Handle clicks outside to close
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    // Ensure value is an array
+    const selectedList = Array.isArray(value) 
+        ? value 
+        : (typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+    const toggleOption = (opt) => {
+        if (disabled) return;
+        let newList;
+        if (selectedList.includes(opt)) {
+            newList = selectedList.filter(x => x !== opt);
+        } else {
+            newList = [...selectedList, opt];
+        }
+        // sort by standard timeframe order
+        newList.sort((a,b) => {
+            const order = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w"];
+            return (order.indexOf(a) !== -1 ? order.indexOf(a) : 99) - (order.indexOf(b) !== -1 ? order.indexOf(b) : 99);
+        });
+        onChange(newList);
+    };
+
+    return (
+        <div className="relative w-full" ref={containerRef}>
+            <div className="w-full bg-[#060809] border border-white/10 rounded-xl p-3 flex items-start gap-3 min-h-[46px]">
+                <div className="flex-1 flex flex-wrap gap-2 min-w-0">
+                    {selectedList.length === 0 ? (
+                        <span className="text-slate-500 text-sm font-mono px-2 tracking-wider mt-1">未选择分析周期</span>
+                    ) : (
+                        selectedList.map(item => (
+                            <span key={item} className="group/tag relative bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 pl-2.5 pr-2.5 py-1 rounded-lg text-xs font-bold font-mono flex items-center hover:pr-7 transition-all duration-200 overflow-hidden">
+                                {item}
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleOption(item);
+                                    }}
+                                    disabled={disabled}
+                                    className="absolute right-1 opacity-0 group-hover/tag:opacity-100 hover:bg-emerald-500/20 rounded p-0.5 transition-all text-emerald-500 flex items-center justify-center translate-x-2 group-hover/tag:translate-x-0"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </span>
+                        ))
+                    )}
+                </div>
+                <div className="shrink-0 flex pt-0.5">
+                    <button
+                        disabled={disabled}
+                        onClick={(e) => { e.preventDefault(); setIsOpen(!isOpen); }}
+                        className="flex items-center justify-center bg-white/5 hover:bg-emerald-500 text-slate-300 hover:text-white border border-white/10 rounded-lg w-7 h-7 transition-all group"
+                        title="管理分析周期"
+                    >
+                        <Plus className="w-4 h-4 text-emerald-400 group-hover:text-white transition-colors" />
+                    </button>
+                </div>
+            </div>
+
+            {isOpen && !disabled && (
+                <div className="absolute z-50 right-0 mt-2 w-32 bg-[#121619] border border-white/10 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.8)] p-1.5 animate-in zoom-in-95 duration-200 origin-top-right overflow-y-auto custom-scrollbar max-h-48">
+                    <div className="flex flex-col gap-0.5">
+                        {VALID_TIMEFRAMES.map(opt => {
+                            const isSelected = selectedList.includes(opt);
+                            return (
+                                <div 
+                                    key={opt}
+                                    onClick={() => toggleOption(opt)}
+                                    className={`flex items-center justify-center px-1 py-2 cursor-pointer rounded-lg transition-colors border ${
+                                        isSelected 
+                                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-bold' 
+                                        : 'bg-transparent border-transparent hover:bg-white/5 text-slate-300 hover:text-white'
+                                    }`}
+                                >
+                                    <span className="text-sm font-mono">{opt}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SearchableMultiSelectDropdown({ options, value, onChange, disabled, placeholder = "搜索标的..." }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const containerRef = useRef(null);
+
+    // Handle clicks outside to close
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    const selectedList = Array.isArray(value) 
+        ? value 
+        : (typeof value === 'string' ? value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean) : []);
+
+    const toggleOption = (opt) => {
+        if (disabled) return;
+        let newList;
+        if (selectedList.includes(opt)) {
+            newList = selectedList.filter(x => x !== opt);
+        } else {
+            newList = [...selectedList, opt];
+        }
+        onChange(newList);
+    };
+
+    const filteredOptions = search.trim() === '' 
+        ? options.slice(0, 100) // limit rendering if search is empty
+        : options.filter(opt => opt.toLowerCase().includes(search.toLowerCase())).slice(0, 50);
+
+    return (
+        <div className="relative w-full" ref={containerRef}>
+            <div 
+                onClick={() => !disabled && setIsOpen(true)}
+                className={`w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-3 text-sm transition-all font-mono text-white flex flex-col justify-center min-h-[46px] ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-text hover:border-emerald-500'}`}
+            >
+                <div className="flex flex-wrap gap-1 items-center w-full">
+                    {selectedList.map(item => (
+                        <span key={item} 
+                              onClick={(e) => { e.stopPropagation(); toggleOption(item); }}
+                              className="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md text-xs font-bold leading-none flex items-center gap-1 group cursor-pointer hover:bg-red-500/20 hover:text-red-400 border border-emerald-500/20 hover:border-red-500/50 transition-colors">
+                            {item}
+                            <span className="opacity-50 group-hover:opacity-100 mb-[1px]">×</span>
+                        </span>
+                    ))}
+                    {!disabled && (
+                        <input 
+                            type="text"
+                            value={search}
+                            onChange={(e) => {
+                                setSearch(e.target.value);
+                                setIsOpen(true);
+                            }}
+                            placeholder={selectedList.length === 0 ? placeholder : ""}
+                            className="bg-transparent border-none outline-none flex-1 min-w-[100px] text-sm text-white placeholder-slate-500 font-mono"
+                        />
+                    )}
+                </div>
+            </div>
+
+            {isOpen && !disabled && (
+                <div className="absolute z-50 w-full mt-2 bg-[#121619] border border-white/10 rounded-xl shadow-2xl max-h-60 overflow-y-auto custom-scrollbar p-2">
+                    {filteredOptions.length === 0 ? (
+                        <div className="text-center py-4 text-slate-500 text-xs font-medium">
+                            {search ? `未找到匹配标的: ${search}` : "无可选标的"}
+                        </div>
+                    ) : (
+                        filteredOptions.map(opt => {
+                            const isSelected = selectedList.includes(opt);
+                            return (
+                                <div 
+                                    key={opt}
+                                    onClick={() => {
+                                        toggleOption(opt);
+                                        setSearch(''); // Auto clear search after selection
+                                    }}
+                                    className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/5 rounded-lg transition-colors"
+                                >
+                                    <span className={`text-sm font-mono ${isSelected ? 'text-emerald-400 font-bold' : 'text-slate-300'}`}>
+                                        {opt}
+                                    </span>
+                                    {isSelected && <Check className="w-4 h-4 text-emerald-400" />}
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 const StrategiesPage = ({ userId }) => {
     const [profiles, setProfiles] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -36,6 +238,24 @@ const StrategiesPage = ({ userId }) => {
     const [feedback, setFeedback] = useState(null);
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [tradableSymbols, setTradableSymbols] = useState([]);
+    const [isSymbolModalOpen, setIsSymbolModalOpen] = useState(false);
+
+    useEffect(() => {
+        let mounted = true;
+        const loadSymbols = async () => {
+            try {
+                const res = await getJson('/api/strategy/symbols');
+                if (mounted && res && res.symbols) {
+                    setTradableSymbols(res.symbols);
+                }
+            } catch (err) {
+                console.error("Failed to load symbols:", err);
+            }
+        };
+        loadSymbols();
+        return () => { mounted = false; };
+    }, []);
 
     const showFeedback = (msg, type) => {
         setFeedback({ msg, type });
@@ -130,8 +350,17 @@ const StrategiesPage = ({ userId }) => {
         try {
             // Ensure symbols and timeframes are arrays if they were edited as strings
             const data = { ...selectedProfile };
-            if (typeof data.symbols === 'string') data.symbols = data.symbols.split(',').map(s => s.trim());
-            if (typeof data.timeframes === 'string') data.timeframes = data.timeframes.split(',').map(s => s.trim());
+            if (typeof data.symbols === 'string') data.symbols = data.symbols.split(',').map(s => s.trim().toUpperCase());
+            if (typeof data.timeframes === 'string') data.timeframes = data.timeframes.split(',').map(s => s.trim().toLowerCase());
+
+            // 严格校验周期格式
+            const validIntervals = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"];
+            const invalidIntervals = data.timeframes.filter(t => !validIntervals.includes(t));
+            if (invalidIntervals.length > 0) {
+                showFeedback(`不支持的周期: ${invalidIntervals.join(', ')}`, "error");
+                setSaving(false);
+                return;
+            }
 
             const res = await putJson(`/api/workspace/strategy-profiles/${selectedProfile.id}?user_id=${userId}`, data);
             setProfiles(res.profiles || []);
@@ -280,12 +509,67 @@ const StrategiesPage = ({ userId }) => {
                                                     <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">{doc.title}</label>
                                                     <StrategyHelp title={doc.title} content={doc.content} />
                                                 </div>
-                                                <input
-                                                    value={Array.isArray(selectedProfile[key]) ? selectedProfile[key].join(', ') : selectedProfile[key]}
-                                                    onChange={e => updateField(key, e.target.value)}
-                                                    disabled={selectedProfile.source === 'legacy_import'}
-                                                    className={`w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-emerald-500 transition-all font-mono text-white ${selectedProfile.source === 'legacy_import' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                                />
+                                                {key === 'symbols' ? (
+                                                    <div className="w-full bg-[#060809] border border-white/10 rounded-xl p-3 flex items-start gap-3 min-h-[46px]">
+                                                        <div className="flex-1 flex flex-wrap gap-2 min-w-0">
+                                                            {(() => {
+                                                                const val = selectedProfile[key];
+                                                                const list = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',') : []);
+                                                                const selectedList = list.map(s => {
+                                                                    let sym = s.trim().toUpperCase();
+                                                                    if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
+                                                                        return sym + 'USDT';
+                                                                    }
+                                                                    return sym;
+                                                                }).filter(Boolean);
+                                                                return selectedList.length === 0 ? (
+                                                                    <span className="text-slate-500 text-sm font-mono px-2 tracking-wider mt-1">未选择交易标的</span>
+                                                                ) : (
+                                                                    selectedList.map(item => (
+                                                                        <span key={item} className="group/tag relative bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 pl-2.5 pr-2.5 py-1 rounded-lg text-xs font-bold font-mono flex items-center hover:pr-7 transition-all duration-200 overflow-hidden">
+                                                                            {item}
+                                                                            <button 
+                                                                                onClick={(e) => {
+                                                                                    e.preventDefault();
+                                                                                    const newList = selectedList.filter(s => s !== item);
+                                                                                    updateField('symbols', newList);
+                                                                                }}
+                                                                                className="absolute right-1 opacity-0 group-hover/tag:opacity-100 hover:bg-emerald-500/20 rounded p-0.5 transition-all text-emerald-500 flex items-center justify-center translate-x-2 group-hover/tag:translate-x-0"
+                                                                            >
+                                                                                <X className="w-3 h-3" />
+                                                                            </button>
+                                                                        </span>
+                                                                    ))
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                        {selectedProfile.source !== 'legacy_import' && (
+                                                            <div className="shrink-0 flex pt-0.5">
+                                                                <button
+                                                                    disabled={selectedProfile.source === 'legacy_import'}
+                                                                    onClick={(e) => { e.preventDefault(); setIsSymbolModalOpen(true); }}
+                                                                    className="flex items-center justify-center bg-white/5 hover:bg-emerald-500 text-slate-300 hover:text-white border border-white/10 rounded-lg w-7 h-7 transition-all group"
+                                                                    title="添加交易标的"
+                                                                >
+                                                                    <Plus className="w-4 h-4 text-emerald-400 group-hover:text-white transition-colors" />
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : key === 'timeframes' ? (
+                                                    <TimeframeSelectDropdown
+                                                        value={selectedProfile[key]}
+                                                        onChange={val => updateField(key, val)}
+                                                        disabled={selectedProfile.source === 'legacy_import'}
+                                                    />
+                                                ) : (
+                                                    <input
+                                                        value={Array.isArray(selectedProfile[key]) ? selectedProfile[key].join(', ') : selectedProfile[key]}
+                                                        onChange={e => updateField(key, e.target.value)}
+                                                        disabled={selectedProfile.source === 'legacy_import'}
+                                                        className={`w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-emerald-500 transition-all font-mono text-white ${selectedProfile.source === 'legacy_import' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -402,6 +686,33 @@ const StrategiesPage = ({ userId }) => {
                 message="确定要永久删除此策略吗？关联的运行实例可能会受到影响。此动作无法撤销。"
                 confirmText="删除"
                 type="danger"
+            />
+            <SymbolSelectModal
+                isOpen={isSymbolModalOpen}
+                onClose={() => setIsSymbolModalOpen(false)}
+                options={tradableSymbols.length > 0 ? tradableSymbols : []}
+                selected={(() => {
+                    const val = selectedProfile?.symbols;
+                    if (!val) return [];
+                    const list = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',') : []);
+                    return list.map(s => {
+                        let sym = s.trim().toUpperCase();
+                        if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
+                            return sym + 'USDT';
+                        }
+                        return sym;
+                    }).filter(Boolean);
+                })()}
+                onConfirm={(newSelected) => {
+                    const normalized = newSelected.map(s => {
+                        let sym = s.trim().toUpperCase();
+                        if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
+                            return sym + 'USDT';
+                        }
+                        return sym;
+                    }).filter(Boolean);
+                    updateField('symbols', normalized);
+                }}
             />
         </div>
     );

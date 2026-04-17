@@ -313,11 +313,7 @@ def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[
 ### Step 1: 获取全部数据
 调用唯一的数据工具，一次性获取所有分析数据：
 ```
-build_strategy_context(
-    symbols="{symbols}",
-    timeframes="{timeframes}",
-    enabled_modules="{modules_str}"
-)
+build_strategy_context()
 ```
 返回的 JSON 中包含：account(余额)、positions(持仓)、open_orders(当前挂单)、
 macro(宏观)、funding(费率) 以及各标的的技术指标数据。
@@ -428,9 +424,9 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
     
     _uid = user_id  # 闭包捕获
     
-    def _build_strategy_context(symbols: str, timeframes: str = "4h,1d", enabled_modules: str = "trend,levels,volume") -> str:
-        """一次性构建 Agent 策略分析所需的全部上下文数据。"""
-        return build_strategy_context(symbols=symbols, timeframes=timeframes, enabled_modules=enabled_modules, user_id=_uid)
+    def _build_strategy_context() -> str:
+        """一次性构建 Agent 策略分析所需的全部上下文数据（基于策略配置的预设参数）。"""
+        return build_strategy_context(symbols=symbols, timeframes=timeframes, enabled_modules=modules_str, user_id=_uid)
     
     def _open_position(symbol: str, direction: str, margin: float, leverage: int = 10, stop_loss: float = None, take_profit: float = None) -> dict:
         """在 Binance 合约开仓。"""

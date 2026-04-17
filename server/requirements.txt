@@ -75,3 +75,4 @@ aliyun-python-sdk-core>=2.13.0
 # Security & Encryption
 # ===========================================
 cryptography>=41.0.0
+tavily-python==0.5.0

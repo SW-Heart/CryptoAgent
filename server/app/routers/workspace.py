@@ -311,6 +311,68 @@ def delete_exchange_account_route(account_id: int, user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class ExchangeTestRequest(BaseModel):
+    exchange: str = Field(default="okx")
+    api_key: str
+    api_secret: str
+    passphrase: str | None = None
+    environment: str = Field(default="demo")
+
+
+@router.post("/exchange-accounts/test")
+def test_exchange_connection(request: ExchangeTestRequest):
+    """
+    测试交易所 API 连通性（不保存）。
+    通过工厂方法创建对应交易所客户端，尝试获取 USDT 余额来验证凭证有效性。
+    兼容 Binance / OKX / Bybit / Bitget / Gate.io 全部五家交易所。
+    """
+    try:
+        from exchanges.factory import create_exchange_client
+
+        client = create_exchange_client(
+            provider=request.exchange,
+            api_key=request.api_key,
+            api_secret=request.api_secret,
+            passphrase=request.passphrase or "",
+            environment=request.environment,
+        )
+        balance_result = client.get_usdt_balance()
+
+        # get_usdt_balance 返回 dict，如果有 error 字段说明鉴权失败
+        if isinstance(balance_result, dict) and "error" in balance_result:
+            return {
+                "status": "error",
+                "message": f"凭证校验失败: {balance_result['error']}",
+            }
+
+        # 成功 —— 提取余额信息
+        balance_value = None
+        if isinstance(balance_result, dict):
+            balance_value = balance_result.get("available") or balance_result.get("balance")
+        elif isinstance(balance_result, (int, float)):
+            balance_value = balance_result
+
+        return {
+            "status": "success",
+            "message": "连接测试成功",
+            "balance": balance_value,
+        }
+
+    except ValueError as e:
+        # 工厂方法抛的 "不支持的交易所" 等
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        error_msg = str(e)
+        # 友好翻译常见错误
+        if any(kw in error_msg.lower() for kw in ("invalid", "authentication", "unauthorized", "api key", "signature")):
+            return {"status": "error", "message": "API Key 或 Secret 无效，请检查后重试"}
+        if any(kw in error_msg.lower() for kw in ("timeout", "connection")):
+            return {"status": "error", "message": "连接超时，请检查网络环境或 IP 白名单设置"}
+        if "ip" in error_msg.lower() or "whitelist" in error_msg.lower():
+            return {"status": "error", "message": "服务器 IP 未加入白名单，请在交易所后台添加"}
+        return {"status": "error", "message": f"连接失败: {error_msg}"}
+
+
 @router.post("/exchange-accounts")
 def post_exchange_account_route(user_id: str, request: ExchangeAccountCreateRequest):
     if not user_id:

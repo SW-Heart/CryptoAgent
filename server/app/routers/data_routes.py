@@ -24,6 +24,112 @@ def _get_active_client(user_id: str):
         set_current_trader_id(primary["id"])
     return _get_trading_client(user_id, require_trading_enabled=False)
 
+
+def _get_user_platform_start_time(user_id: str) -> int:
+    """
+    获取用户绑定到平台的时间起点（毫秒级时间戳）。
+    
+    取以下两者中最早的时间：
+    1. exchange_accounts.created_at — 用户首次绑定交易所账号的时间
+    2. strategy_logs.timestamp     — 该用户第一条策略日志的时间
+    
+    这样只统计"属于平台"的交易，避免拉取用户在绑定前的陈年历史。
+    如果两者都查不到，返回 0（不做时间限制）。
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            # 用 SQL LEAST() 直接在数据库内比较，避免 Python 类型问题
+            cursor.execute("""
+                SELECT LEAST(
+                    (SELECT MIN(created_at) FROM exchange_accounts WHERE user_id = %s),
+                    (SELECT MIN("timestamp"::timestamptz) FROM strategy_logs WHERE user_id = %s)
+                )
+            """, (user_id, user_id))
+            row = cursor.fetchone()
+            if row and row[0]:
+                val = row[0]
+                # 兼容返回 str 或 datetime
+                if isinstance(val, str):
+                    from datetime import datetime
+                    val = datetime.fromisoformat(val)
+                return int(val.timestamp() * 1000)
+        return 0
+    except Exception as e:
+        print(f"[DataRoutes] Error getting platform start time for {user_id[:8]}: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def _fetch_all_trades_since(client, symbol: str, start_time_ms: int, max_trades: int = 5000) -> list:
+    """
+    从指定时间点开始拉取所有交易记录，自动处理 Binance 7 天窗口限制。
+    
+    Binance API 规则：
+    - startTime 不带 endTime → 只返回 startTime 起 7 天内的数据
+    - startTime + endTime → 窗口不能超过 7 天
+    - fromId → 无时间限制，从该 ID 往后取
+    
+    策略：
+    1. 第一次调用用 startTime+endTime(7天) 取到第一批数据和 fromId 锚点
+    2. 后续调用用 fromId 自动分页（无 7 天限制）直到取完
+    
+    对于非 Binance 交易所，直接用 start_time 单次调用。
+    """
+    import time
+
+    if start_time_ms <= 0:
+        # 没有平台起点，走默认行为
+        return client.get_trade_history(symbol=symbol, limit=1000) or []
+
+    is_binance = hasattr(client, 'get_exchange_name') and client.get_exchange_name() == 'Binance'
+
+    if not is_binance:
+        # OKX/Bitget 等交易所 start_time 支持 3 个月窗口，单次调用足够
+        return client.get_trade_history(symbol=symbol, limit=1000, start_time=start_time_ms) or []
+
+    # ===== Binance 分页策略 =====
+    all_trades = []
+    now_ms = int(time.time() * 1000)
+    SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+
+    # Step 1: 用 startTime + endTime 取第一批数据（锚定 fromId）
+    end_time = min(start_time_ms + SEVEN_DAYS_MS, now_ms)
+    trades = client.get_trade_history(
+        symbol=symbol, limit=1000,
+        start_time=start_time_ms, end_time=end_time
+    )
+
+    if not isinstance(trades, list) or not trades:
+        return []
+
+    all_trades.extend(trades)
+
+    # Step 2: 用 fromId 分页取后续数据（突破 7 天限制）
+    while len(all_trades) < max_trades:
+        last_id = int(trades[-1].get("id", 0))
+        if last_id <= 0:
+            break
+
+        trades = client.get_trade_history(
+            symbol=symbol, limit=1000, fromId=last_id + 1
+        )
+
+        if not isinstance(trades, list) or not trades:
+            break
+
+        all_trades.extend(trades)
+
+        # 如果返回不满页，说明已到末尾
+        if len(trades) < 1000:
+            break
+
+    return all_trades
+
+
 @router.get("/wallet")
 def get_wallet(user_id: str = None):
     """Get wallet status with real-time equity.
@@ -615,7 +721,8 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
                 symbol += "USDT"
                 
             try:
-                trades = client.get_trade_history(symbol=symbol, limit=limit)
+                start_ts = _get_user_platform_start_time(user_id)
+                trades = _fetch_all_trades_since(client, symbol, start_ts, max_trades=2000)
                 
                 if isinstance(trades, list):
                     for t in trades:
@@ -700,7 +807,8 @@ def get_position_history(
             try:
                 from position_builder import build_position_history
                 
-                trades = client.get_trade_history(symbol=sym, limit=min(limit * 5, 500))
+                start_ts = _get_user_platform_start_time(user_id)
+                trades = _fetch_all_trades_since(client, sym, start_ts, max_trades=5000)
                 if isinstance(trades, list):
                     closed_positions = build_position_history(
                         trades=trades,
@@ -922,12 +1030,12 @@ def get_strategy_logs(user_id: str = None, limit: int = 10, offset: int = 0, tra
         conn = get_db_connection()
         
         with conn.cursor() as cursor:
-            # 降级：仅按 user_id，不论 trader_instance_id
-            cursor.execute("SELECT COUNT(*) FROM strategy_logs WHERE user_id = %s OR user_id IS NULL", (user_id,))
+            # 仅按 user_id 进行严格数据隔离
+            cursor.execute("SELECT COUNT(*) FROM strategy_logs WHERE user_id = %s", (user_id,))
             total_count = cursor.fetchone()[0]
             
             cursor.execute(
-                "SELECT * FROM strategy_logs WHERE user_id = %s OR user_id IS NULL ORDER BY timestamp DESC LIMIT %s OFFSET %s",
+                "SELECT * FROM strategy_logs WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s OFFSET %s",
                 (user_id, limit, offset)
             )
             rows = cursor.fetchall()
@@ -992,3 +1100,83 @@ def clear_strategy_logs(user_id: str = None):
         return {"success": True, "message": "Strategy logs cleared successfully for active instance"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+import time
+import requests
+import concurrent.futures
+
+_SYMBOLS_CACHE = {"data": [], "timestamp": 0}
+
+@router.get("/symbols")
+def get_tradable_symbols():
+    """
+    Get a list of all active USDT perpetual futures symbols from multiple exchanges.
+    Results are cached for 1 hour to prevent rate limiting.
+    """
+    global _SYMBOLS_CACHE
+    now = time.time()
+    
+    # Cache for 1 hour
+    if now - _SYMBOLS_CACHE["timestamp"] < 3600 and _SYMBOLS_CACHE["data"]:
+        return {"symbols": _SYMBOLS_CACHE["data"]}
+        
+    def fetch_binance():
+        try:
+            r = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=5)
+            return [{"exchange": "Binance", "symbol": sym["symbol"], "desc": "Binance USDT Perpetual"} 
+                    for sym in r.json().get("symbols", []) 
+                    if sym.get("status") == "TRADING" and sym.get("quoteAsset") == "USDT" and sym.get("contractType") == "PERPETUAL"]
+        except: return []
+
+    def fetch_okx():
+        try:
+            r = requests.get("https://www.okx.com/api/v5/public/instruments?instType=SWAP", timeout=5)
+            # OKX swap symbols end with -SWAP, usually USDT swaps are like BTC-USDT-SWAP
+            return [{"exchange": "OKX", "symbol": sym["instId"], "desc": "OKX USDT Swap"} 
+                    for sym in r.json().get("data", []) 
+                    if sym.get("state") == "live" and sym.get("settleCcy") == "USDT"]
+        except: return []
+
+    def fetch_bybit():
+        try:
+            r = requests.get("https://api.bybit.com/v5/market/instruments-info?category=linear", timeout=5)
+            return [{"exchange": "Bybit", "symbol": sym["symbol"], "desc": "Bybit Linear Perpetual"} 
+                    for sym in r.json().get("result", {}).get("list", []) 
+                    if sym.get("status") == "Trading" and sym.get("quoteCoin") == "USDT"]
+        except: return []
+
+    def fetch_bitget():
+        try:
+            r = requests.get("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES", timeout=5)
+            return [{"exchange": "Bitget", "symbol": sym["symbol"], "desc": "Bitget USDT Perpetual"} 
+                    for sym in r.json().get("data", []) 
+                    if sym.get("symbolStatus") == "normal"]
+        except: return []
+
+    def fetch_gate():
+        try:
+            r = requests.get("https://api.gateio.ws/api/v4/futures/usdt/contracts", timeout=5)
+            return [{"exchange": "Gate", "symbol": sym["name"], "desc": "Gate USDT Futures"} 
+                    for sym in r.json() 
+                    if isinstance(sym, dict) and not sym.get("in_delisting")]
+        except: return []
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [
+            executor.submit(fetch_binance),
+            executor.submit(fetch_okx),
+            executor.submit(fetch_bybit),
+            executor.submit(fetch_bitget),
+            executor.submit(fetch_gate)
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            results.extend(future.result())
+
+    if results:
+        _SYMBOLS_CACHE = {
+            "data": results,
+            "timestamp": now
+        }
+    
+    return {"symbols": _SYMBOLS_CACHE["data"] or [{"exchange": "Binance", "symbol": "BTCUSDT", "desc": "Binance USDT Perpetual"}]}

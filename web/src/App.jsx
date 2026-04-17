@@ -19,6 +19,7 @@ import LandingPage from './pages/LandingPage';
 import StrategiesPage from './pages/StrategiesPage';
 import SettingsPage from './pages/SettingsPage';
 import MarketPage from './pages/MarketPage';
+import BacktestPage from './pages/BacktestPage';
 
 function AppContent() {
   const { user, signOut } = useAuth();
@@ -75,6 +76,12 @@ function AppContent() {
         {visitedTabs['market'] && (
           <div className="absolute inset-0" style={{ display: activeTab === 'market' ? 'block' : 'none' }}>
             <MarketPage />
+          </div>
+        )}
+
+        {visitedTabs['backtest'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'backtest' ? 'block' : 'none' }}>
+            <BacktestPage userId={userId} />
           </div>
         )}
 

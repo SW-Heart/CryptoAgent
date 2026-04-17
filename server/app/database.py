@@ -105,7 +105,11 @@ def release_db_connection(conn):
     global _connection_pool
     if _connection_pool and conn:
         try:
-            _connection_pool.putconn(conn)
+            # If it's the wrapper, call its close() which safely returns the raw connection
+            if hasattr(conn, 'close'):
+                conn.close()
+            else:
+                _connection_pool.putconn(conn)
         except Exception as e:
             print(f"[DB] Error releasing connection: {e}")
             try:
@@ -150,6 +154,84 @@ def init_db():
             credits INTEGER DEFAULT 100,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Create notification_configs table if not exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notification_configs (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            config JSONB NOT NULL DEFAULT '{}',
+            enabled_events JSONB NOT NULL DEFAULT '["TRADE_OPEN", "TRADE_CLOSE", "SL_TRIGGERED", "SYSTEM_ALERT", "DAILY_REPORT"]',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, channel)
+        )
+    """)
+    
+    # Create news_intelligence table if not exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS news_intelligence (
+            id SERIAL PRIMARY KEY,
+            news_id TEXT UNIQUE NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT,
+            source TEXT NOT NULL,
+            published_at TIMESTAMP NOT NULL,
+            impact_score INTEGER DEFAULT 0,
+            impact_reason TEXT,
+            alert_sent BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Create kline_cache table (historical kline local cache for backtesting)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kline_cache (
+            id SERIAL PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            open_time BIGINT NOT NULL,
+            open DOUBLE PRECISION NOT NULL,
+            high DOUBLE PRECISION NOT NULL,
+            low DOUBLE PRECISION NOT NULL,
+            close DOUBLE PRECISION NOT NULL,
+            volume DOUBLE PRECISION NOT NULL,
+            close_time BIGINT NOT NULL,
+            quote_volume DOUBLE PRECISION NOT NULL,
+            trades INTEGER DEFAULT 0,
+            UNIQUE(symbol, interval, open_time)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_kline_cache_lookup
+        ON kline_cache(symbol, interval, open_time)
+    """)
+    
+    # Create backtest_jobs table (persist backtest tasks and results)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_jobs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            symbol TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            initial_capital DOUBLE PRECISION DEFAULT 10000,
+            leverage INTEGER DEFAULT 10,
+            strategy_type TEXT DEFAULT '',
+            strategy_params JSONB DEFAULT '{}',
+            progress INTEGER DEFAULT 0,
+            total_rounds INTEGER DEFAULT 0,
+            result JSONB,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
         )
     """)
     

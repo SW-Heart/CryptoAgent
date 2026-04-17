@@ -130,6 +130,14 @@ STRATEGY_MODULES = {
         "default_on": True,
         "icon": "📉",
     },
+    "news": {
+        "name": "重要新闻",
+        "description": "监控24小时内市场突发与重磅(Trump/Fed)预警事件",
+        "category": "technical",
+        "always_on": False,
+        "default_on": True,
+        "icon": "📰",
+    },
 }
 
 
@@ -217,6 +225,8 @@ def build_strategy_context(
     # 传入已获取的 open_orders，让 _fetch_positions 把每个仓位关联的 TP/SL 挂单内嵌进去
     result["positions"] = _fetch_positions(user_id, open_orders=result["open_orders"])
     result["macro"] = _fetch_macro()
+    if "news" in module_list:
+        result["news"] = _fetch_critical_news()
     result["funding"] = _fetch_funding(symbol_list, user_id)
     result["performance"] = _fetch_performance(user_id)
 
@@ -1033,10 +1043,14 @@ def _build_overall_summary(data: Dict, symbols: List[str]) -> str:
             emoji = "📈" if trend.get("direction") == "bullish" else ("📉" if trend.get("direction") == "bearish" else "➡️")
             parts.append(f"{sym}{emoji}")
 
-    # 宏观
+    # 宏观与新闻
     macro = data.get("macro", {})
     if macro.get("fng") is not None:
         parts.append(f"FnG:{macro['fng']}")
+        
+    news = data.get("news", {})
+    if news.get("has_alert"):
+        parts.append("🚨紧急新闻预警!")
 
     return " | ".join(parts)
 
@@ -1238,4 +1252,36 @@ def _fetch_performance(user_id: str = None) -> Dict:
         print(f"[StrategyContext] _fetch_performance error: {e}")
         result["advice"] = "数据获取失败"
 
+    return result
+
+def _fetch_critical_news() -> Dict:
+    """获取近 24 小时的紧急新闻预警（Impact Score >= 3）。"""
+    result = {"has_alert": False, "alerts": []}
+    try:
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT title, impact_score, impact_reason, published_at
+                    FROM news_intelligence
+                    WHERE impact_score >= 3
+                      AND published_at >= NOW() - INTERVAL '24 HOURS'
+                    ORDER BY impact_score DESC, published_at DESC
+                    LIMIT 3
+                """)
+                rows = cur.fetchall()
+                if rows:
+                    result["has_alert"] = True
+                    for r in rows:
+                        result["alerts"].append({
+                            "title": r["title"],
+                            "score": r["impact_score"],
+                            "reason": r["impact_reason"],
+                            "time": str(r["published_at"])
+                        })
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_critical_news error: {e}")
     return result

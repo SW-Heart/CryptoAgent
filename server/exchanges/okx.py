@@ -673,11 +673,15 @@ class OKXFuturesClient(ExchangeClient):
         except (ValueError, TypeError):
             return default
 
-    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None) -> List[dict]:
+    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None, start_time: int = None, end_time: int = None) -> List[dict]:
         inst_id = self._convert_symbol(symbol)
         params = {"instId": inst_id, "limit": str(limit), "instType": "SWAP"}
         if fromId:
             params["before"] = str(fromId)
+        if start_time:
+            params["begin"] = str(start_time)
+        if end_time:
+            params["end"] = str(end_time)
         
         # 优先使用 fills-history (3个月归档，含完整 PnL)，失败后降级到 fills (近3天)
         res = self._request("GET", "/api/v5/trade/fills-history", params)

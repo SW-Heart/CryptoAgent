@@ -1477,7 +1477,7 @@ class BinanceFuturesClient(ExchangeClient):
             })
         return formatted
     
-    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None) -> List[dict]:
+    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None, start_time: int = None, end_time: int = None) -> List[dict]:
         """
         获取成交历史。返回统一格式化后的数据。
         
@@ -1489,6 +1489,10 @@ class BinanceFuturesClient(ExchangeClient):
         }
         if fromId:
             params["fromId"] = fromId
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
             
         res = self._request("GET", "/fapi/v1/userTrades", params)
         if not isinstance(res, list):

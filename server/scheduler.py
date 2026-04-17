@@ -104,6 +104,9 @@ def _run_scheduler_loop():
     # Schedule orphan order cleanup every 2 minutes (清理无仓位的孤儿止盈止损挂单)
     schedule.every(2).minutes.do(cleanup_orphan_orders)
     
+    # Schedule news agent every 60 minutes to fetch and analyze breaking news
+    schedule.every(60).minutes.do(run_news_agent)
+    
     # Run position update immediately
     update_positions_prices()
     
@@ -120,6 +123,15 @@ def _run_scheduler_loop():
     
     print("[Scheduler] Scheduler loop exited")
 
+def run_news_agent():
+    """Execute NewsAgent to fetch and evaluate breaking news."""
+    try:
+        from agents.news_agent import NewsAgent
+        print("[Scheduler] Running NewsAgent...")
+        agent = NewsAgent()
+        agent.process_and_store_news()
+    except Exception as e:
+        print(f"[Scheduler] NewsAgent execution error: {e}")
 
 # ============= Binance Multi-User Position Sync =============
 
@@ -168,6 +180,107 @@ def sync_binance_users_positions():
         print(f"[Scheduler] Error in Binance sync: {e}")
 
 
+def _get_user_platform_start_time(user_id: str, conn=None) -> int:
+    """
+    获取用户绑定到平台的时间起点（毫秒级时间戳）。
+    
+    取以下两者中最早的时间：
+    1. exchange_accounts.created_at — 用户首次绑定交易所账号的时间
+    2. strategy_logs.timestamp     — 该用户第一条策略日志的时间
+    
+    这样只统计"属于平台"的交易，避免拉取用户在绑定前的陈年历史。
+    如果两者都查不到，返回 0（不做时间限制）。
+    
+    Args:
+        user_id: 用户 ID
+        conn: 可选，复用已有的数据库连接以避免连接池耗尽
+    """
+    from app.database import get_db_connection
+    own_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            own_conn = True
+        with conn.cursor() as cursor:
+            # 用 SQL LEAST() 直接在数据库内比较，避免 Python str vs datetime 类型问题
+            cursor.execute("""
+                SELECT LEAST(
+                    (SELECT MIN(created_at) FROM exchange_accounts WHERE user_id = %s),
+                    (SELECT MIN("timestamp"::timestamptz) FROM strategy_logs WHERE user_id = %s)
+                )
+            """, (user_id, user_id))
+            row = cursor.fetchone()
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, str):
+                    from datetime import datetime
+                    val = datetime.fromisoformat(val)
+                if own_conn:
+                    conn.close()
+                return int(val.timestamp() * 1000)
+        
+        if own_conn:
+            conn.close()
+        return 0
+    except Exception as e:
+        print(f"[Scheduler] Error getting platform start time for {user_id[:8]}: {e}")
+        if own_conn and conn:
+            try:
+                conn.close()
+            except:
+                pass
+        return 0
+
+
+def _fetch_all_trades_since_for_scheduler(client, symbol: str, start_time_ms: int) -> list:
+    """
+    首次同步时使用的分页拉取函数，突破 Binance 7 天窗口限制。
+    
+    策略：
+    1. 第一次用 startTime+endTime(7天窗口) 取到第一批数据和 fromId 锚点
+    2. 后续用 fromId 自动分页（无 7 天限制）直到取完
+    """
+    import time
+
+    is_binance = hasattr(client, 'get_exchange_name') and client.get_exchange_name() == 'Binance'
+
+    if not is_binance:
+        return client.get_trade_history(symbol=symbol, limit=1000, start_time=start_time_ms) or []
+
+    all_trades = []
+    now_ms = int(time.time() * 1000)
+    SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+
+    # Step 1: startTime + endTime 锚定第一批
+    end_time = min(start_time_ms + SEVEN_DAYS_MS, now_ms)
+    trades = client.get_trade_history(
+        symbol=symbol, limit=1000,
+        start_time=start_time_ms, end_time=end_time
+    )
+
+    if not isinstance(trades, list) or not trades:
+        return []
+
+    all_trades.extend(trades)
+
+    # Step 2: fromId 分页取后续（无 7 天限制）
+    max_iterations = 50  # 安全上限，防止无限循环
+    for _ in range(max_iterations):
+        last_id = int(trades[-1].get("id", 0))
+        if last_id <= 0:
+            break
+
+        trades = client.get_trade_history(symbol=symbol, limit=1000, fromId=last_id + 1)
+        if not isinstance(trades, list) or not trades:
+            break
+
+        all_trades.extend(trades)
+        if len(trades) < 1000:
+            break
+
+    return all_trades
+
+
 def sync_user_account_stats(user_id: str):
     """
     Incrementally sync user trade history to update PnL and Win Rate stats.
@@ -205,6 +318,8 @@ def sync_user_account_stats(user_id: str):
     
     conn = get_db_connection()
     try:
+        # 在循环前一次性查询平台起始时间，复用 conn，避免连接池耗尽
+        platform_start = _get_user_platform_start_time(user_id, conn=conn)
         with conn.cursor() as cursor:
             for symbol in SYMBOLS:
                 # 1. Get last synced ID
@@ -216,15 +331,16 @@ def sync_user_account_stats(user_id: str):
                 last_id = row[0] if row else 0
                 
                 # 2. Fetch new trades (use fromId if we have history, otherwise recent)
-                # Note: If last_id is 0, we might want to fetch recent history (e.g. last 1000 trades)
-                # But to avoid massive initial sync time for active accounts, let's limit to recent if 0.
                 try:
-                    # fromId + 1 to avoid re-processing the same trade
-                    params = {"limit": 500}
                     if last_id > 0:
-                        params["fromId"] = last_id + 1
-                    
-                    trades = client.get_trade_history(symbol=symbol, **params)
+                        # 增量同步：fromId + 1 避免重复
+                        trades = client.get_trade_history(symbol=symbol, limit=1000, fromId=last_id + 1)
+                    elif platform_start > 0:
+                        # 首次同步：使用分页突破 Binance 7天窗口限制
+                        trades = _fetch_all_trades_since_for_scheduler(client, symbol, platform_start)
+                    else:
+                        # 兜底：无绑定时间，走默认（最近 7 天）
+                        trades = client.get_trade_history(symbol=symbol, limit=1000)
                     
                     if not trades or not isinstance(trades, list):
                         continue
@@ -339,17 +455,19 @@ def log_strategy_round(round_id: str, symbols: str, response: dict, user_id: str
         
         # Check if Agent already logged this round within last 3 minutes (to avoid duplicates)
         # Agent may log with a slightly different round_id (1-2 min later)
+        # 必须按 trader_instance_id 隔离去重，否则多个 Trader 监控相同 symbols 时会互相阻塞
         with conn.cursor() as cursor:
             cursor.execute("""
                 SELECT 1 FROM strategy_logs 
                 WHERE symbols = %s 
+                AND trader_instance_id = %s
                 AND timestamp::timestamptz > NOW() - INTERVAL '3 minutes'
-            """, (symbols,))
+            """, (symbols, trader_instance_id))
             existing = cursor.fetchone()
             
             if existing:
                 conn.close()
-                print(f"[Scheduler] Recent log for {symbols} exists, skipping duplicate")
+                print(f"[Scheduler] Recent log for {symbols} (trader #{trader_instance_id}) exists, skipping duplicate")
                 return
             
             cursor.execute("""

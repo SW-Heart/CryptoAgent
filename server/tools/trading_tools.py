@@ -115,13 +115,17 @@ def log_strategy_analysis(
     with conn.cursor() as cursor:
         round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
         
-        # Check if a log for the same symbols exists within last 3 minutes (avoid duplicates)
-        # 注意: "timestamp" 是 PostgreSQL 保留字，且可能是 TEXT 类型 (如在旧表中)，需显式转换
+        # Check if a log for the same symbols + trader instance exists within last 3 minutes (avoid duplicates)
+        # 注意: 必须按 trader_instance_id 隔离去重，否则多个 Trader 监控相同 symbols 时会互相阻塞
+        ctx_user_id = get_current_user()
+        ctx_trader_id = get_current_trader_id()
+        
         cursor.execute("""
             SELECT 1 FROM strategy_logs 
             WHERE symbols = %s 
+            AND trader_instance_id = %s
             AND "timestamp"::timestamp > NOW() - INTERVAL '3 minutes'
-        """, (symbols,))
+        """, (symbols, str(ctx_trader_id) if ctx_trader_id else None))
         existing = cursor.fetchone()
         
         if existing:
@@ -131,9 +135,7 @@ def log_strategy_analysis(
                 "round_id": round_id,
                 "message": f"Strategy log for {symbols} already exists (skipped duplicate)"
             }
-        # 强制使用上下文里的 User ID 和 Trader ID，绝不能信任 LLM 传进来的 user_id，因为它经常幻觉传 'admin'
-        ctx_user_id = get_current_user()
-        ctx_trader_id = get_current_trader_id()
+        # ctx_user_id 和 ctx_trader_id 已在上方去重查询前提取
         
         # Override the agent's hallucinated "action_taken" with strict server-side tracking
         actual_actions = get_and_clear_session_actions()
