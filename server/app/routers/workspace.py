@@ -30,6 +30,10 @@ from app.services.workspace_service import (
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
+# 策略广场模板路由
+from app.routers.strategy_templates import router as templates_router
+router.include_router(templates_router)
+
 
 @router.get("/strategy-modules")
 def get_strategy_modules():

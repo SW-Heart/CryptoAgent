@@ -291,7 +291,30 @@ def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[
     timeframes = strategy.get("timeframes", "1h,4h")
     risk_pct = strategy.get("risk_per_trade", 0.02)
 
-    # 4. 构建完整 System Prompt（L0 内核 + L1 用户策略 + L2 参数）
+    # 3.5 从 config_json 中获取可配置交易规则（向后兼容：无 trading_rules 时使用默认值）
+    rules = strategy_config.get("trading_rules", {})
+    signal_min_dims = rules.get("signal_min_dimensions", 3)
+    allow_weak      = rules.get("allow_weak_signal", False)
+    max_pos_pct     = rules.get("max_position_pct", 20)
+    vol_reduce      = rules.get("volatility_reduce", True)
+    sl_buffer_pct   = rules.get("sl_buffer_pct", 0.5)
+    breakeven_r     = rules.get("breakeven_at_r", 1.0)
+    trail_r         = rules.get("trail_at_r", 2.0)
+    leverage        = rules.get("default_leverage", 10)
+    entry_standards = rules.get("entry_standards", "")
+    pos_management  = rules.get("position_management", "")
+
+    # 计算止损乘数
+    sl_long_factor  = round(1 - sl_buffer_pct / 100, 4)   # e.g. 0.995
+    sl_short_factor = round(1 + sl_buffer_pct / 100, 4)   # e.g. 1.005
+
+    # 弱信号处理文本
+    weak_signal_text = "不开仓，记录 HOLD" if not allow_weak else "可用50%仓位试探性开仓"
+
+    # 高波动处理文本
+    vol_reduce_text = "高波动 (volatility.status=\"extreme_high\") 时再减半" if vol_reduce else "高波动环境不额外减仓"
+
+    # 4. 构建完整 System Prompt（固定基础设施 + 可配交易规则 + 用户偏好）
     dynamic_instructions = [f"""
 # 加密货币合约交易 Agent
 
@@ -300,7 +323,7 @@ def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## L2 — 当前实例参数 [强制执行]
+## 当前实例参数 [强制执行]
 - **监控标的**: {symbols}
 - **分析周期**: {timeframes}
 - **单笔风险**: {risk_pct * 100}% of Balance
@@ -308,7 +331,7 @@ def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## L0 — 标准分析流程 [必须按顺序执行]
+## 标准分析流程 [必须按顺序执行]
 
 ### Step 1: 获取全部数据
 调用唯一的数据工具，一次性获取所有分析数据：
@@ -342,27 +365,30 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 - trend.direction 一致且 strength="strong"
 - 价格接近关键支撑/阻力位 (dist_pct < 2%)
 - volume.flow 配合方向 (做多时 inflow / 做空时 outflow)
-- 3个以上维度方向一致
+- {signal_min_dims}个以上维度方向一致
 
 🟡 **中等信号** (减半仓位):
-- 2个维度方向一致
+- {max(1, signal_min_dims - 1)}个维度方向一致
 - 价格接近但未到关键位
 
-🔴 **弱信号 / 无信号** (不开仓，记录 HOLD):
+🔴 **弱信号 / 无信号** ({weak_signal_text}):
 - 趋势 direction="neutral" 或各维度矛盾
 - 量能 divergence="bearish" 与趋势冲突
 - 价格远离所有关键位
 
+{f'''### 自定义入场标准
+{entry_standards}
+''' if entry_standards else ''}
 ### Step 5: 下单执行规范
 
 1. **仓位计算**:
    - margin = account.available × {risk_pct}
-   - 绝对不超过 available 的 20%
-   - 高波动 (volatility.status="extreme_high") 时再减半
+   - 绝对不超过 available 的 {max_pos_pct}%
+   - {vol_reduce_text}
 
 2. **止损设置 [强制]**:
-   - LONG: 止损 = nearest_support.price × 0.995 (支撑位下方0.5%)
-   - SHORT: 止损 = nearest_resistance.price × 1.005 (阻力位上方0.5%)
+   - LONG: 止损 = nearest_support.price × {sl_long_factor} (支撑位下方{sl_buffer_pct}%)
+   - SHORT: 止损 = nearest_resistance.price × {sl_short_factor} (阻力位上方{sl_buffer_pct}%)
    - 如果没有明确的支撑/阻力位 → 使用 volatility.sl_suggest
    - **没有止损 = 不开仓**
 
@@ -372,18 +398,21 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 
 4. **开仓调用**:
    open_position(symbol=标的, direction=方向, margin=计算值,
-                 leverage=10, stop_loss=止损价, take_profit=止盈价)
+                 leverage={leverage}, stop_loss=止损价, take_profit=止盈价)
 
 ### Step 6: 持仓管理
 
 已有持仓时的处理规则：
 - **同方向已有仓**: 不重复开仓，检查是否应移动止损或止盈
-  - 盈利 > 1倍风险 → update_stop_loss 到成本价 (保本)
-  - 盈利 > 2倍风险 → update_stop_loss 到 +1R 位置
+  - 盈利 > {breakeven_r}倍风险 → update_stop_loss 到成本价 (保本)
+  - 盈利 > {trail_r}倍风险 → update_stop_loss 到 +1R 位置
   - 如需调整止盈价 → 使用 update_take_profit（不要新挂 TP 单）
 - **反方向强信号**: 先 close_position 平现仓，再开新仓
 - **持仓亏损中**: 只要未触及止损线则持有，不手动平仓
-
+{f'''
+### 自定义持仓管理规则
+{pos_management}
+''' if pos_management else ''}
 ### Step 7: 止盈止损管理 [严格执行]
 
 - **全仓止盈/止损**：每个仓位最多只允许存在 1 个 TP 和 1 个 SL 挂单
@@ -394,7 +423,7 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## L1 — 用户自定义策略偏好
+## 用户自定义策略偏好
 {strategy.get('prompt_template', 'Focus on trend following strategy with strict risk management.')}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -410,7 +439,7 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 ## 禁止行为 [红线]
 - ❌ 禁止在 {symbols} 以外的标的开仓
 - ❌ 禁止不设止损的开仓
-- ❌ 禁止单笔 margin 超过可用余额的 20%
+- ❌ 禁止单笔 margin 超过可用余额的 {max_pos_pct}%
 - ❌ 禁止忽略已有持仓直接反向开仓（必须先平仓）
 - ❌ 禁止在 trend.direction="neutral" 且无明确信号时开仓
 - ❌ 禁止在 existing_sl_orders 非空时再新增全仓止损单（应使用 update_stop_loss 修改价格）

@@ -42,6 +42,7 @@ function AccountSection({ userId, user: initialUser }) {
     const [saving, setSaving] = useState(false);
     const [showNukeConfirm, setShowNukeConfirm] = useState(false);
     const [isNuking, setIsNuking] = useState(false);
+    const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
     useEffect(() => {
         async function loadProfileAndStats() {
@@ -114,9 +115,13 @@ function AccountSection({ userId, user: initialUser }) {
         input.click();
     };
 
-    const handleLogout = async () => {
+    const handleLogoutClick = () => {
+        setShowLogoutConfirm(true);
+    };
+
+    const confirmLogout = async () => {
         await supabase.auth.signOut();
-        window.location.href = '/welcome';
+        window.location.href = '/';
     };
 
     const handleNukeData = () => {
@@ -201,7 +206,7 @@ function AccountSection({ userId, user: initialUser }) {
                 </div>
 
                 <div className="flex gap-2">
-                    <button onClick={handleLogout} className="px-4 py-2 rounded-xl bg-white/5 hover:bg-rose-500/10 hover:text-rose-500 text-slate-300 text-xs font-bold transition-all flex items-center gap-2 border border-white/5">
+                    <button onClick={handleLogoutClick} className="px-4 py-2 rounded-xl bg-white/5 hover:bg-rose-500/10 hover:text-rose-500 text-slate-300 text-xs font-bold transition-all flex items-center gap-2 border border-white/5">
                         <LogOut className="w-3.5 h-3.5" /> 退出
                     </button>
                 </div>
@@ -285,6 +290,16 @@ function AccountSection({ userId, user: initialUser }) {
                 message="此操作将永久删除您的账号，并物理清空所有的模型配置、交易所 API 密钥、持仓记录及决策日志。该动作无法被撤销。如果您确定要注销，请输入确认文字。"
                 confirmText="永久注销"
                 requireInputText="确认注销"
+                type="danger"
+            />
+            
+            <ConfirmModal
+                isOpen={showLogoutConfirm}
+                onClose={() => setShowLogoutConfirm(false)}
+                onConfirm={confirmLogout}
+                title="退出登录"
+                message="您确定要退出当前账号吗？退出后您将需要重新验证身份才能继续使用系统。"
+                confirmText="确认退出"
                 type="danger"
             />
         </div>

@@ -429,7 +429,7 @@ const BacktestPage = ({ userId }) => {
                         </div>
                         
                         <div className="flex flex-col gap-5">
-                            <FormField label="选择量化策略">
+                            <FormField label="选择量化策略" zIndex={50}>
                                 <CustomSelect
                                     value={selectedStrategyName}
                                     onChange={setSelectedStrategyName}
@@ -439,14 +439,14 @@ const BacktestPage = ({ userId }) => {
                             </FormField>
                             
                             {currentStrategy && (
-                                <div className="text-xs text-slate-400 leading-relaxed bg-black/30 p-3 rounded-lg border border-white/5">
+                                <div className="relative z-[49] text-xs text-slate-400 leading-relaxed bg-black/30 p-3 rounded-lg border border-white/5">
                                     {currentStrategy.description}
                                 </div>
                             )}
 
                             {/* 动态参数输入 */}
-                            {currentStrategy && currentStrategy.params.map(p => (
-                                <FormField key={p.name} label={p.label}>
+                            {currentStrategy && currentStrategy.params.map((p, idx) => (
+                                <FormField key={p.name} label={p.label} zIndex={48 - idx}>
                                     <div className="relative">
                                         <input 
                                             type="number" 

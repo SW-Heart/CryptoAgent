@@ -28,6 +28,12 @@ function AppContent() {
   const navigate = useNavigate();
   const activeTab = location.pathname.substring(1) || 'dashboard';
 
+  useEffect(() => {
+    if (user && activeTab === 'welcome') {
+      navigate('/', { replace: true });
+    }
+  }, [user, activeTab, navigate]);
+
   const [collapsed, setCollapsed] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [llmConfig, setLlmConfig] = useState(null);
