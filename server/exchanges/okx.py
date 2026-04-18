@@ -186,6 +186,60 @@ class OKXFuturesClient(ExchangeClient):
             return inst["ctVal"]
         return 1.0
 
+    def _get_min_sz(self, symbol: str) -> float:
+        """获取最小下单张数 (如 BTC=0.01, SOL=0.1)"""
+        self._fetch_instruments()
+        inst_id = self._convert_symbol(symbol)
+        inst = self._instruments_cache.get(inst_id)
+        if inst:
+            return float(inst.get("minSz", "1"))
+        return 1.0
+
+    def _get_lot_sz(self, symbol: str) -> float:
+        """获取下单步长 (如 BTC=0.01, SOL=0.1)"""
+        self._fetch_instruments()
+        inst_id = self._convert_symbol(symbol)
+        inst = self._instruments_cache.get(inst_id)
+        if inst:
+            return float(inst.get("lotSz", "1"))
+        return 1.0
+
+    def _format_sz(self, symbol: str, sz: float, enforce_min: bool = True) -> str:
+        """将合约张数按 lotSz 精度格式化为字符串。
+        
+        OKX 不同币种 sz 精度不同:
+        - BTC: lotSz=0.01, minSz=0.01 (可以下 0.01 张)
+        - ETH: lotSz=0.01, minSz=0.01
+        - SOL: lotSz=0.1,  minSz=0.1
+        
+        Args:
+            symbol: 交易对
+            sz: 原始张数
+            enforce_min: 是否强制最小值 (平仓/SL/TP 时为 True)
+        """
+        self._fetch_instruments()
+        inst_id = self._convert_symbol(symbol)
+        inst = self._instruments_cache.get(inst_id)
+        
+        if inst:
+            lot_sz = float(inst.get("lotSz", "1"))
+            min_sz = float(inst.get("minSz", "1"))
+            precision = inst.get("qty_precision", 0)
+            
+            # 按 lotSz 步长取整 (向下)
+            if lot_sz > 0:
+                sz = int(sz / lot_sz) * lot_sz
+            
+            # 如果需要强制最小值（SL/TP/平仓场景）
+            if enforce_min and sz < min_sz:
+                sz = min_sz
+            
+            # 按精度格式化，去掉尾随零
+            return f"{sz:.{precision}f}"
+        
+        # 兜底：按整数处理
+        return str(max(int(sz), 1))
+
     @staticmethod
     def _normalize_pos_side(pos_side: str) -> str:
         """将 Binance 风格的 positionSide 映射为 OKX 合法的 posSide。
@@ -200,7 +254,7 @@ class OKXFuturesClient(ExchangeClient):
             return ""
         normalized = pos_side.lower()
         if normalized == "both":
-            return "net"
+            return ""  # 单向持仓不返回任何 posSide，让上层构建时不带该参数
         return normalized
 
     def get_instrument_info(self, symbol: str) -> dict:
@@ -291,7 +345,7 @@ class OKXFuturesClient(ExchangeClient):
             # OKX 持仓需要转换 ctVal -> base coin 数量
             ct_val = self._get_ct_val(symbol)
             pos_amt_contracts = float(pos["pos"])
-            pos_amt_base = pos_amt_contracts * ct_val
+            pos_amt_base = float(f"{pos_amt_contracts * ct_val:.8g}")
             
             # 处理单向/双向持仓的符号 (+多, -空)
             pos_side = pos["posSide"].upper()
@@ -326,11 +380,7 @@ class OKXFuturesClient(ExchangeClient):
     ) -> dict:
         inst_id = self._convert_symbol(symbol)
         sz = quantity / self._get_ct_val(symbol)
-        
-        # 数量不能小于 1 张
-        if sz < 1:
-            sz = 1
-        sz_str = str(int(sz))
+        sz_str = self._format_sz(symbol, sz)
         
         body = {
             "instId": inst_id,
@@ -341,7 +391,9 @@ class OKXFuturesClient(ExchangeClient):
         }
         
         if position_side:
-            body["posSide"] = self._normalize_pos_side(position_side)
+            norm_side = self._normalize_pos_side(position_side)
+            if norm_side:
+                body["posSide"] = norm_side
             
         if reduce_only:
             body["reduceOnly"] = True
@@ -373,9 +425,7 @@ class OKXFuturesClient(ExchangeClient):
     ) -> dict:
         inst_id = self._convert_symbol(symbol)
         sz = quantity / self._get_ct_val(symbol)
-        if sz < 1:
-            sz = 1
-        sz_str = str(int(sz))
+        sz_str = self._format_sz(symbol, sz)
         
         body = {
             "instId": inst_id,
@@ -389,7 +439,9 @@ class OKXFuturesClient(ExchangeClient):
         }
         
         if position_side:
-            body["posSide"] = self._normalize_pos_side(position_side)
+            norm_side = self._normalize_pos_side(position_side)
+            if norm_side:
+                body["posSide"] = norm_side
         if reduce_only:
             body["reduceOnly"] = True
             
@@ -418,9 +470,7 @@ class OKXFuturesClient(ExchangeClient):
     ) -> dict:
         inst_id = self._convert_symbol(symbol)
         sz = quantity / self._get_ct_val(symbol)
-        if sz < 1:
-            sz = 1
-        sz_str = str(int(sz))
+        sz_str = self._format_sz(symbol, sz)
         
         body = {
             "instId": inst_id,
@@ -434,12 +484,82 @@ class OKXFuturesClient(ExchangeClient):
         }
         
         if position_side:
-            body["posSide"] = self._normalize_pos_side(position_side)
+            norm_side = self._normalize_pos_side(position_side)
+            if norm_side:
+                body["posSide"] = norm_side
         if reduce_only:
             body["reduceOnly"] = True
             
         res = self._request("POST", "/api/v5/trade/order-algo", body=body)
-        return res
+        
+        if "error" in res:
+            return res
+            
+        data = res.get("data", [])
+        if data and data[0].get("sCode") == "0":
+            return {
+                "orderId": data[0]["algoId"],
+                "algoId": data[0]["algoId"],
+                "symbol": symbol,
+                "status": "NEW"
+            }
+        return {"error": f"OKX TP algo order failed: {data[0].get('sMsg', '') if data else 'Unknown'}"}
+
+    def place_trailing_stop_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        callback_rate: float,
+        activation_price: float = None,
+        reduce_only: bool = True,
+        position_side: str = None
+    ) -> dict:
+        """OKX 追踪止损 (move_order_stop)。
+        
+        Args:
+            callback_rate: 回调比例百分比 (如 1.0 = 1%)，OKX API 需要小数形式 (0.01)
+        """
+        inst_id = self._convert_symbol(symbol)
+        sz = quantity / self._get_ct_val(symbol)
+        sz_str = self._format_sz(symbol, sz)
+        
+        # OKX callbackRatio 使用小数形式: 1% -> "0.01"
+        callback_ratio = str(round(callback_rate / 100, 4))
+        
+        body = {
+            "instId": inst_id,
+            "tdMode": "cross",
+            "side": side.lower(),
+            "ordType": "move_order_stop",
+            "sz": sz_str,
+            "callbackRatio": callback_ratio,
+        }
+        
+        if activation_price:
+            body["activePx"] = str(activation_price)
+        
+        if position_side:
+            norm_side = self._normalize_pos_side(position_side)
+            if norm_side:
+                body["posSide"] = norm_side
+        if reduce_only:
+            body["reduceOnly"] = True
+        
+        res = self._request("POST", "/api/v5/trade/order-algo", body=body)
+        
+        if "error" in res:
+            return res
+        
+        data = res.get("data", [])
+        if data and data[0].get("sCode") == "0":
+            return {
+                "orderId": data[0]["algoId"],
+                "algoId": data[0]["algoId"],
+                "symbol": symbol,
+                "status": "NEW"
+            }
+        return {"error": f"OKX trailing stop failed: {data[0].get('sMsg', '') if data else 'Unknown'}"}
 
     def set_leverage(self, symbol: str, leverage: int) -> dict:
         inst_id = self._convert_symbol(symbol)
@@ -549,10 +669,10 @@ class OKXFuturesClient(ExchangeClient):
                 "symbol": sym,
                 "side": o["side"].upper(),
                 "type": o["ordType"].upper(),
-                "origQty": float(o.get("sz", 0)) * ct_val,
-                "executedQty": float(o.get("accFillSz", 0)) * ct_val,
-                "price": float(o.get("px", 0)),
-                "avgPrice": float(o.get("avgPx", 0)),
+                "origQty": float(f"{self._safe_float(o.get('sz')) * ct_val:.8g}"),
+                "executedQty": float(f"{self._safe_float(o.get('accFillSz')) * ct_val:.8g}"),
+                "price": self._safe_float(o.get("px")),
+                "avgPrice": self._safe_float(o.get("avgPx")),
                 "reduceOnly": o.get("reduceOnly", "false").lower() == "true",
                 "closePosition": "false",  # OKX doesn't have an explicit closePosition field strictly, often tied to posSide/reduceOnly
                 "status": "NEW" if o["state"] == "live" else o["state"].upper(),
@@ -605,7 +725,7 @@ class OKXFuturesClient(ExchangeClient):
                 "type": algo_type,
                 "algoType": algo_type,
                 "triggerCondition": "ge" if "ge" in str(o) else "le", # OKX doesn't expose ge/le clearly in simple conditional sometimes, logic can be complex
-                "origQty": float(o.get("sz", 0)) * ct_val,
+                "origQty": float(f"{self._safe_float(o.get('sz')) * ct_val:.8g}"),
                 "triggerPrice": trigger_px,
                 "stopPrice": trigger_px,
                 "reduceOnly": str(o.get("reduceOnly", "false")).lower() == "true",
@@ -623,9 +743,7 @@ class OKXFuturesClient(ExchangeClient):
             inst_id = self._convert_symbol(symbol)
             quantity = float(order.get("quantity", 0))
             sz = quantity / self._get_ct_val(symbol)
-            if sz < 1:
-                sz = 1
-            sz_str = str(int(sz))
+            sz_str = self._format_sz(symbol, sz)
             
             body = {
                 "instId": inst_id,
@@ -635,7 +753,9 @@ class OKXFuturesClient(ExchangeClient):
                 "sz": sz_str
             }
             if order.get("positionSide"):
-                body["posSide"] = self._normalize_pos_side(order.get("positionSide"))
+                norm_pos = self._normalize_pos_side(order.get("positionSide"))
+                if norm_pos:
+                    body["posSide"] = norm_pos
             if order.get("reduceOnly", "").lower() == "true":
                 body["reduceOnly"] = True
             if order.get("price") and order.get("type", "").upper() == "LIMIT":
@@ -643,7 +763,8 @@ class OKXFuturesClient(ExchangeClient):
                 
             res = self._request("POST", "/api/v5/trade/order", body=body)
             if "error" in res:
-                results.append({"error": res["error"]})
+                err_code = res.get("code", "Unknown")
+                results.append({"error": f"(Code: {err_code}) {res['error']}"})
             else:
                 data = res.get("data", [])
                 if data and data[0].get("sCode") == "0":
@@ -692,9 +813,13 @@ class OKXFuturesClient(ExchangeClient):
 
     def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None, start_time: int = None, end_time: int = None) -> List[dict]:
         inst_id = self._convert_symbol(symbol)
-        params = {"instId": inst_id, "limit": str(limit), "instType": "SWAP"}
+        safe_limit = min(limit, 100)  # OKX API Max limit is 100
+        params = {"instId": inst_id, "limit": str(safe_limit), "instType": "SWAP"}
         if fromId:
-            params["before"] = str(fromId)
+            params["after"] = str(fromId)  # OKX uses 'after' to query older records, wait, okx 'after' is older, 'before' is newer. We want newer.
+            # But the caller might be passing 'after' as the last fetched ID. By OKX logic, before/after depends on sorting.
+            # OKX returns newest first. So to get older data than an ID, we use 'after'.
+            params["after"] = str(fromId)
         if start_time:
             params["begin"] = str(start_time)
         if end_time:
@@ -703,8 +828,13 @@ class OKXFuturesClient(ExchangeClient):
         # 优先使用 fills-history (3个月归档，含完整 PnL)，失败后降级到 fills (近3天)
         res = self._request("GET", "/api/v5/trade/fills-history", params)
         if "error" in res or not res.get("data"):
+            if "error" in res:
+                import logging
+                logging.getLogger("uvicorn.error").warning(f"[OKX] fills-history API error: {res}")
             res = self._request("GET", "/api/v5/trade/fills", params)
         if "error" in res:
+            import logging
+            logging.getLogger("uvicorn.error").warning(f"[OKX] fills API error: {res}")
             return []
             
         data = res.get("data", [])
@@ -737,7 +867,7 @@ class OKXFuturesClient(ExchangeClient):
                 "side": side,
                 "positionSide": position_side,
                 "price": self._safe_float(t.get("fillPx")),
-                "qty": self._safe_float(t.get("fillSz")) * ct_val,
+                "qty": float(f"{self._safe_float(t.get('fillSz')) * ct_val:.8g}"),
                 "realizedPnl": pnl_val,
                 "marginAsset": "USDT",
                 "commission": self._safe_float(t.get("fee")),
@@ -749,9 +879,12 @@ class OKXFuturesClient(ExchangeClient):
 
     def get_position_history(self, symbol: str, limit: int = 50) -> List[dict]:
         inst_id = self._convert_symbol(symbol)
-        params = {"instId": inst_id, "limit": str(limit)}
+        safe_limit = min(limit, 100)
+        params = {"instId": inst_id, "limit": str(safe_limit)}
         res = self._request("GET", "/api/v5/account/positions-history", params)
         if "error" in res:
+            import logging
+            logging.getLogger("uvicorn.error").warning(f"[OKX] positions-history error: {res}")
             return []
             
         data = res.get("data", [])
@@ -766,11 +899,11 @@ class OKXFuturesClient(ExchangeClient):
             
             # calculate ROI
             pos_amt_contracts = max(self._safe_float(pos.get("openMaxPos")), self._safe_float(pos.get("closeTotalPos")))
-            pos_amt_base = pos_amt_contracts * ct_val
+            pos_amt_base = float(f"{pos_amt_contracts * ct_val:.8g}")
             leverage = int(self._safe_float(pos.get("lever"), 10))
             if leverage == 0: leverage = 10
             
-            entry_notional = pos_amt_base * open_avg_px
+            entry_notional = float(f"{pos_amt_base * open_avg_px:.8g}")
             margin = entry_notional / leverage
             roi = (realized_pnl / margin * 100) if margin > 0 else 0
             
@@ -799,9 +932,12 @@ class OKXFuturesClient(ExchangeClient):
 
     def get_order_history(self, symbol: str, limit: int = 50) -> List[dict]:
         inst_id = self._convert_symbol(symbol)
-        params = {"instId": inst_id, "limit": limit}
+        safe_limit = min(limit, 100)
+        params = {"instId": inst_id, "limit": str(safe_limit)}
         res = self._request("GET", "/api/v5/trade/orders-history-archive", params)
         if "error" in res:
+            import logging
+            logging.getLogger("uvicorn.error").warning(f"[OKX] orders-history error: {res}")
             return []
             
         data = res.get("data", [])
@@ -814,10 +950,10 @@ class OKXFuturesClient(ExchangeClient):
                 "symbol": sym,
                 "side": o["side"].upper(),
                 "type": o["ordType"].upper(),
-                "origQty": float(o.get("sz", 0)) * ct_val,
-                "executedQty": float(o.get("accFillSz", 0)) * ct_val,
-                "price": float(o.get("px", 0)),
-                "avgPrice": float(o.get("avgPx", 0)),
+                "origQty": float(f"{self._safe_float(o.get('sz')) * ct_val:.8g}"),
+                "executedQty": float(f"{self._safe_float(o.get('accFillSz')) * ct_val:.8g}"),
+                "price": self._safe_float(o.get("px")),
+                "avgPrice": self._safe_float(o.get("avgPx")),
                 "reduceOnly": o.get("reduceOnly", "false").lower() == "true",
                 "status": o["state"].upper(),
                 "time": int(o["cTime"]),
@@ -828,12 +964,15 @@ class OKXFuturesClient(ExchangeClient):
 
     def get_income_history(self, symbol: Optional[str] = None, income_type: Optional[str] = None, limit: int = 100) -> List[dict]:
         """获取资金流水（OKX 账户账单）"""
-        params = {"limit": str(limit)}
+        safe_limit = min(limit, 100)
+        params = {"limit": str(safe_limit)}
         if symbol:
             params["instId"] = self._convert_symbol(symbol)
         
         res = self._request("GET", "/api/v5/account/bills", params)
         if "error" in res:
+            import logging
+            logging.getLogger("uvicorn.error").warning(f"[OKX] account/bills error: {res}")
             return []
             
         data = res.get("data", [])
@@ -846,32 +985,30 @@ class OKXFuturesClient(ExchangeClient):
             ts = int(bill.get("ts", 0))
             ccy = bill.get("ccy", "USDT")
             
-            fee = float(bill.get("fee", 0))
-            pnl = float(bill.get("pnl", 0))
-            balChg = float(bill.get("balChg", 0))
+            fee = self._safe_float(bill.get("fee"))
+            pnl = self._safe_float(bill.get("pnl"))
+            balChg = self._safe_float(bill.get("balChg"))
             
             # OKX 的交易(type="2")会在同一条记录中包含 fee 和 pnl
             # 前端展示(更贴近Binance的行为)期望将手续费和盈亏分开为 COMMISSION 和 REALIZED_PNL
             if b_type == "2":
-                if abs(fee) > 0:
-                    formatted.append({
-                        "symbol": sym,
-                        "type": "COMMISSION",
-                        "amount": fee,
-                        "asset": ccy,
-                        "time": ts,
-                        "info": bill.get("notes", "")
-                    })
-                if abs(pnl) > 0:
-                    formatted.append({
-                        "symbol": sym,
-                        "type": "REALIZED_PNL",
-                        "amount": pnl,
-                        "asset": ccy,
-                        "time": ts,
-                        "info": bill.get("notes", "")
-                    })
-            elif b_type == "8" or b_type == "173":
+                formatted.append({
+                    "symbol": sym,
+                    "type": "COMMISSION",
+                    "amount": fee,
+                    "asset": ccy,
+                    "time": ts,
+                    "info": bill.get("notes", "")
+                })
+                formatted.append({
+                    "symbol": sym,
+                    "type": "REALIZED_PNL",
+                    "amount": pnl,
+                    "asset": ccy,
+                    "time": ts,
+                    "info": bill.get("notes", "")
+                })
+            elif b_type in ("8", "14", "173"):
                 formatted.append({
                     "symbol": sym,
                     "type": "FUNDING_FEE",
@@ -890,17 +1027,16 @@ class OKXFuturesClient(ExchangeClient):
                     "info": bill.get("notes", "")
                 })
             else:
-                if abs(balChg) > 0:
-                    type_str = f"OTHER_{b_type}"
-                    if b_type == "3": type_str = "DELIVERED_SETTELMENT"
-                    if b_type == "5": type_str = "INSURANCE_CLEAR"
-                    formatted.append({
-                        "symbol": sym,
-                        "type": type_str,
-                        "amount": balChg,
-                        "asset": ccy,
-                        "time": ts,
-                        "info": bill.get("notes", "")
-                    })
+                type_str = f"OTHER_{b_type}"
+                if b_type == "3": type_str = "DELIVERED_SETTELMENT"
+                if b_type == "5": type_str = "INSURANCE_CLEAR"
+                formatted.append({
+                    "symbol": sym,
+                    "type": type_str,
+                    "amount": balChg,
+                    "asset": ccy,
+                    "time": ts,
+                    "info": bill.get("notes", "")
+                })
         
         return formatted

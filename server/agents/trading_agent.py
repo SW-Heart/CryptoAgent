@@ -339,11 +339,15 @@ def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[
 build_strategy_context()
 ```
 返回的 JSON 中包含：account(余额)、positions(持仓)、open_orders(当前挂单)、
-macro(宏观)、funding(费率) 以及各标的的技术指标数据。
+exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 
 ### Step 2: 确认账户状态 [关键反重复步骤]
 - 检查 account.available (可用余额)
 - 检查 positions.list (已有持仓及方向)
+- **⚠️ 检查 exchange_constraints**（如果存在）:
+  - 该字段显示你所用交易所每个币种的最小开仓保证金
+  - 例如 exchange_constraints.BTC.min_margin_by_leverage["10x"] = 77.0 表示 10 倍杠杆下 BTC 最低需要 77 USDT 保证金
+  - **如果你的 margin 计算值低于该最低要求 → 直接 HOLD，不要尝试开仓**
 - **⚠️ 重点检查每个持仓的 existing_tp_orders 和 existing_sl_orders 字段**
   - 如果 existing_sl_orders 已有止损挂单 → 禁止再挂新止损，使用 update_stop_loss 调整价格
   - 如果 existing_tp_orders 已有止盈挂单 → 禁止再挂新止盈，使用 update_take_profit 调整价格
@@ -385,6 +389,9 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
    - margin = account.available × {risk_pct}
    - 绝对不超过 available 的 {max_pos_pct}%
    - {vol_reduce_text}
+   - ⚠️ **最低保证金校验**：如果 exchange_constraints 中该标的存在 min_margin_by_leverage,
+     必须确保你计算的 margin >= min_margin_by_leverage[当前杠杆]。
+     如果不够 → 直接 HOLD 该标的，不要尝试开仓，不要提高杠杆来凑。
 
 2. **止损设置 [强制]**:
    - LONG: 止损 = nearest_support.price × {sl_long_factor} (支撑位下方{sl_buffer_pct}%)
@@ -399,6 +406,7 @@ macro(宏观)、funding(费率) 以及各标的的技术指标数据。
 4. **开仓调用**:
    open_position(symbol=标的, direction=方向, margin=计算值,
                  leverage={leverage}, stop_loss=止损价, take_profit=止盈价)
+   - ⚠️ 如果收到 "insufficient to buy 1 contract" 错误 → 停止重试，记录 HOLD。
 
 ### Step 6: 持仓管理
 

@@ -230,6 +230,9 @@ def build_strategy_context(
     result["funding"] = _fetch_funding(symbol_list, user_id)
     result["performance"] = _fetch_performance(user_id)
 
+    # ============ 1.5 交易所合约限制 (OKX 等按张交易的交易所) ============
+    result["exchange_constraints"] = _fetch_exchange_constraints(user_id, symbol_list)
+
     # ============ 2. 逐标的技术分析 ============
     result["symbols"] = {}
     for symbol in symbol_list:
@@ -517,6 +520,62 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
         result["error"] = str(e)
     
     return result
+
+def _fetch_exchange_constraints(user_id: str, symbols: List[str]) -> Dict:
+    """获取交易所合约限制信息（最小开仓保证金等）。
+
+    对于 OKX 等按"张"交易的交易所，1 张合约价值固定（如 BTC 1张=0.01 BTC）。
+    Agent 需要提前知道每个币种在不同杠杆下的最低保证金要求，
+    避免算出一个太小的 margin 导致下单失败。
+    """
+    result: Dict[str, Any] = {}
+
+    client, err = _get_trading_client(user_id, require_trading_enabled=False) if user_id else (None, "no user_id")
+    if not client:
+        return result
+
+    exchange_name = client.get_exchange_name() if hasattr(client, 'get_exchange_name') else "Unknown"
+    result["exchange"] = exchange_name
+
+    for symbol in symbols:
+        usdt_symbol = f"{symbol}USDT" if not symbol.endswith("USDT") else symbol
+        try:
+            inst_info = client.get_instrument_info(usdt_symbol)
+            ct_val = inst_info.get("ct_val", 1.0)
+
+            if ct_val == 1.0:
+                # Binance 等币本位交易所无张数概念，不需要额外约束
+                continue
+
+            # 获取当前价格用于计算最低保证金
+            from analysis.technical import _get_current_price
+            price = _get_current_price(symbol)
+            if not price or price <= 0:
+                continue
+
+            # 获取最小下单张数 (如 BTC=0.01, ETH=0.01, SOL=0.1)
+            min_sz = inst_info.get("min_qty", 1.0)
+
+            # 最小下单的名义价值 = minSz * ctVal * price
+            min_notional = min_sz * ct_val * price
+
+            # 常见杠杆下的最低保证金 = 最小名义价值 / 杠杆
+            min_margins = {}
+            for lev in [3, 5, 10, 15, 20, 25, 50, 100]:
+                min_margins[f"{lev}x"] = round(min_notional / lev, 4)
+
+            result[symbol] = {
+                "ct_val": ct_val,
+                "min_sz": min_sz,
+                "min_notional": round(min_notional, 4),
+                "min_margin_by_leverage": min_margins,
+                "note": f"OKX合约最小下单{min_sz}张={min_sz * ct_val}{symbol.replace('USDT','')}, 最低保证金=min_notional/杠杆倍数"
+            }
+        except Exception as e:
+            print(f"[StrategyContext] _fetch_exchange_constraints error for {symbol}: {e}")
+
+    return result
+
 
 # BUG-4 修复: 宏观数据全局缓存（5 分钟 TTL），避免 CoinGecko API 高频限流
 _macro_cache: Dict = {}

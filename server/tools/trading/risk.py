@@ -330,16 +330,18 @@ def binance_place_trailing_stop(
         position = None
         for p in positions:
             if p.get("symbol") == symbol:
-                pos_amt = float(p.get("positionAmt", 0))
-                if pos_amt != 0:
+                # 使用统一字段 quantity (正数) + direction，兼容所有交易所
+                qty = float(p.get("quantity", 0))
+                if qty != 0:
                     position = p
                     break
         
         if not position:
             return {"error": f"No open position found for {symbol}"}
         
-        pos_amt = float(position.get("positionAmt", 0))
-        is_long = pos_amt > 0
+        # 使用统一 direction 字段判断方向
+        is_long = position.get("direction") == "LONG"
+        pos_qty = float(position.get("quantity", 0))
         
         # Check Position Mode (One-Way or Hedge)
         try:
@@ -353,7 +355,7 @@ def binance_place_trailing_stop(
         if quantity:
             close_qty = abs(quantity)
         else:
-            close_qty = abs(pos_amt) * (close_percent / 100)
+            close_qty = pos_qty * (close_percent / 100)
         
         close_qty = round_quantity(symbol, close_qty)
         
@@ -461,7 +463,7 @@ def binance_change_position_mode(
         positions = client.get_positions()
         if isinstance(positions, list):
             for p in positions:
-                if float(p.get("positionAmt", 0)) != 0:
+                if float(p.get("quantity", p.get("positionAmt", 0))) != 0:
                     return {
                         "error": "Cannot change position mode while holding positions. Please close all positions first.",
                         "holding_position": p.get("symbol")

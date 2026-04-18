@@ -49,9 +49,9 @@ ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Encryption Utilities
 # ==========================================
 
-_fernet_instance: Fernet | None = None
+_fernet_instance = None
 
-def _get_fernet() -> Fernet:
+def _get_fernet():
     """Get Fernet cipher for encryption/decryption (cached)."""
     global _fernet_instance
     if _fernet_instance is not None:

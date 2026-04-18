@@ -126,15 +126,32 @@ def binance_open_position(
         exchange_name = client.get_exchange_name() if hasattr(client, 'get_exchange_name') else "Unknown"
         
         if ct_val != 1.0:
-            # 合约制交易所 (OKX): 用合约张数验证，而非 base coin 数量
-            # OKX 合约价值: BTC 1张=0.01BTC, ETH 1张=0.01ETH 等
-            # 全仓模式下交易所用总余额做保证金，这里不应拦截，让交易所自行判断
+            # 合约制交易所 (OKX): 用合约张数验证
+            # OKX 不同币种最小下单量不同: BTC minSz=0.01, ETH minSz=0.01, SOL minSz=0.1
             contracts = quantity / ct_val
-            if contracts < 1:
-                contracts = 1  # 最小下 1 张，与 okx.py 内部 if sz<1: sz=1 保持一致
-            contracts = max(int(contracts), 1)  # 取整，至少 1 张
+            min_sz = inst_info.get("min_qty", 1.0)  # OKX get_instrument_info 已映射 minSz -> min_qty
+            
+            # 按 lotSz 步长取整 (从 instrument_info qty_precision 推算)
+            lot_precision = inst_info.get("qty_precision", 0)
+            if lot_precision > 0:
+                factor = 10 ** lot_precision
+                contracts = int(contracts * factor) / factor  # 向下取整到 lotSz 精度
+            else:
+                contracts = int(contracts)
+            
+            if contracts < min_sz:
+                # 拦截：连最小下单量都不够
+                min_notional = min_sz * ct_val * calc_price
+                min_required_margin = min_notional / leverage
+                err_msg = (f"Your calculated margin ({margin:.2f} USDT) is insufficient for {exchange_name}. "
+                          f"Minimum order is {min_sz} contracts = {min_sz * ct_val} {symbol.replace('USDT','')}. "
+                          f"At price {calc_price:.2f} with {leverage}x leverage, minimum margin = {min_required_margin:.2f} USDT. "
+                          f"Please skip opening position.")
+                print(f"[Trading] REJECTED: {err_msg}")
+                return {"error": err_msg}
+            
             quantity = contracts * ct_val
-            print(f"[Trading] {exchange_name} order: notional={notional_value:.2f}, contracts={contracts}, qty_base={quantity:.6f}, ct_val={ct_val}")
+            print(f"[Trading] {exchange_name} order: notional={notional_value:.2f}, contracts={contracts}, min_sz={min_sz}, qty_base={quantity:.6f}, ct_val={ct_val}")
         else:
             # 币本位交易所 (Binance): 按币的精度四舍五入
             quantity = round_quantity(symbol, quantity)
@@ -352,8 +369,25 @@ def binance_close_position(
         entry_price = position.get("entry_price", 0)
         
         # Calculate quantity to close
-        close_qty = quantity * (close_percent / 100)
-        close_qty = round_quantity(symbol, close_qty)
+        # 检测合约制交易所 (OKX 等)，在张数维度取整以保证精度
+        inst_info = client.get_instrument_info(symbol)
+        ct_val = inst_info.get("ct_val", 1.0)
+        
+        if ct_val != 1.0:
+            # 合约制交易所：在张数维度计算和取整
+            total_contracts = quantity / ct_val
+            close_contracts = total_contracts * (close_percent / 100)
+            # 四舍五入到整数张，但至少 1 张（如果用户确实请求了平仓）
+            close_contracts = round(close_contracts)
+            if close_contracts < 1 and close_percent > 0:
+                close_contracts = 1
+            close_qty = close_contracts * ct_val
+            exchange_name = client.get_exchange_name() if hasattr(client, 'get_exchange_name') else "Unknown"
+            print(f"[Trading] {exchange_name} close: total_contracts={total_contracts}, close_contracts={close_contracts}, close_qty={close_qty}")
+        else:
+            # 币本位交易所 (Binance): 按精度四舍五入
+            close_qty = quantity * (close_percent / 100)
+            close_qty = round_quantity(symbol, close_qty)
         
         # Check Position Mode (One-Way or Hedge)
         try:
