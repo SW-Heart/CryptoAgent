@@ -146,8 +146,8 @@ def binance_open_position(
                 print(f"[Trading] REJECTED: {err_msg}")
                 return {"error": err_msg}
         
-        # [SAFETY CHECK] Min Notional Value (通用，但阈值使用交易所的值)
-        if notional_value < min_notional:
+        # [SAFETY CHECK] Min Notional Value (仅币本位交易所如 Binance，合约制交易所已通过张数校验)
+        if ct_val == 1.0 and notional_value < min_notional:
             err_msg = f"Calculated order value {notional_value:.2f} is too small. {exchange_name} requires Min Notional > {min_notional}."
             print(f"[Trading] REJECTED: {err_msg}")
             return {"error": err_msg}
