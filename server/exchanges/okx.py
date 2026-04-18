@@ -186,6 +186,23 @@ class OKXFuturesClient(ExchangeClient):
             return inst["ctVal"]
         return 1.0
 
+    @staticmethod
+    def _normalize_pos_side(pos_side: str) -> str:
+        """将 Binance 风格的 positionSide 映射为 OKX 合法的 posSide。
+        
+        Binance 使用 "BOTH" 表示单向持仓模式，但 OKX 不接受 "both"。
+        OKX 合法值: "long", "short", "net"。
+        - "BOTH" / "both" → "net" (OKX 单向模式)
+        - "LONG" / "long" → "long"
+        - "SHORT" / "short" → "short"
+        """
+        if not pos_side:
+            return ""
+        normalized = pos_side.lower()
+        if normalized == "both":
+            return "net"
+        return normalized
+
     def get_instrument_info(self, symbol: str) -> dict:
         """覆盖基类方法，从 OKX 合约缓存动态获取精度信息。"""
         self._fetch_instruments()
@@ -324,7 +341,7 @@ class OKXFuturesClient(ExchangeClient):
         }
         
         if position_side:
-            body["posSide"] = position_side.lower()
+            body["posSide"] = self._normalize_pos_side(position_side)
             
         if reduce_only:
             body["reduceOnly"] = True
@@ -372,7 +389,7 @@ class OKXFuturesClient(ExchangeClient):
         }
         
         if position_side:
-            body["posSide"] = position_side.lower()
+            body["posSide"] = self._normalize_pos_side(position_side)
         if reduce_only:
             body["reduceOnly"] = True
             
@@ -417,7 +434,7 @@ class OKXFuturesClient(ExchangeClient):
         }
         
         if position_side:
-            body["posSide"] = position_side.lower()
+            body["posSide"] = self._normalize_pos_side(position_side)
         if reduce_only:
             body["reduceOnly"] = True
             
@@ -507,7 +524,7 @@ class OKXFuturesClient(ExchangeClient):
         a_res = self.cancel_all_algo_orders(symbol)
         
         if "error" in o_res:
-             return o_res
+            return o_res
         if "error" in a_res:
             return a_res
             
@@ -618,7 +635,7 @@ class OKXFuturesClient(ExchangeClient):
                 "sz": sz_str
             }
             if order.get("positionSide"):
-                body["posSide"] = order.get("positionSide").lower()
+                body["posSide"] = self._normalize_pos_side(order.get("positionSide"))
             if order.get("reduceOnly", "").lower() == "true":
                 body["reduceOnly"] = True
             if order.get("price") and order.get("type", "").upper() == "LIMIT":
