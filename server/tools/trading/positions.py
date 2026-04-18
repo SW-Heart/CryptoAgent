@@ -127,16 +127,14 @@ def binance_open_position(
         
         if ct_val != 1.0:
             # 合约制交易所 (OKX): 用合约张数验证，而非 base coin 数量
+            # OKX 合约价值: BTC 1张=0.01BTC, ETH 1张=0.01ETH 等
+            # 全仓模式下交易所用总余额做保证金，这里不应拦截，让交易所自行判断
             contracts = quantity / ct_val
-            print(f"[Trading] {exchange_name} contract calc: notional={notional_value:.2f}, qty_base={quantity:.6f}, ct_val={ct_val}, contracts={contracts:.2f}, min_sz={min_qty}")
             if contracts < 1:
-                # 连 1 张合约都买不起，才真正拒绝
-                min_notional_needed = ct_val * calc_price
-                err_msg = f"Order value too small for {exchange_name}. Need at least {min_notional_needed:.2f} USDT to buy 1 contract (ctVal={ct_val}). Current order: {notional_value:.2f} USDT. Increase margin or leverage."
-                print(f"[Trading] REJECTED: {err_msg}")
-                return {"error": err_msg}
-            # 合约张数取整（OKX 内部也会做，这里提前对齐）
-            quantity = int(contracts) * ct_val
+                contracts = 1  # 最小下 1 张，与 okx.py 内部 if sz<1: sz=1 保持一致
+            contracts = max(int(contracts), 1)  # 取整，至少 1 张
+            quantity = contracts * ct_val
+            print(f"[Trading] {exchange_name} order: notional={notional_value:.2f}, contracts={contracts}, qty_base={quantity:.6f}, ct_val={ct_val}")
         else:
             # 币本位交易所 (Binance): 按币的精度四舍五入
             quantity = round_quantity(symbol, quantity)
