@@ -12,6 +12,8 @@ Usage:
     )
 """
 import json
+import os
+import time as _time
 from typing import Dict, List, Any
 
 import pandas as pd
@@ -31,6 +33,9 @@ from analysis.pattern import (
 from analysis.indicator import _calculate_indicator_stats
 
 import requests
+
+# 统一的交易客户端获取入口（支持 trader_instance_id 上下文隔离）
+from tools.trading._client import _get_trading_client
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -111,11 +116,27 @@ STRATEGY_MODULES = {
     },
     "volatility": {
         "name": "波动率分析",
-        "description": "ATR 波幅、波动率比率、自适应止损建议",
+        "description": "ATR 波幅、波动率比率、布林带挤压、自适应止损建议",
         "category": "technical",
         "always_on": False,
         "default_on": False,
         "icon": "🌊",
+    },
+    "derivatives": {
+        "name": "合约数据",
+        "description": "持仓量 (OI) 变化、全网多空比、大户持仓比",
+        "category": "technical",
+        "always_on": False,
+        "default_on": True,
+        "icon": "📉",
+    },
+    "news": {
+        "name": "重要新闻",
+        "description": "监控24小时内市场突发与重磅(Trump/Fed)预警事件",
+        "category": "technical",
+        "always_on": False,
+        "default_on": True,
+        "icon": "📰",
     },
 }
 
@@ -204,13 +225,31 @@ def build_strategy_context(
     # 传入已获取的 open_orders，让 _fetch_positions 把每个仓位关联的 TP/SL 挂单内嵌进去
     result["positions"] = _fetch_positions(user_id, open_orders=result["open_orders"])
     result["macro"] = _fetch_macro()
+    if "news" in module_list:
+        result["news"] = _fetch_critical_news()
     result["funding"] = _fetch_funding(symbol_list, user_id)
+    result["performance"] = _fetch_performance(user_id)
+
+    # ============ 1.5 交易所合约限制 (OKX 等按张交易的交易所) ============
+    result["exchange_constraints"] = _fetch_exchange_constraints(user_id, symbol_list)
+
+    # ============ 1.6 价格警报 (Agent 自主设置的关键价位监控) ============
+    result["alerts"] = _fetch_price_alerts(user_id)
 
     # ============ 2. 逐标的技术分析 ============
     result["symbols"] = {}
     for symbol in symbol_list:
         price = _get_current_price(symbol)
+
+        # BUG-3 修复: 如果公共 API 价格获取失败，用已有持仓的 mark_price 做 fallback
         if price is None:
+            for pos in result.get("positions", {}).get("list", []):
+                if pos.get("symbol") == symbol and pos.get("mark_price"):
+                    price = pos["mark_price"]
+                    print(f"[StrategyContext] Price fallback: using mark_price {price} for {symbol}")
+                    break
+
+        if price is None or price == 0:
             result["symbols"][symbol] = {"error": "无法获取价格"}
             continue
 
@@ -234,107 +273,41 @@ def build_strategy_context(
         if "volatility" in module_list:
             sym_data["volatility"] = _fetch_volatility(symbol, tf_list[0])
 
+        if "derivatives" in module_list:
+            sym_data["derivatives"] = _fetch_derivatives(symbol)
+
         result["symbols"][symbol] = sym_data
 
     # ============ 3. 生成摘要 ============
     result["enabled_modules"] = module_list
     result["summary"] = _build_overall_summary(result, symbol_list)
 
-    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=_json_default)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 必选模块数据获取
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _get_binance_client_fallback(user_id: str):
-    """
-    获取 Binance 客户端，支持两条路径：
-    路径 A: user_binance_keys 表（旧系统）
-    路径 B: exchange_accounts 表（Workspace 系统）
-    返回 (client, error_msg) 元组
-    """
-    from binance_client import has_user_api_keys, get_user_binance_client, BinanceFuturesClient
+# BUG-5 修复: 限制 JSON 输出中的浮点精度，减少 token 浪费
+def _json_default(obj):
+    """JSON 序列化 fallback: 将 numpy/pandas 类型转为 Python 原生类型，并限制浮点精度。"""
+    import numpy as np
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return round(float(obj), 4)
+    if isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    if hasattr(obj, 'item'):
+        return obj.item()
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
-    # 路径 A: 优先尝试旧版密钥表
-    if has_user_api_keys(user_id):
-        client = get_user_binance_client(user_id)
-        if client:
-            return client, None
 
-    # 路径 B: 回退到 exchange_accounts（通过 trader_instances 关联）
-    try:
-        from app.database import get_db_connection
-        from app.services.workspace_service import _normalize_json
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                # 查找用户的 trader_instance，获取关联的 exchange_account_id
-                cur.execute("""
-                    SELECT ti.exchange_account_id
-                    FROM trader_instances ti
-                    WHERE ti.user_id = %s AND ti.exchange_account_id IS NOT NULL
-                    ORDER BY ti.id ASC LIMIT 1
-                """, (user_id,))
-                ti_row = cur.fetchone()
-                if not ti_row:
-                    return None, "No exchange account linked"
-
-                ea_id = ti_row["exchange_account_id"]
-                cur.execute(
-                    "SELECT provider, metadata_json, environment FROM exchange_accounts WHERE id = %s AND user_id = %s",
-                    (ea_id, user_id)
-                )
-                ea_row = cur.fetchone()
-        finally:
-            conn.close()
-
-        if not ea_row:
-            return None, "Exchange account not found"
-
-        meta = _normalize_json(ea_row["metadata_json"]) if ea_row["metadata_json"] else {}
-        raw_key = meta.get("api_key", "")
-        raw_secret = meta.get("api_secret", "")
-        environment = ea_row.get("environment", "demo")
-        is_testnet = environment in ("testnet", "demo")
-
-        # 解密（如果已加密）
-        api_key, api_secret = raw_key, raw_secret
-        if raw_key and raw_key.startswith("gAAAA"):
-            try:
-                from binance_client import decrypt_value
-                api_key = decrypt_value(raw_key)
-            except Exception:
-                api_key = ""
-        if raw_secret and raw_secret.startswith("gAAAA"):
-            try:
-                from binance_client import decrypt_value
-                api_secret = decrypt_value(raw_secret)
-            except Exception:
-                api_secret = ""
-
-        passphrase = meta.get("passphrase", "")
-        if passphrase and passphrase.startswith("gAAAA"):
-            try:
-                from binance_client import decrypt_value
-                passphrase = decrypt_value(passphrase)
-            except Exception:
-                passphrase = ""
-
-        if api_key and api_secret:
-            provider = ea_row.get("provider", "binance") if "provider" in ea_row.keys() else "binance"
-            from exchanges.factory import create_exchange_client
-            client = create_exchange_client(
-                provider=provider,
-                api_key=api_key,
-                api_secret=api_secret,
-                passphrase=passphrase,
-                environment=environment
-            )
-            return client, None
-        return None, "API credentials empty"
-    except Exception as e:
-        return None, str(e)
+# BUG-2 修复: 删除了原先独立的 _get_binance_client_fallback 函数。
+# 现在统一使用 tools/trading/_client.py 的 _get_trading_client()，
+# 该函数已支持通过 trader_instance_id 上下文精确隔离多实例，
+# 避免了多 Agent 实例共享同一个交易所账户的数据串台风险。
 
 
 def _fetch_account(user_id: str = None) -> Dict:
@@ -358,10 +331,10 @@ def _fetch_account(user_id: str = None) -> Dict:
     except Exception as e:
         print(f"[StrategyContext] _fetch_account path-A exception: {e}")
 
-    # 回退：直接通过 exchange_accounts 创建客户端
+    # 回退：通过统一的 _get_trading_client 获取客户端（支持 trader_instance_id 隔离）
     if user_id:
         print(f"[StrategyContext] _fetch_account trying path-B for user {user_id[:8]}...")
-        client, err = _get_binance_client_fallback(user_id)
+        client, err = _get_trading_client(user_id, require_trading_enabled=False)
         if client:
             try:
                 balance = client.get_usdt_balance()
@@ -435,9 +408,9 @@ def _fetch_positions(user_id: str = None, open_orders: Dict = None) -> Dict:
             result["list"].append({
                 "symbol": symbol,
                 "direction": "LONG" if pos.get("direction") == "LONG" else "SHORT",
-                "margin": pos.get("isolated_margin", 0),
+                "margin": pos.get("margin") or pos.get("isolated_margin", 0),
                 "entry_price": pos.get("entry_price", 0),
-                "mark_price": pos.get("mark_price", 0),
+                "mark_price": pos.get("current_price") or pos.get("mark_price", 0),
                 "pnl": pos.get("unrealized_pnl", 0),
                 "roi": pos.get("roi_percent", 0),
                 "leverage": pos.get("leverage", 1),
@@ -456,9 +429,9 @@ def _fetch_positions(user_id: str = None, open_orders: Dict = None) -> Dict:
     except Exception:
         pass
 
-    # 回退：直接通过 exchange_accounts 创建客户端
+    # 回退：通过统一的 _get_trading_client 获取客户端（支持 trader_instance_id 隔离）
     if user_id:
-        client, err = _get_binance_client_fallback(user_id)
+        client, err = _get_trading_client(user_id, require_trading_enabled=False)
         if client:
             try:
                 positions = client.get_positions()
@@ -479,13 +452,18 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
     """
     result = {"count": 0, "list": []}
     
-    client, err = _get_binance_client_fallback(user_id) if user_id else (None, "no user_id")
+    client, err = _get_trading_client(user_id, require_trading_enabled=False) if user_id else (None, "no user_id")
     if not client:
         if err:
             result["error"] = err
         return result
     
     try:
+        def _safe_float(v):
+            if v is None or v == "": return 0.0
+            try: return float(v)
+            except: return 0.0
+        
         # 1. 获取普通挂单
         normal_orders = client.get_open_orders()
         normal_count = 0
@@ -494,11 +472,6 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
                 order_type = order.get("type", "")
                 side = order.get("side", "")
                 symbol = order.get("symbol", "").replace("USDT", "")
-                
-                def _safe_float(v):
-                    if v is None or v == "": return 0.0
-                    try: return float(v)
-                    except: return 0.0
                 
                 result["list"].append({
                     "symbol": symbol,
@@ -551,8 +524,98 @@ def _fetch_open_orders(user_id: str = None) -> Dict:
     
     return result
 
+def _fetch_exchange_constraints(user_id: str, symbols: List[str]) -> Dict:
+    """获取交易所合约限制信息（最小开仓保证金等）。
+
+    对于 OKX 等按"张"交易的交易所，1 张合约价值固定（如 BTC 1张=0.01 BTC）。
+    Agent 需要提前知道每个币种在不同杠杆下的最低保证金要求，
+    避免算出一个太小的 margin 导致下单失败。
+    """
+    result: Dict[str, Any] = {}
+
+    client, err = _get_trading_client(user_id, require_trading_enabled=False) if user_id else (None, "no user_id")
+    if not client:
+        return result
+
+    exchange_name = client.get_exchange_name() if hasattr(client, 'get_exchange_name') else "Unknown"
+    result["exchange"] = exchange_name
+
+    for symbol in symbols:
+        usdt_symbol = f"{symbol}USDT" if not symbol.endswith("USDT") else symbol
+        try:
+            inst_info = client.get_instrument_info(usdt_symbol)
+            ct_val = inst_info.get("ct_val", 1.0)
+
+            if ct_val == 1.0:
+                # Binance 等币本位交易所无张数概念，不需要额外约束
+                continue
+
+            # 获取当前价格用于计算最低保证金
+            from analysis.technical import _get_current_price
+            price = _get_current_price(symbol)
+            if not price or price <= 0:
+                continue
+
+            # 获取最小下单张数 (如 BTC=0.01, ETH=0.01, SOL=0.1)
+            min_sz = inst_info.get("min_qty", 1.0)
+
+            # 最小下单的名义价值 = minSz * ctVal * price
+            min_notional = min_sz * ct_val * price
+
+            # 常见杠杆下的最低保证金 = 最小名义价值 / 杠杆
+            min_margins = {}
+            for lev in [3, 5, 10, 15, 20, 25, 50, 100]:
+                min_margins[f"{lev}x"] = round(min_notional / lev, 4)
+
+            result[symbol] = {
+                "ct_val": ct_val,
+                "min_sz": min_sz,
+                "min_notional": round(min_notional, 4),
+                "min_margin_by_leverage": min_margins,
+                "note": f"OKX合约最小下单{min_sz}张={min_sz * ct_val}{symbol.replace('USDT','')}, 最低保证金=min_notional/杠杆倍数"
+            }
+        except Exception as e:
+            print(f"[StrategyContext] _fetch_exchange_constraints error for {symbol}: {e}")
+
+    return result
+
+
+def _fetch_price_alerts(user_id: str = None) -> Dict:
+    """获取当前用户的活跃价格警报列表，注入到策略上下文中。
+    
+    让 Agent 每次分析时都能看到自己之前设置了哪些警报，
+    便于决定是否需要新增、调整或取消警报。
+    """
+    result = {"count": 0, "list": []}
+    if not user_id:
+        return result
+    
+    try:
+        from tools.alert_tools import list_price_alerts
+        alerts_data = list_price_alerts(user_id=user_id)
+        if isinstance(alerts_data, dict):
+            result["count"] = alerts_data.get("count", 0)
+            result["list"] = alerts_data.get("list", [])
+            result["max_allowed"] = alerts_data.get("max_allowed", 10)
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_price_alerts error: {e}")
+    
+    return result
+
+
+# BUG-4 修复: 宏观数据全局缓存（5 分钟 TTL），避免 CoinGecko API 高频限流
+_macro_cache: Dict = {}
+_macro_cache_time: float = 0
+_MACRO_CACHE_TTL = 300  # 5 分钟
+
+
 def _fetch_macro() -> Dict:
-    """获取市场宏观数据。"""
+    """获取市场宏观数据（带 5 分钟级别全局缓存）。"""
+    global _macro_cache, _macro_cache_time
+    now = _time.time()
+    if _macro_cache and (now - _macro_cache_time) < _MACRO_CACHE_TTL:
+        return _macro_cache
+
     result = {"fng": None, "fng_label": None, "btc_dom": None, "market_phase": None}
     try:
         fng_url = "https://api.alternative.me/fng/?limit=1"
@@ -577,6 +640,12 @@ def _fetch_macro() -> Dict:
             result["market_phase"] = "BTC主导"
     except Exception:
         pass
+
+    # 仅在至少有一项数据时更新缓存
+    if result["fng"] is not None or result["btc_dom"] is not None:
+        _macro_cache = result
+        _macro_cache_time = now
+
     return result
 
 
@@ -607,14 +676,25 @@ def _fetch_funding(symbols: List[str], user_id: str = None) -> Dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _fetch_trend(symbol: str, timeframes: List[str], price: float) -> Dict:
-    """多周期趋势结构分析（EMA + Vegas + MACD）。"""
+    """多周期趋势结构分析（EMA + Vegas + MACD + RSI）。
+
+    核心原则：顺大逆小
+    - EMA 排列 + Vegas 通道位置 = 首要参照（权重 2）
+    - MACD 动能 = 辅助确认（权重 1）
+    - 大周期 (1w/1d) 权重远高于小周期 (4h/1h/15m)
+    - major_trend 只看 1d+1w 的 EMA+Vegas，输出否决信号 veto
+    """
     result = {
         "direction": "neutral",
         "strength": "weak",
         "ema_bull": 0, "ema_bear": 0,
         "vegas_above": 0, "vegas_below": 0,
         "macd_bull": 0, "macd_bear": 0,
+        "rsi": {},  # 各周期 RSI 值
         "timeframes": {},
+        # ===== 顺大逆小：大周期趋势 + 否决权 =====
+        "major_trend": "neutral",   # 仅基于 1d+1w 的 EMA+Vegas 判定
+        "veto": None,               # "no_long" / "no_short" / None
     }
 
     for tf in timeframes:
@@ -686,36 +766,147 @@ def _fetch_trend(symbol: str, timeframes: List[str], price: float) -> Dict:
                 else:
                     tf_data["macd"] = "bearish"
                     result["macd_bear"] += 1
+
+            # RSI (14)
+            rsi_series = ta.rsi(df["close"], length=14)
+            if rsi_series is not None and len(rsi_series) > 0:
+                rsi_val = round(float(rsi_series.iloc[-1]), 1)
+                tf_data["rsi"] = rsi_val
+                result["rsi"][tf] = rsi_val
+                if rsi_val >= 70:
+                    tf_data["rsi_status"] = "overbought"
+                elif rsi_val <= 30:
+                    tf_data["rsi_status"] = "oversold"
+                else:
+                    tf_data["rsi_status"] = "neutral"
+
+            # K 线时间进度（当前 K 线完成度）
+            try:
+                _tf_seconds = {
+                    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+                    "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600,
+                    "8h": 28800, "12h": 43200, "1d": 86400, "3d": 259200,
+                    "1w": 604800, "1M": 2592000,
+                }
+                if tf in _tf_seconds:
+                    candle_duration = _tf_seconds[tf]
+                    last_open_ts = int(df["timestamp"].iloc[-1]) / 1000 if "timestamp" in df.columns else 0
+                    if last_open_ts > 0:
+                        now_ts = _time.time()
+                        elapsed = now_ts - last_open_ts
+                        progress = min(1.0, max(0.0, elapsed / candle_duration))
+                        tf_data["candle_progress"] = round(progress, 2)
+            except Exception:
+                pass
+
         except Exception:
             pass
 
         result["timeframes"][tf] = tf_data
 
-    # 综合判断
-    total_bull = result["ema_bull"] + result["vegas_above"] + result["macd_bull"]
-    total_bear = result["ema_bear"] + result["vegas_below"] + result["macd_bear"]
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 综合判断：加权模型 + 大周期否决权
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    if total_bull + total_bear > 0:
-        if total_bull > total_bear * 2:
+    # 周期权重：大周期 >> 小周期
+    TF_WEIGHTS = {"1w": 4, "1d": 3, "4h": 2, "1h": 1, "15m": 0.5, "30m": 0.5}
+    # 指标类型权重：EMA/Vegas 是首要参照，MACD 是辅助
+    INDICATOR_WEIGHTS = {"ema": 2, "vegas": 2, "macd": 1}
+
+    weighted_bull = 0.0
+    weighted_bear = 0.0
+
+    # 大周期信号收集（仅 EMA + Vegas，不含 MACD）
+    MAJOR_TFS = {"1w", "1d"}
+    major_bull = 0.0
+    major_bear = 0.0
+
+    for tf, tf_data in result["timeframes"].items():
+        w = TF_WEIGHTS.get(tf, 1)
+        is_major = tf in MAJOR_TFS
+
+        # EMA 排列（首要参照）
+        if tf_data.get("ema") == "bullish":
+            weighted_bull += w * INDICATOR_WEIGHTS["ema"]
+            if is_major:
+                major_bull += w * INDICATOR_WEIGHTS["ema"]
+        elif tf_data.get("ema") == "bearish":
+            weighted_bear += w * INDICATOR_WEIGHTS["ema"]
+            if is_major:
+                major_bear += w * INDICATOR_WEIGHTS["ema"]
+
+        # Vegas 通道位置（首要参照）
+        if tf_data.get("vegas_status") == "above":
+            weighted_bull += w * INDICATOR_WEIGHTS["vegas"]
+            if is_major:
+                major_bull += w * INDICATOR_WEIGHTS["vegas"]
+        elif tf_data.get("vegas_status") == "below":
+            weighted_bear += w * INDICATOR_WEIGHTS["vegas"]
+            if is_major:
+                major_bear += w * INDICATOR_WEIGHTS["vegas"]
+
+        # MACD 动能（辅助确认）
+        if tf_data.get("macd") == "bullish":
+            weighted_bull += w * INDICATOR_WEIGHTS["macd"]
+        elif tf_data.get("macd") == "bearish":
+            weighted_bear += w * INDICATOR_WEIGHTS["macd"]
+
+    # 1) 综合趋势方向（加权）
+    total_score = weighted_bull + weighted_bear
+    if total_score > 0:
+        bull_ratio = weighted_bull / total_score
+        if bull_ratio >= 0.7:
             result["direction"] = "bullish"
             result["strength"] = "strong"
-        elif total_bull > total_bear:
+        elif bull_ratio >= 0.55:
             result["direction"] = "bullish"
             result["strength"] = "moderate"
-        elif total_bear > total_bull * 2:
+        elif bull_ratio <= 0.3:
             result["direction"] = "bearish"
             result["strength"] = "strong"
-        elif total_bear > total_bull:
+        elif bull_ratio <= 0.45:
             result["direction"] = "bearish"
             result["strength"] = "moderate"
+        # 0.45 < bull_ratio < 0.55 → neutral/weak (default)
+
+    # 2) 大周期趋势（仅 1d+1w 的 EMA+Vegas）
+    major_total = major_bull + major_bear
+    if major_total > 0:
+        major_ratio = major_bull / major_total
+        if major_ratio >= 0.6:
+            result["major_trend"] = "bullish"
+        elif major_ratio <= 0.4:
+            result["major_trend"] = "bearish"
+        # else: "neutral" (default)
+
+    # 3) 否决权：大周期明确方向时，禁止反向开仓
+    if result["major_trend"] == "bearish":
+        result["veto"] = "no_long"
+    elif result["major_trend"] == "bullish":
+        result["veto"] = "no_short"
 
     return result
 
 
 def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
-    """支撑阻力关键价位识别。"""
-    result = {"nearest_support": None, "nearest_resistance": None, "confluence_zones": []}
-    all_levels = []
+    """支撑阻力关键价位识别。
+
+    优先级原则：
+    - L1（首要）: EMA21/55/200 + Vegas 通道 → nearest_support / nearest_resistance
+    - L2（参考）: Fib 回撤位 → fib_support / fib_resistance
+    - 两类合并用于汇聚区检测 confluence_zones
+    """
+    result = {
+        "nearest_support": None,
+        "nearest_resistance": None,
+        "fib_support": None,        # Fib 级别支撑（仅参考）
+        "fib_resistance": None,     # Fib 级别阻力（仅参考）
+        "confluence_zones": [],
+    }
+    # L1: EMA/Vegas 关键位
+    ema_vegas_levels = []
+    # L2: Fib 回撤位
+    fib_levels = []
 
     df = _get_binance_klines(symbol, timeframe, limit=100)
     if df is None or len(df) < 30:
@@ -727,7 +918,7 @@ def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
             if len(df) >= length:
                 val = ta.ema(df["close"], length=length)
                 if val is not None:
-                    all_levels.append((val.iloc[-1], f"{label}_{timeframe}"))
+                    ema_vegas_levels.append((val.iloc[-1], f"{label}_{timeframe}"))
 
         # 多周期 EMA 关键位
         for tf in ["4h", "1d", "1w"]:
@@ -737,16 +928,16 @@ def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
             if df_tf is not None and len(df_tf) >= 55:
                 ema21_tf = ta.ema(df_tf["close"], length=21).iloc[-1]
                 ema55_tf = ta.ema(df_tf["close"], length=55).iloc[-1]
-                all_levels.append((ema21_tf, f"EMA21_{tf}"))
-                all_levels.append((ema55_tf, f"EMA55_{tf}"))
+                ema_vegas_levels.append((ema21_tf, f"EMA21_{tf}"))
+                ema_vegas_levels.append((ema55_tf, f"EMA55_{tf}"))
 
                 if len(df_tf) >= 170:
                     ema144 = ta.ema(df_tf["close"], length=144).iloc[-1]
                     ema169 = ta.ema(df_tf["close"], length=169).iloc[-1]
-                    all_levels.append((max(ema144, ema169), f"VegasTop_{tf}"))
-                    all_levels.append((min(ema144, ema169), f"VegasBot_{tf}"))
+                    ema_vegas_levels.append((max(ema144, ema169), f"VegasTop_{tf}"))
+                    ema_vegas_levels.append((min(ema144, ema169), f"VegasBot_{tf}"))
 
-        # Fibonacci 回撤
+        # Fibonacci 回撤（L2 参考）
         swing_high, swing_low = _find_swing_points(df, window=7)
         high_price = swing_high["price"]
         low_price = swing_low["price"]
@@ -754,33 +945,78 @@ def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
         is_uptrend = swing_high["index"] > swing_low["index"]
         for fib in [0.382, 0.5, 0.618]:
             level = (high_price - diff * fib) if is_uptrend else (low_price + diff * fib)
-            all_levels.append((level, f"Fib_{fib}"))
+            fib_levels.append((level, f"Fib_{fib}"))
     except Exception:
         pass
 
-    # 最近支撑/阻力
-    supports = [(l, n) for l, n in all_levels if l < price]
-    resistances = [(l, n) for l, n in all_levels if l > price]
+    # ===== nearest_support / nearest_resistance: 优先 EMA/Vegas =====
+    ema_supports = [(l, n) for l, n in ema_vegas_levels if l < price]
+    ema_resistances = [(l, n) for l, n in ema_vegas_levels if l > price]
 
-    if supports:
-        supports.sort(key=lambda x: x[0], reverse=True)
-        s = supports[0]
+    if ema_supports:
+        ema_supports.sort(key=lambda x: x[0], reverse=True)
+        s = ema_supports[0]
         result["nearest_support"] = {
             "price": round(s[0], 2),
             "dist_pct": round(((price - s[0]) / price) * 100, 1),
             "source": s[1],
         }
 
-    if resistances:
-        resistances.sort(key=lambda x: x[0])
-        r = resistances[0]
+    if ema_resistances:
+        ema_resistances.sort(key=lambda x: x[0])
+        r = ema_resistances[0]
         result["nearest_resistance"] = {
             "price": round(r[0], 2),
             "dist_pct": round(((r[0] - price) / price) * 100, 1),
             "source": r[1],
         }
 
-    # 汇聚区
+    # 如果 EMA/Vegas 没有支撑或阻力（罕见），回退到 Fib
+    if result["nearest_support"] is None:
+        fib_supports = [(l, n) for l, n in fib_levels if l < price]
+        if fib_supports:
+            fib_supports.sort(key=lambda x: x[0], reverse=True)
+            s = fib_supports[0]
+            result["nearest_support"] = {
+                "price": round(s[0], 2),
+                "dist_pct": round(((price - s[0]) / price) * 100, 1),
+                "source": s[1],
+            }
+
+    if result["nearest_resistance"] is None:
+        fib_resistances = [(l, n) for l, n in fib_levels if l > price]
+        if fib_resistances:
+            fib_resistances.sort(key=lambda x: x[0])
+            r = fib_resistances[0]
+            result["nearest_resistance"] = {
+                "price": round(r[0], 2),
+                "dist_pct": round(((r[0] - price) / price) * 100, 1),
+                "source": r[1],
+            }
+
+    # ===== Fib 参考位（独立输出，不影响 Agent 止损止盈计算）=====
+    fib_supports = [(l, n) for l, n in fib_levels if l < price]
+    fib_resistances = [(l, n) for l, n in fib_levels if l > price]
+
+    if fib_supports:
+        fib_supports.sort(key=lambda x: x[0], reverse=True)
+        s = fib_supports[0]
+        result["fib_support"] = {
+            "price": round(s[0], 2),
+            "dist_pct": round(((price - s[0]) / price) * 100, 1),
+            "source": s[1],
+        }
+    if fib_resistances:
+        fib_resistances.sort(key=lambda x: x[0])
+        r = fib_resistances[0]
+        result["fib_resistance"] = {
+            "price": round(r[0], 2),
+            "dist_pct": round(((r[0] - price) / price) * 100, 1),
+            "source": r[1],
+        }
+
+    # ===== 汇聚区：EMA/Vegas + Fib 合并检测 =====
+    all_levels = ema_vegas_levels + fib_levels
     all_levels.sort(key=lambda x: x[0])
     used = set()
     tolerance = 0.015
@@ -965,6 +1201,26 @@ def _fetch_volatility(symbol: str, timeframe: str) -> Dict:
 
         result["sl_suggest"] = round(float(current_atr * sl_mult), 2)
         result["sl_suggest_pct"] = round(atr_pct * sl_mult, 2)
+
+        # 布林带 Squeeze 检测
+        try:
+            bb = ta.bbands(df["close"], length=20, std=2)
+            if bb is not None:
+                upper = bb.iloc[-1, 0]  # BBU
+                lower = bb.iloc[-1, 2]  # BBL
+                bb_width = (upper - lower) / price * 100 if price > 0 else 0
+                bb_width_20 = []
+                for i in range(-20, 0):
+                    u = bb.iloc[i, 0]
+                    l = bb.iloc[i, 2]
+                    p = df["close"].iloc[i]
+                    bb_width_20.append((u - l) / p * 100 if p > 0 else 0)
+                avg_width = sum(bb_width_20) / len(bb_width_20) if bb_width_20 else 0
+                result["bb_width"] = round(bb_width, 2)
+                result["bb_squeeze"] = bb_width < avg_width * 0.6  # 宽度低于均值 60% 视为挤压
+        except Exception:
+            pass
+
     except Exception:
         pass
     return result
@@ -1005,9 +1261,245 @@ def _build_overall_summary(data: Dict, symbols: List[str]) -> str:
             emoji = "📈" if trend.get("direction") == "bullish" else ("📉" if trend.get("direction") == "bearish" else "➡️")
             parts.append(f"{sym}{emoji}")
 
-    # 宏观
+    # 宏观与新闻
     macro = data.get("macro", {})
     if macro.get("fng") is not None:
         parts.append(f"FnG:{macro['fng']}")
+        
+    news = data.get("news", {})
+    if news.get("has_alert"):
+        parts.append("🚨紧急新闻预警!")
 
     return " | ".join(parts)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 合约衍生数据模块 (Open Interest + Long/Short Ratio)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+BINANCE_FAPI_BASE = os.environ.get("BINANCE_API_BASE", "https://fapi.binance.com")
+
+
+def _fetch_derivatives(symbol: str) -> Dict:
+    """
+    获取合约特有数据：持仓量 (OI) 和多空持仓比。
+    
+    数据源：Binance Futures 公共 API（无需密钥）。
+    
+    返回:
+        {
+            "oi": 12345.67,           # 当前 OI（BTC 计）
+            "oi_change_4h": "+5.2%",  # 4h OI 变化率
+            "oi_signal": "bullish",   # OI 信号判定
+            "ls_ratio": 1.23,         # 全网多空账户比
+            "ls_signal": "crowded_long",  # 多空信号
+            "top_ls_ratio": 1.45,     # 大户多空持仓比
+        }
+    """
+    result = {
+        "oi": None, "oi_change_4h": None, "oi_signal": None,
+        "ls_ratio": None, "ls_signal": None,
+        "top_ls_ratio": None,
+    }
+    
+    usdt_symbol = f"{symbol}USDT" if not symbol.endswith("USDT") else symbol
+
+    # 1. Open Interest (当前 + 近 4h 历史)
+    try:
+        # 当前 OI
+        oi_url = f"{BINANCE_FAPI_BASE}/fapi/v1/openInterest?symbol={usdt_symbol}"
+        oi_resp = requests.get(oi_url, timeout=5).json()
+        current_oi = float(oi_resp.get("openInterest", 0))
+        result["oi"] = round(current_oi, 2)
+
+        # OI 历史 (5m 粒度, 取 48 条 = 4h)
+        oi_hist_url = f"{BINANCE_FAPI_BASE}/futures/data/openInterestHist?symbol={usdt_symbol}&period=5m&limit=48"
+        oi_hist = requests.get(oi_hist_url, timeout=5).json()
+        if isinstance(oi_hist, list) and len(oi_hist) >= 2:
+            old_oi = float(oi_hist[0].get("sumOpenInterest", 0))
+            if old_oi > 0:
+                oi_change = ((current_oi - old_oi) / old_oi) * 100
+                result["oi_change_4h"] = f"{oi_change:+.1f}%"
+                
+                # OI 信号判定（需要配合价格趋势使用）
+                if oi_change > 5:
+                    result["oi_signal"] = "rising_fast"  # 新资金快速涌入
+                elif oi_change > 1:
+                    result["oi_signal"] = "rising"
+                elif oi_change < -5:
+                    result["oi_signal"] = "falling_fast"  # 大量平仓
+                elif oi_change < -1:
+                    result["oi_signal"] = "falling"
+                else:
+                    result["oi_signal"] = "stable"
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_derivatives OI error for {symbol}: {e}")
+
+    # 2. 全网多空账户比
+    try:
+        ls_url = f"{BINANCE_FAPI_BASE}/futures/data/globalLongShortAccountRatio?symbol={usdt_symbol}&period=4h&limit=1"
+        ls_resp = requests.get(ls_url, timeout=5).json()
+        if isinstance(ls_resp, list) and ls_resp:
+            ratio = float(ls_resp[0].get("longShortRatio", 1))
+            result["ls_ratio"] = round(ratio, 2)
+
+            # 极端值信号
+            if ratio > 2.5:
+                result["ls_signal"] = "crowded_long"   # 过于拥挤做多 → 反向风险
+            elif ratio > 1.5:
+                result["ls_signal"] = "leaning_long"
+            elif ratio < 0.4:
+                result["ls_signal"] = "crowded_short"  # 过于拥挤做空 → 轧空风险
+            elif ratio < 0.67:
+                result["ls_signal"] = "leaning_short"
+            else:
+                result["ls_signal"] = "balanced"
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_derivatives L/S ratio error for {symbol}: {e}")
+
+    # 3. 大户持仓多空比
+    try:
+        top_url = f"{BINANCE_FAPI_BASE}/futures/data/topLongShortPositionRatio?symbol={usdt_symbol}&period=4h&limit=1"
+        top_resp = requests.get(top_url, timeout=5).json()
+        if isinstance(top_resp, list) and top_resp:
+            result["top_ls_ratio"] = round(float(top_resp[0].get("longShortRatio", 1)), 2)
+    except Exception:
+        pass
+
+    return result
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Agent 自身历史表现
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _fetch_performance(user_id: str = None) -> Dict:
+    """
+    从 strategy_logs 表读取 Agent 近期决策和执行表现。
+
+    通过分析 actions_taken 字段判断交易频率和类型，
+    供 Agent 参考自身近期的活跃度和操作倾向。
+
+    Returns:
+        {
+            "total_rounds": 10,          # 近期决策轮数
+            "action_rounds": 3,          # 有实际交易的轮数
+            "hold_rounds": 7,            # 观望的轮数
+            "recent_actions": ["OPEN_LONG_BTC", "ADJUST_SL_BTC", ...],
+            "consecutive_holds": 2,      # 连续观望轮数
+            "current_positions_pnl": [],  # (由 positions 模块提供，此处不重复)
+            "advice": "正常"
+        }
+    """
+    result = {
+        "total_rounds": 0,
+        "action_rounds": 0,
+        "hold_rounds": 0,
+        "recent_actions": [],
+        "consecutive_holds": 0,
+        "advice": None,
+    }
+
+    if not user_id:
+        return result
+
+    try:
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                # 获取最近 15 轮决策记录
+                cur.execute("""
+                    SELECT sl.strategy_decision, sl.actions_taken, sl."timestamp" as created_at
+                    FROM strategy_logs sl
+                    WHERE sl.user_id = %s
+                    ORDER BY sl."timestamp" DESC
+                    LIMIT 15
+                """, (user_id,))
+                rows = cur.fetchall()
+
+                if not rows:
+                    result["advice"] = "无历史决策记录"
+                    return result
+
+                result["total_rounds"] = len(rows)
+                consecutive_holds = 0
+                counting_holds = True
+
+                for row in rows:
+                    actions = row.get("actions_taken") or ""
+                    decision = row.get("strategy_decision") or ""
+
+                    # 判断该轮是否有实际交易动作
+                    has_trade = any(kw in actions.upper() for kw in [
+                        "OPEN_LONG", "OPEN_SHORT", "CLOSE_", "PARTIAL_CLOSE",
+                        "ADJUST_SL", "ADJUST_TP", "MODIFY_ORDER"
+                    ])
+
+                    if has_trade:
+                        result["action_rounds"] += 1
+                        counting_holds = False
+                        # 提取动作摘要（清洗掉可能存在的 JSON 格式字符如 []"）
+                        clean_actions = actions.replace('[', '').replace(']', '').replace('"', '').replace("'", '')
+                        action_parts = [a.strip() for a in clean_actions.split(",") if a.strip()]
+                        for ap in action_parts[:3]:
+                            if len(result["recent_actions"]) < 8:
+                                result["recent_actions"].append(ap)
+                    else:
+                        result["hold_rounds"] += 1
+                        if counting_holds:
+                            consecutive_holds += 1
+
+                result["consecutive_holds"] = consecutive_holds
+
+                # 生成建议
+                if result["total_rounds"] >= 5:
+                    action_rate = result["action_rounds"] / result["total_rounds"]
+                    if action_rate > 0.7:
+                        result["advice"] = "⚠️ 操作频率偏高，注意避免过度交易"
+                    elif consecutive_holds >= 5:
+                        result["advice"] = f"已连续观望{consecutive_holds}轮，确认是否需要调整策略"
+                    else:
+                        result["advice"] = "正常"
+                else:
+                    result["advice"] = "数据不足，正常操作"
+
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_performance error: {e}")
+        result["advice"] = "数据获取失败"
+
+    return result
+
+def _fetch_critical_news() -> Dict:
+    """获取近 24 小时的紧急新闻预警（Impact Score >= 3）。"""
+    result = {"has_alert": False, "alerts": []}
+    try:
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT title, impact_score, impact_reason, published_at
+                    FROM news_intelligence
+                    WHERE impact_score >= 3
+                      AND published_at >= NOW() - INTERVAL '24 HOURS'
+                    ORDER BY impact_score DESC, published_at DESC
+                    LIMIT 3
+                """)
+                rows = cur.fetchall()
+                if rows:
+                    result["has_alert"] = True
+                    for r in rows:
+                        result["alerts"].append({
+                            "title": r["title"],
+                            "score": r["impact_score"],
+                            "reason": r["impact_reason"],
+                            "time": str(r["published_at"])
+                        })
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_critical_news error: {e}")
+    return result

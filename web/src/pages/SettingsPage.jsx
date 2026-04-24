@@ -42,6 +42,7 @@ function AccountSection({ userId, user: initialUser }) {
     const [saving, setSaving] = useState(false);
     const [showNukeConfirm, setShowNukeConfirm] = useState(false);
     const [isNuking, setIsNuking] = useState(false);
+    const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
     useEffect(() => {
         async function loadProfileAndStats() {
@@ -92,16 +93,16 @@ function AccountSection({ userId, user: initialUser }) {
         input.onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            
+
             setSaving(true);
             try {
                 const uploadRes = await uploadFile('/api/workspace/upload-avatar', file);
                 if (!uploadRes || !uploadRes.url) throw new Error("上传失败，未返回URL");
-                
+
                 const { error } = await supabase.auth.updateUser({
                     data: { avatar_url: uploadRes.url }
                 });
-                
+
                 if (error) throw error;
                 const { data: { user: freshUser } } = await supabase.auth.getUser();
                 setUser(freshUser);
@@ -114,9 +115,13 @@ function AccountSection({ userId, user: initialUser }) {
         input.click();
     };
 
-    const handleLogout = async () => {
+    const handleLogoutClick = () => {
+        setShowLogoutConfirm(true);
+    };
+
+    const confirmLogout = async () => {
         await supabase.auth.signOut();
-        window.location.href = '/welcome';
+        window.location.href = '/';
     };
 
     const handleNukeData = () => {
@@ -201,7 +206,7 @@ function AccountSection({ userId, user: initialUser }) {
                 </div>
 
                 <div className="flex gap-2">
-                    <button onClick={handleLogout} className="px-4 py-2 rounded-xl bg-white/5 hover:bg-rose-500/10 hover:text-rose-500 text-slate-300 text-xs font-bold transition-all flex items-center gap-2 border border-white/5">
+                    <button onClick={handleLogoutClick} className="px-4 py-2 rounded-xl bg-white/5 hover:bg-rose-500/10 hover:text-rose-500 text-slate-300 text-xs font-bold transition-all flex items-center gap-2 border border-white/5">
                         <LogOut className="w-3.5 h-3.5" /> 退出
                     </button>
                 </div>
@@ -285,6 +290,16 @@ function AccountSection({ userId, user: initialUser }) {
                 message="此操作将永久删除您的账号，并物理清空所有的模型配置、交易所 API 密钥、持仓记录及决策日志。该动作无法被撤销。如果您确定要注销，请输入确认文字。"
                 confirmText="永久注销"
                 requireInputText="确认注销"
+                type="danger"
+            />
+            
+            <ConfirmModal
+                isOpen={showLogoutConfirm}
+                onClose={() => setShowLogoutConfirm(false)}
+                onConfirm={confirmLogout}
+                title="退出登录"
+                message="您确定要退出当前账号吗？退出后您将需要重新验证身份才能继续使用系统。"
+                confirmText="确认退出"
                 type="danger"
             />
         </div>
@@ -579,10 +594,224 @@ function ExchangeSection({ userId, onUpdate }) {
     );
 }
 
+function NotificationSection({ userId }) {
+    const [configs, setConfigs] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [formChannel, setFormChannel] = useState('telegram');
+
+    const [formData, setFormData] = useState({
+        webhook_url: '',
+        bot_token: '',
+        chat_id: '',
+        secret: ''
+    });
+    const [enabledEvents, setEnabledEvents] = useState({
+        "TRADE_OPEN": true,
+        "TRADE_CLOSE": true,
+        "RISK_ALERT": true,
+        "NEWS_ALERT": true,
+        "SYSTEM_ALERT": true
+    });
+    const [isActive, setIsActive] = useState(true);
+
+    const fetchConfigs = useCallback(async () => {
+        try {
+            const res = await getJson('/api/notifier/configs', {}, { 'X-User-Id': userId });
+            if (res.configs) {
+                setConfigs(res.configs);
+                if (res.configs.length > 0) {
+                    const first = res.configs[0];
+                    setFormChannel(first.channel);
+                    setFormData({
+                        webhook_url: first.config.webhook_url || '',
+                        bot_token: first.config.bot_token || '',
+                        chat_id: first.config.chat_id || '',
+                        secret: first.config.secret || ''
+                    });
+                    setIsActive(first.is_active);
+                    const newEvents = { ...enabledEvents };
+                    Object.keys(newEvents).forEach(k => newEvents[k] = false);
+                    (first.enabled_events || []).forEach(e => newEvents[e] = true);
+                    setEnabledEvents(newEvents);
+                }
+            }
+        } catch (e) { console.error(e); }
+        setLoading(false);
+    }, [userId]);
+
+    useEffect(() => {
+        fetchConfigs();
+    }, [fetchConfigs]);
+
+    const loadConfigToForm = (cfg) => {
+        setFormChannel(cfg.channel);
+        setFormData({
+            webhook_url: cfg.config.webhook_url || '',
+            bot_token: cfg.config.bot_token || '',
+            chat_id: cfg.config.chat_id || '',
+            secret: cfg.config.secret || ''
+        });
+        setIsActive(cfg.is_active);
+        const newEvents = {
+            "TRADE_OPEN": false, "TRADE_CLOSE": false, "RISK_ALERT": false, "NEWS_ALERT": false, "SYSTEM_ALERT": false
+        };
+        (cfg.enabled_events || []).forEach(e => {
+            if (newEvents[e] !== undefined) newEvents[e] = true;
+        });
+        setEnabledEvents(newEvents);
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        try {
+            const activeEvents = Object.keys(enabledEvents).filter(k => enabledEvents[k]);
+            const payload = {
+                channel: formChannel,
+                config: formData,
+                enabled_events: activeEvents,
+                is_active: isActive
+            };
+            await postJson('/api/notifier/configs', payload, { 'X-User-Id': userId });
+            alert("✅ 通知配置保存成功");
+            fetchConfigs();
+        } catch (e) {
+            alert("保存失败: " + e.message);
+        }
+        setSaving(false);
+    };
+
+    const handleTest = async () => {
+        try {
+            const activeEvents = Object.keys(enabledEvents).filter(k => enabledEvents[k]);
+            const payload = {
+                channel: formChannel,
+                config: formData,
+                enabled_events: activeEvents,
+                is_active: isActive
+            };
+            await postJson('/api/notifier/test', payload, { 'X-User-Id': userId });
+            alert("📩 测试消息已发送，请检查您的接收端。");
+        } catch (e) {
+            alert("测试失败: " + e.message);
+        }
+    };
+
+    if (loading) return <div className="p-8 flex justify-center"><Loader2 className="animate-spin text-emerald-500" /></div>;
+
+    const channels = [
+        { id: 'telegram', name: 'Telegram Bot' },
+        { id: 'feishu', name: '飞书机器人' },
+        { id: 'dingtalk', name: '钉钉群机器人' },
+        { id: 'wechat', name: '企业微信机器人' },
+    ];
+
+    const EVENT_LABELS = {
+        "TRADE_OPEN": "自动开仓通知",
+        "TRADE_CLOSE": "自动平仓通知",
+        "RISK_ALERT": "风控预警",
+        "NEWS_ALERT": "重大新闻推送",
+        "SYSTEM_ALERT": "系统运行异常"
+    };
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between mb-4">
+                <p className="text-xs font-bold text-slate-500">配置多个平台的消息推送，实时掌握交易动态与风险预警</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="col-span-1 space-y-2">
+                    {channels.map(ch => {
+                        const hasConfig = configs.find(c => c.channel === ch.id && c.is_active);
+                        return (
+                            <button
+                                key={ch.id}
+                                onClick={() => {
+                                    const cfg = configs.find(c => c.channel === ch.id);
+                                    if (cfg) loadConfigToForm(cfg);
+                                    else {
+                                        setFormChannel(ch.id);
+                                        setFormData({ webhook_url: '', bot_token: '', chat_id: '', secret: '' });
+                                        setIsActive(true);
+                                    }
+                                }}
+                                className={`w-full p-4 rounded-xl flex items-center justify-between text-sm font-bold border transition-all ${formChannel === ch.id ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-white/5 border-white/5 text-slate-400 hover:text-white'}`}
+                            >
+                                {ch.name}
+                                {hasConfig && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <div className="col-span-3 bg-[#0e1215]/50 border border-white/5 rounded-3xl p-8 space-y-6 relative overflow-hidden">
+                    {/* Decorative Blob */}
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none"></div>
+
+                    <div className="flex items-center justify-between relative z-10">
+                        <h3 className="text-xl font-black text-white flex items-center gap-2">
+                            {channels.find(c => c.id === formChannel)?.name}
+                        </h3>
+                        <label className="flex items-center justify-center cursor-pointer gap-2">
+                            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">{isActive ? '启用推送' : '已停用'}</span>
+                            <div className="relative">
+                                <input type="checkbox" className="sr-only" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
+                                <div className={`block w-10 h-6 pl-1 rounded-full flex flex-col justify-center transition-colors ${isActive ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+                                    <div className={`w-4 h-4 bg-white rounded-full transition-transform ${isActive ? 'translate-x-4' : 'translate-x-0'}`}></div>
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div className="space-y-4 relative z-10">
+                        {formChannel === 'telegram' ? (
+                            <>
+                                <Input label="Bot Token" placeholder="例如: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" value={formData.bot_token} onChange={e => setFormData({ ...formData, bot_token: e.target.value })} type="password" />
+                                <Input label="Chat ID (个人或群组)" placeholder="例如: -10012345678 或 12345678" value={formData.chat_id} onChange={e => setFormData({ ...formData, chat_id: e.target.value })} />
+                            </>
+                        ) : (
+                            <>
+                                <Input label="Webhook URL" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." value={formData.webhook_url} onChange={e => setFormData({ ...formData, webhook_url: e.target.value })} type="password" />
+                                {(formChannel === 'dingtalk' || formChannel === 'feishu') && (
+                                    <Input label="加签密钥 Secret (可选，若平台配置了加签则必填)" placeholder="SEC..." value={formData.secret} onChange={e => setFormData({ ...formData, secret: e.target.value })} type="password" />
+                                )}
+                            </>
+                        )}
+                    </div>
+
+                    <div className="pt-6 border-t border-white/10 relative z-10">
+                        <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-4">订阅事件列表</h4>
+                        <div className="grid grid-cols-2 gap-y-3 gap-x-6">
+                            {Object.entries(EVENT_LABELS).map(([key, label]) => (
+                                <label key={key} className="flex items-center gap-3 cursor-pointer group">
+                                    <div className="relative flex items-center justify-center">
+                                        <input type="checkbox" checked={enabledEvents[key] || false} onChange={e => setEnabledEvents({ ...enabledEvents, [key]: e.target.checked })} className="peer sr-only" />
+                                        <div className="w-5 h-5 rounded flex items-center justify-center border-2 border-white/10 bg-white/5 peer-checked:bg-emerald-500/20 peer-checked:border-emerald-500 transition-all">
+                                            {enabledEvents[key] && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />}
+                                        </div>
+                                    </div>
+                                    <span className={`text-sm font-bold transition-colors ${enabledEvents[key] ? 'text-white' : 'text-slate-400 group-hover:text-slate-300'}`}>{label}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="pt-6 flex items-center justify-end gap-4 relative z-10">
+                        <Button variant="secondary" onClick={handleTest} disabled={saving} icon={Bell}>推送测试</Button>
+                        <Button variant="primary" onClick={handleSave} disabled={saving} icon={CheckCircle2}>{saving ? '保存中...' : '保存配置'}</Button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const TABS = [
     { id: 'account', label: '账户信息', icon: User },
     { id: 'llm', label: '大模型配置', icon: Cpu },
     { id: 'exc', label: '交易所配置', icon: Globe },
+    { id: 'notify', label: '通知推送', icon: Bell },
 ];
 
 export default function SettingsPage({ userId, initialTab = 'account', onConfigUpdated }) {
@@ -607,8 +836,8 @@ export default function SettingsPage({ userId, initialTab = 'account', onConfigU
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={`w-full group px-6 py-4 rounded-2xl flex items-center gap-4 transition-all duration-300 ${activeTab === tab.id
-                                    ? 'bg-gradient-to-r from-white/10 to-transparent border border-white/10 shadow-lg shadow-black/20 text-white'
-                                    : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.02] border border-transparent'
+                                ? 'bg-gradient-to-r from-white/10 to-transparent border border-white/10 shadow-lg shadow-black/20 text-white'
+                                : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.02] border border-transparent'
                                 }`}
                         >
                             <tab.icon className={`w-5 h-5 transition-transform group-hover:scale-110 ${activeTab === tab.id ? 'text-white' : 'text-slate-500'}`} />
@@ -623,6 +852,7 @@ export default function SettingsPage({ userId, initialTab = 'account', onConfigU
                     {activeTab === 'account' && <AccountSection userId={userId} />}
                     {activeTab === 'llm' && <LLMSection userId={userId} onUpdate={onConfigUpdated} />}
                     {activeTab === 'exc' && <ExchangeSection userId={userId} onUpdate={onConfigUpdated} />}
+                    {activeTab === 'notify' && <NotificationSection userId={userId} />}
                 </main>
             </div>
         </div>

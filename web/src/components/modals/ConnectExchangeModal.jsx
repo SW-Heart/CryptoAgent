@@ -14,10 +14,12 @@ import {
     Key,
     Lock,
     Layout,
-    Zap
+    Zap,
+    Wifi
 } from 'lucide-react';
 import { postJson } from '../../services/apiClient';
 import { supabase } from '../../lib/supabaseClient';
+import { showToast } from '../common/GlobalToast';
 
 // --- Improved Logo Component with local fallback ---
 function ExchangeLogo({ src, name, size = "w-5 h-5", disabled = false }) {
@@ -45,7 +47,7 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
     
     // Default environment to live for real traders, but demo is common for starters
     const [environment, setEnvironment] = useState('live'); 
-
+    
     const [formData, setFormData] = useState({
         name: '',
         api_key: '',
@@ -53,10 +55,11 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
         passphrase: '', 
     });
     
+    const [testStatus, setTestStatus] = useState('none'); // none, testing, success, error
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
+    const [ipCopied, setIpCopied] = useState(false);
 
-    const SERVER_IP = "47.243.12.88"; 
+    const SERVER_IP = "47.79.241.49"; 
 
     const platforms = [
         { id: 'okx', name: 'OKX', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/Okx.svg', comingSoon: false },
@@ -66,19 +69,60 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
         { id: 'gate', name: 'Gate.io', icon: 'https://crypto-ai.oss-cn-hangzhou.aliyuncs.com/cryptoquant/gate.io.svg', comingSoon: false }
     ];
 
-    const handleSubmit = async () => {
-        // Validate inputs first
-        if (!formData.name.trim()) {
-            setError("请输入账户别名，便于管理");
+    const resetTest = () => { setTestStatus('none'); };
+
+    const handleClose = () => {
+        setPlatform('binance');
+        setShowPlatforms(false);
+        setEnvironment('live');
+        setTestStatus('none');
+        setLoading(false);
+        setFormData({
+            name: '',
+            api_key: '',
+            api_secret: '',
+            passphrase: '', 
+        });
+        onClose();
+    };
+
+    const handleTestConnection = async () => {
+        if (!formData.api_key.trim() || !formData.api_secret.trim()) {
+            showToast("API Key 和 Secret Key 是连接交易所的必填信息", "error");
             return;
         }
-        if (!formData.api_key.trim() || !formData.api_secret.trim()) {
-            setError("API Key 和 Secret Key 是连接交易所的必填信息");
+
+        setTestStatus('testing');
+        try {
+            const testPayload = {
+                exchange: platform,
+                api_key: formData.api_key,
+                api_secret: formData.api_secret,
+                passphrase: formData.passphrase,
+                environment: environment
+            };
+            const testResult = await postJson("/api/workspace/exchange-accounts/test", testPayload);
+            
+            if (testResult.status === "error") {
+                setTestStatus('error');
+                showToast(testResult.message || "账号连通性测试失败，请检查密钥或 IP 白名单", "error", 6000);
+            } else {
+                setTestStatus('success');
+                showToast("连接测试成功，可以保存并启用", "success");
+            }
+        } catch (err) {
+            setTestStatus('error');
+            showToast("连接异常: " + err.message, "error", 6000);
+        }
+    };
+
+    const handleSubmit = async () => {
+        if (!formData.name.trim()) {
+            showToast("请输入账户别名，便于管理", "error");
             return;
         }
 
         setLoading(true);
-        setError(null);
 
         try {
             // Self-healing: Try to get actual ID if prop is missing
@@ -89,7 +133,7 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
             }
 
             if (!actualUserId) {
-                setError("用户会话已过期，请重新登录 (userId missing)");
+                showToast("用户会话已过期，请重新登录 (userId missing)", "error");
                 setLoading(false);
                 return;
             }
@@ -99,26 +143,54 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                 exchange: platform,
                 environment: environment
             });
+            
+            showToast("交易所配置已保存并启用", "success");
             onConnected?.();
-            onClose();
+            handleClose();
         } catch (err) {
-            setError(err.message || "连接失败，请检查 API 配置或权限设置");
+            showToast(err.message || "连接保存失败，请重试", "error");
         } finally {
             setLoading(false);
         }
     };
 
+    const handlePrimaryAction = () => {
+        if (testStatus === 'success') {
+            handleSubmit();
+        } else {
+            handleTestConnection();
+        }
+    };
+
     const handleCopyIp = () => {
         navigator.clipboard.writeText(SERVER_IP);
+        setIpCopied(true);
+        setTimeout(() => setIpCopied(false), 3000);
     };
 
     const selectedPlatform = platforms.find(p => p.id === platform);
 
+    const isFormReady = formData.api_key.trim() && formData.api_secret.trim();
+    const isBusy = loading || testStatus === 'testing';
+
     const modalFooter = (
         <div className="flex gap-3">
-            <Button variant="outline" className="flex-1 py-4" onClick={onClose}>取消</Button>
-            <Button className="flex-1 py-4 shadow-xl shadow-indigo-500/20" icon={loading ? Loader2 : CheckCircle2} disabled={loading} onClick={handleSubmit}>
-                {loading ? "连接中..." : "确认连接"}
+            <Button variant="outline" className="flex-1 py-4" onClick={handleClose}>取消</Button>
+            <Button 
+                className={`flex-1 py-4 shadow-xl transition-all duration-300 ${
+                    testStatus === 'success' 
+                        ? 'shadow-emerald-500/20' 
+                        : 'shadow-indigo-500/20'
+                }`} 
+                icon={testStatus === 'success' ? CheckCircle2 : Wifi} 
+                loading={isBusy}
+                disabled={isBusy || !isFormReady} 
+                onClick={handlePrimaryAction}
+            >
+                {loading ? "保存中..." :
+                 testStatus === 'testing' ? "验证中..." :
+                 testStatus === 'success' ? "保存并启用" :
+                 "测试连接"}
             </Button>
         </div>
     );
@@ -155,7 +227,7 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                                         if (!p.comingSoon) {
                                             setPlatform(p.id); 
                                             setShowPlatforms(false); 
-                                            setError(null); 
+                                            resetTest(); 
                                         }
                                     }}
                                     className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all text-sm ${
@@ -181,7 +253,7 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                     ].map(env => (
                         <button
                             key={env.id}
-                            onClick={() => setEnvironment(env.id)}
+                            onClick={() => { setEnvironment(env.id); resetTest(); }}
                             className={`flex-1 py-3 rounded-xl flex items-center justify-center gap-2 text-[10px] font-black uppercase transition-all ${
                                 environment === env.id ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'
                             }`}
@@ -193,14 +265,22 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                 </div>
 
                 <div className="space-y-4">
-                    <Input label="账户别名" placeholder={placeholderText} value={formData.name} onChange={v => { setFormData(f => ({ ...f, name: v })); setError(null); }} />
+                    <Input label="账户别名" placeholder={placeholderText} value={formData.name} onChange={v => { setFormData(f => ({ ...f, name: v })); }} />
 
-                    <Input label="API Key" placeholder="请输入 API Key" icon={Key} value={formData.api_key} onChange={v => { setFormData(f => ({ ...f, api_key: v })); setError(null); }} />
+                    <Input label="API Key" placeholder="请输入 API Key" icon={Key} value={formData.api_key} onChange={v => { setFormData(f => ({ ...f, api_key: v })); resetTest(); }} />
 
-                    <Input label="Secret Key" type="password" placeholder="请输入 Secret Key" value={formData.api_secret} onChange={v => { setFormData(f => ({ ...f, api_secret: v })); setError(null); }} />
+                    <Input label="Secret Key" type="password" placeholder="请输入 Secret Key" value={formData.api_secret} onChange={v => { setFormData(f => ({ ...f, api_secret: v })); resetTest(); }} />
                     
                     {(platform === 'okx' || platform === 'bitget') && (
-                        <Input label="Passphrase" type="password" placeholder={`请输入 ${selectedPlatform?.name} 的 API Passphrase`} value={formData.passphrase} onChange={v => { setFormData(f => ({ ...f, passphrase: v })); setError(null); }} />
+                        <Input label="Passphrase" type="password" placeholder={`请输入 ${selectedPlatform?.name} 的 API Passphrase`} value={formData.passphrase} onChange={v => { setFormData(f => ({ ...f, passphrase: v })); resetTest(); }} />
+                    )}
+
+                    {/* 测试成功 — Modal 内提示引导保存 */}
+                    {testStatus === 'success' && (
+                        <div className="flex items-center gap-2 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[11px] font-black animate-in fade-in slide-in-from-bottom-2">
+                            <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                            <span>验证通过！点击下方按钮保存配置。</span>
+                        </div>
                     )}
 
                     {/* Help link for API Key application */}
@@ -225,20 +305,22 @@ export default function ConnectExchangeModal({ isOpen, onClose, onConnected, use
                     <div className="space-y-2 p-4 rounded-2xl bg-indigo-500/5 border border-indigo-500/10 animate-in slide-in-from-top-2">
                         <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest ml-1 flex items-center justify-between">
                             IP 白名单配置
-                            <button onClick={handleCopyIp} className="hover:text-indigo-300 flex items-center gap-1 font-black text-[9px] uppercase tracking-wider"><Copy className="w-3 h-3"/> 复制 IP</button>
+                            <button 
+                                onClick={handleCopyIp} 
+                                className={`flex items-center gap-1 font-black text-[9px] uppercase tracking-wider transition-colors ${ipCopied ? 'text-emerald-400' : 'hover:text-indigo-300'}`}
+                            >
+                                {ipCopied ? (
+                                    <><CheckCircle2 className="w-3 h-3"/> 复制成功</>
+                                ) : (
+                                    <><Copy className="w-3 h-3"/> 复制 IP</>
+                                )}
+                            </button>
                         </label>
                         <div className="text-xs font-mono text-slate-300 break-all bg-black/20 p-2.5 rounded-xl border border-white/5">{SERVER_IP}</div>
                         <p className="text-[10px] text-slate-500 leading-relaxed font-medium">{selectedPlatform?.name || '交易平台'}强烈建议开启 IP 绑定。请将上方 IP 填入 API 设置的白名单中。</p>
                     </div>
                 </div>
 
-                {error && (
-                    <div className="flex items-center gap-2 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[11px] font-black animate-in shake-200">
-                        <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                        <span>{error}</span>
-                    </div>
-                )}
-                
                 <div className="bg-amber-500/5 border border-amber-500/10 rounded-2xl p-4 space-y-2">
                     <div className="flex items-center gap-2 text-amber-500">
                         <ShieldCheck className="w-4 h-4" />

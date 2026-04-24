@@ -16,14 +16,14 @@ help: ## 显示帮助信息
 # ─── Development ──────────────────────────
 
 dev-server: ## 启动后端开发服务器
-	cd server && fastapi dev main.py
+	cd server && uvicorn main:app --reload --reload-exclude "tmp/*" --reload-exclude "*.db" --port 8000
 
 dev-web: ## 启动前端开发服务器
 	cd web && npm run dev
 
 dev: ## 同时启动前后端（后台）
 	@echo "Starting backend..."
-	cd server && fastapi dev main.py &
+	cd server && uvicorn main:app --reload --reload-exclude "tmp/*" --reload-exclude "*.db" --port 8000 &
 	@echo "Starting frontend..."
 	cd web && npm run dev
 

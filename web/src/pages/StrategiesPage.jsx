@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     Plus,
     Trash2,
@@ -8,10 +8,19 @@ import {
     Loader2,
     CheckCircle2,
     AlertCircle,
-    Zap
+    Zap,
+    ChevronDown,
+    ChevronRight,
+    Check,
+    X,
+    Sparkles,
+    ArrowRight,
+    Settings2,
+    ShieldCheck
 } from 'lucide-react';
 import Button from '../components/common/Button';
 import ConfirmModal from '../components/modals/ConfirmModal';
+import SymbolSelectModal from '../components/modals/SymbolSelectModal';
 import Toast from '../components/common/Toast';
 import { getJson, postJson, putJson, deleteJson } from '../services/apiClient';
 
@@ -26,6 +35,204 @@ const StrategyHelp = ({ title, content }) => (
     </div>
 );
 
+function TimeframeSelectDropdown({ options, value, onChange, disabled }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef(null);
+
+    // Provide a curated list of high-value standard timeframes for the popup options
+    const VALID_TIMEFRAMES = ["5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "1w"];
+
+    // Handle clicks outside to close
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    // Ensure value is an array
+    const selectedList = Array.isArray(value) 
+        ? value 
+        : (typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+    const toggleOption = (opt) => {
+        if (disabled) return;
+        let newList;
+        if (selectedList.includes(opt)) {
+            newList = selectedList.filter(x => x !== opt);
+        } else {
+            newList = [...selectedList, opt];
+        }
+        // sort by standard timeframe order
+        newList.sort((a,b) => {
+            const order = ["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w"];
+            return (order.indexOf(a) !== -1 ? order.indexOf(a) : 99) - (order.indexOf(b) !== -1 ? order.indexOf(b) : 99);
+        });
+        onChange(newList);
+    };
+
+    return (
+        <div className="relative w-full" ref={containerRef}>
+            <div className="w-full bg-[#060809] border border-white/10 rounded-xl p-3 flex items-start gap-3 min-h-[46px]">
+                <div className="flex-1 flex flex-wrap gap-2 min-w-0">
+                    {selectedList.length === 0 ? (
+                        <span className="text-slate-500 text-sm font-mono px-2 tracking-wider mt-1">未选择分析周期</span>
+                    ) : (
+                        selectedList.map(item => (
+                            <span key={item} className="group/tag relative bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 pl-2.5 pr-2.5 py-1 rounded-lg text-xs font-bold font-mono flex items-center hover:pr-7 transition-all duration-200 overflow-hidden">
+                                {item}
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleOption(item);
+                                    }}
+                                    disabled={disabled}
+                                    className="absolute right-1 opacity-0 group-hover/tag:opacity-100 hover:bg-emerald-500/20 rounded p-0.5 transition-all text-emerald-500 flex items-center justify-center translate-x-2 group-hover/tag:translate-x-0"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </span>
+                        ))
+                    )}
+                </div>
+                <div className="shrink-0 flex pt-0.5">
+                    <button
+                        disabled={disabled}
+                        onClick={(e) => { e.preventDefault(); setIsOpen(!isOpen); }}
+                        className="flex items-center justify-center bg-white/5 hover:bg-emerald-500 text-slate-300 hover:text-white border border-white/10 rounded-lg w-7 h-7 transition-all group"
+                        title="管理分析周期"
+                    >
+                        <Plus className="w-4 h-4 text-emerald-400 group-hover:text-white transition-colors" />
+                    </button>
+                </div>
+            </div>
+
+            {isOpen && !disabled && (
+                <div className="absolute z-50 right-0 mt-2 w-32 bg-[#121619] border border-white/10 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.8)] p-1.5 animate-in zoom-in-95 duration-200 origin-top-right overflow-y-auto custom-scrollbar max-h-48">
+                    <div className="flex flex-col gap-0.5">
+                        {VALID_TIMEFRAMES.map(opt => {
+                            const isSelected = selectedList.includes(opt);
+                            return (
+                                <div 
+                                    key={opt}
+                                    onClick={() => toggleOption(opt)}
+                                    className={`flex items-center justify-center px-1 py-2 cursor-pointer rounded-lg transition-colors border ${
+                                        isSelected 
+                                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-bold' 
+                                        : 'bg-transparent border-transparent hover:bg-white/5 text-slate-300 hover:text-white'
+                                    }`}
+                                >
+                                    <span className="text-sm font-mono">{opt}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SearchableMultiSelectDropdown({ options, value, onChange, disabled, placeholder = "搜索标的..." }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const containerRef = useRef(null);
+
+    // Handle clicks outside to close
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    const selectedList = Array.isArray(value) 
+        ? value 
+        : (typeof value === 'string' ? value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean) : []);
+
+    const toggleOption = (opt) => {
+        if (disabled) return;
+        let newList;
+        if (selectedList.includes(opt)) {
+            newList = selectedList.filter(x => x !== opt);
+        } else {
+            newList = [...selectedList, opt];
+        }
+        onChange(newList);
+    };
+
+    const filteredOptions = search.trim() === '' 
+        ? options.slice(0, 100) // limit rendering if search is empty
+        : options.filter(opt => opt.toLowerCase().includes(search.toLowerCase())).slice(0, 50);
+
+    return (
+        <div className="relative w-full" ref={containerRef}>
+            <div 
+                onClick={() => !disabled && setIsOpen(true)}
+                className={`w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-3 text-sm transition-all font-mono text-white flex flex-col justify-center min-h-[46px] ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-text hover:border-emerald-500'}`}
+            >
+                <div className="flex flex-wrap gap-1 items-center w-full">
+                    {selectedList.map(item => (
+                        <span key={item} 
+                              onClick={(e) => { e.stopPropagation(); toggleOption(item); }}
+                              className="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md text-xs font-bold leading-none flex items-center gap-1 group cursor-pointer hover:bg-red-500/20 hover:text-red-400 border border-emerald-500/20 hover:border-red-500/50 transition-colors">
+                            {item}
+                            <span className="opacity-50 group-hover:opacity-100 mb-[1px]">×</span>
+                        </span>
+                    ))}
+                    {!disabled && (
+                        <input 
+                            type="text"
+                            value={search}
+                            onChange={(e) => {
+                                setSearch(e.target.value);
+                                setIsOpen(true);
+                            }}
+                            placeholder={selectedList.length === 0 ? placeholder : ""}
+                            className="bg-transparent border-none outline-none flex-1 min-w-[100px] text-sm text-white placeholder-slate-500 font-mono"
+                        />
+                    )}
+                </div>
+            </div>
+
+            {isOpen && !disabled && (
+                <div className="absolute z-50 w-full mt-2 bg-[#121619] border border-white/10 rounded-xl shadow-2xl max-h-60 overflow-y-auto custom-scrollbar p-2">
+                    {filteredOptions.length === 0 ? (
+                        <div className="text-center py-4 text-slate-500 text-xs font-medium">
+                            {search ? `未找到匹配标的: ${search}` : "无可选标的"}
+                        </div>
+                    ) : (
+                        filteredOptions.map(opt => {
+                            const isSelected = selectedList.includes(opt);
+                            return (
+                                <div 
+                                    key={opt}
+                                    onClick={() => {
+                                        toggleOption(opt);
+                                        setSearch(''); // Auto clear search after selection
+                                    }}
+                                    className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/5 rounded-lg transition-colors"
+                                >
+                                    <span className={`text-sm font-mono ${isSelected ? 'text-emerald-400 font-bold' : 'text-slate-300'}`}>
+                                        {opt}
+                                    </span>
+                                    {isSelected && <Check className="w-4 h-4 text-emerald-400" />}
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 const StrategiesPage = ({ userId }) => {
     const [profiles, setProfiles] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -36,6 +243,25 @@ const StrategiesPage = ({ userId }) => {
     const [feedback, setFeedback] = useState(null);
     const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [tradableSymbols, setTradableSymbols] = useState([]);
+    const [isSymbolModalOpen, setIsSymbolModalOpen] = useState(false);
+    const [templates, setTemplates] = useState([]);
+
+    useEffect(() => {
+        let mounted = true;
+        const loadSymbols = async () => {
+            try {
+                const res = await getJson('/api/strategy/symbols');
+                if (mounted && res && res.symbols) {
+                    setTradableSymbols(res.symbols);
+                }
+            } catch (err) {
+                console.error("Failed to load symbols:", err);
+            }
+        };
+        loadSymbols();
+        return () => { mounted = false; };
+    }, []);
 
     const showFeedback = (msg, type) => {
         setFeedback({ msg, type });
@@ -81,9 +307,21 @@ const StrategiesPage = ({ userId }) => {
         }
     }, []);
 
+    const fetchTemplates = useCallback(async () => {
+        try {
+            const res = await getJson('/api/workspace/strategy-templates');
+            setTemplates(res.templates || []);
+        } catch (err) {
+            console.error('Failed to load strategy templates:', err);
+        }
+    }, []);
+
+
+
     useEffect(() => {
         fetchProfiles();
         fetchModules();
+        fetchTemplates();
     }, [userId]);
 
     const getEnabledModules = () => {
@@ -130,12 +368,33 @@ const StrategiesPage = ({ userId }) => {
         try {
             // Ensure symbols and timeframes are arrays if they were edited as strings
             const data = { ...selectedProfile };
-            if (typeof data.symbols === 'string') data.symbols = data.symbols.split(',').map(s => s.trim());
-            if (typeof data.timeframes === 'string') data.timeframes = data.timeframes.split(',').map(s => s.trim());
+            if (typeof data.symbols === 'string') data.symbols = data.symbols.split(',').map(s => s.trim().toUpperCase());
+            if (typeof data.timeframes === 'string') data.timeframes = data.timeframes.split(',').map(s => s.trim().toLowerCase());
 
-            const res = await putJson(`/api/workspace/strategy-profiles/${selectedProfile.id}?user_id=${userId}`, data);
-            setProfiles(res.profiles || []);
-            showFeedback("配置同步成功", "success");
+            // 严格校验周期格式
+            const validIntervals = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"];
+            const invalidIntervals = data.timeframes.filter(t => t && !validIntervals.includes(t));
+            if (invalidIntervals.length > 0) {
+                showFeedback(`不支持的周期: ${invalidIntervals.join(', ')}`, "error");
+                setSaving(false);
+                return;
+            }
+
+            let res;
+            if (data.id) {
+                res = await putJson(`/api/workspace/strategy-profiles/${data.id}?user_id=${userId}`, data);
+                showFeedback("配置同步成功", "success");
+            } else {
+                res = await postJson(`/api/workspace/strategy-profiles?user_id=${userId}`, data);
+                showFeedback("创建成功", "success");
+            }
+            
+            const newList = res.profiles || [];
+            setProfiles(newList);
+            // If we just created a new one, select it
+            if (!data.id && newList.length > 0) {
+                setSelectedProfile(newList[newList.length - 1]);
+            }
         } catch (err) {
             showFeedback("保存失败", "error");
         } finally {
@@ -184,7 +443,7 @@ const StrategiesPage = ({ userId }) => {
         <div className="h-full flex flex-col animate-in fade-in duration-500 relative">
             <Toast feedback={feedback} />
 
-            <header className="mb-10 flex items-center justify-between">
+            <header className="mb-6 flex items-center justify-between">
                 <div className="flex flex-col gap-1">
                     <h1 className="text-2xl font-bold text-white">策略库</h1>
                     <p className="text-slate-400 text-sm">定义您的交易逻辑与风控规则，AI 将严格执行。</p>
@@ -194,7 +453,7 @@ const StrategiesPage = ({ userId }) => {
 
             <div className="flex-1 flex gap-12 overflow-hidden">
                 {/* Left Side: List */}
-                <div className="w-48 flex flex-col gap-3 overflow-y-auto custom-scrollbar pr-2 flex-shrink-0">
+                <div className="w-48 flex flex-col gap-3 overflow-y-auto custom-scrollbar pr-2 flex-shrink-0 pb-10">
                     {profiles.map(p => (
                         <button
                             key={p.id}
@@ -219,13 +478,57 @@ const StrategiesPage = ({ userId }) => {
                                 })()}
                                 <div className="text-[10px] text-slate-600 font-mono">#{p.id}</div>
                             </div>
-                            <div className="font-bold text-slate-100 group-hover:text-emerald-400 transition-colors mb-1 truncate">{p.name}</div>
+                            <div className="font-bold text-slate-100 group-hover:text-emerald-400 transition-colors mb-1 truncate text-sm">{p.name}</div>
                         </button>
                     ))}
                     {profiles.length === 0 && (
                         <div className="p-8 border border-dashed border-white/10 rounded-2xl text-center">
                             <p className="text-xs text-slate-500">点击上方按钮创建您的第一个策略</p>
                         </div>
+                    )}
+
+                    {templates.length > 0 && (
+                        <>
+                            <div className="mt-4 mb-2 flex items-center gap-2 px-1">
+                                <div className="h-px bg-white/10 flex-1" />
+                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                                    策略广场
+                                </span>
+                                <div className="h-px bg-white/10 flex-1" />
+                            </div>
+                            
+                            {templates.map(tpl => (
+                                <button
+                                    key={tpl.id}
+                                    onClick={() => {
+                                        setSelectedProfile({
+                                            name: tpl.name.replace(/^[^\s]+\s/, ''),
+                                            description: tpl.description,
+                                            symbols: typeof tpl.symbols === 'string' ? tpl.symbols.split(',').map(s=>s.trim()) : tpl.symbols,
+                                            timeframes: typeof tpl.timeframes === 'string' ? tpl.timeframes.split(',').map(s=>s.trim()) : tpl.timeframes,
+                                            risk_per_trade: tpl.risk_per_trade,
+                                            trading_interval: tpl.trading_interval,
+                                            prompt_template: tpl.prompt_template,
+                                            config: tpl.config || {},
+                                            is_enabled: true,
+                                            _isTemplateDraft: tpl.id
+                                        });
+                                        setIsConfirmingDelete(false);
+                                    }}
+                                    className={`p-4 rounded-2xl text-left border transition-all group shrink-0 ${!selectedProfile?.id && selectedProfile?._isTemplateDraft === tpl.id
+                                        ? 'bg-gradient-to-r from-amber-500/10 to-transparent border-amber-500/30 shadow-lg shadow-black/20'
+                                        : 'bg-[#0e1215]/50 border-white/5 hover:border-amber-500/20'
+                                        }`}
+                                >
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest text-amber-500" style={{ color: tpl.color, backgroundColor: `${tpl.color}15` }}>
+                                            官方模板
+                                        </div>
+                                    </div>
+                                    <div className="font-bold text-slate-100 transition-colors mb-1 truncate text-sm" style={{ color: !selectedProfile?.id && selectedProfile?._isTemplateDraft === tpl.id ? tpl.color : '' }}>{tpl.name}</div>
+                                </button>
+                            ))}
+                        </>
                     )}
                 </div>
 
@@ -280,12 +583,67 @@ const StrategiesPage = ({ userId }) => {
                                                     <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">{doc.title}</label>
                                                     <StrategyHelp title={doc.title} content={doc.content} />
                                                 </div>
-                                                <input
-                                                    value={Array.isArray(selectedProfile[key]) ? selectedProfile[key].join(', ') : selectedProfile[key]}
-                                                    onChange={e => updateField(key, e.target.value)}
-                                                    disabled={selectedProfile.source === 'legacy_import'}
-                                                    className={`w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-emerald-500 transition-all font-mono text-white ${selectedProfile.source === 'legacy_import' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                                />
+                                                {key === 'symbols' ? (
+                                                    <div className="w-full bg-[#060809] border border-white/10 rounded-xl p-3 flex items-start gap-3 min-h-[46px]">
+                                                        <div className="flex-1 flex flex-wrap gap-2 min-w-0">
+                                                            {(() => {
+                                                                const val = selectedProfile[key];
+                                                                const list = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',') : []);
+                                                                const selectedList = list.map(s => {
+                                                                    let sym = s.trim().toUpperCase();
+                                                                    if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
+                                                                        return sym + 'USDT';
+                                                                    }
+                                                                    return sym;
+                                                                }).filter(Boolean);
+                                                                return selectedList.length === 0 ? (
+                                                                    <span className="text-slate-500 text-sm font-mono px-2 tracking-wider mt-1">未选择交易标的</span>
+                                                                ) : (
+                                                                    selectedList.map(item => (
+                                                                        <span key={item} className="group/tag relative bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 pl-2.5 pr-2.5 py-1 rounded-lg text-xs font-bold font-mono flex items-center hover:pr-7 transition-all duration-200 overflow-hidden">
+                                                                            {item}
+                                                                            <button 
+                                                                                onClick={(e) => {
+                                                                                    e.preventDefault();
+                                                                                    const newList = selectedList.filter(s => s !== item);
+                                                                                    updateField('symbols', newList);
+                                                                                }}
+                                                                                className="absolute right-1 opacity-0 group-hover/tag:opacity-100 hover:bg-emerald-500/20 rounded p-0.5 transition-all text-emerald-500 flex items-center justify-center translate-x-2 group-hover/tag:translate-x-0"
+                                                                            >
+                                                                                <X className="w-3 h-3" />
+                                                                            </button>
+                                                                        </span>
+                                                                    ))
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                        {selectedProfile.source !== 'legacy_import' && (
+                                                            <div className="shrink-0 flex pt-0.5">
+                                                                <button
+                                                                    disabled={selectedProfile.source === 'legacy_import'}
+                                                                    onClick={(e) => { e.preventDefault(); setIsSymbolModalOpen(true); }}
+                                                                    className="flex items-center justify-center bg-white/5 hover:bg-emerald-500 text-slate-300 hover:text-white border border-white/10 rounded-lg w-7 h-7 transition-all group"
+                                                                    title="添加交易标的"
+                                                                >
+                                                                    <Plus className="w-4 h-4 text-emerald-400 group-hover:text-white transition-colors" />
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : key === 'timeframes' ? (
+                                                    <TimeframeSelectDropdown
+                                                        value={selectedProfile[key]}
+                                                        onChange={val => updateField(key, val)}
+                                                        disabled={selectedProfile.source === 'legacy_import'}
+                                                    />
+                                                ) : (
+                                                    <input
+                                                        value={Array.isArray(selectedProfile[key]) ? selectedProfile[key].join(', ') : selectedProfile[key]}
+                                                        onChange={e => updateField(key, e.target.value)}
+                                                        disabled={selectedProfile.source === 'legacy_import'}
+                                                        className={`w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-emerald-500 transition-all font-mono text-white ${selectedProfile.source === 'legacy_import' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                    />
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -349,6 +707,202 @@ const StrategiesPage = ({ userId }) => {
                                     </div>
                                 </section>
 
+                                {/* 交易规则配置 */}
+                                {selectedProfile.source !== 'legacy_import' && (
+                                    <section>
+                                        <div className="flex items-center gap-2 mb-6">
+                                            <div className="w-1.5 h-4 bg-amber-500 rounded-full" />
+                                            <h3 className="text-sm font-bold text-white uppercase tracking-widest">交易规则</h3>
+                                            <div className="flex items-center gap-1 ml-auto">
+                                                <Settings2 className="w-3 h-3 text-amber-400" />
+                                                <span className="text-[10px] text-slate-500 font-medium">控制 AI 的决策逻辑和风险偏好</span>
+                                            </div>
+                                        </div>
+
+                                        {(() => {
+                                            const config = selectedProfile.config || {};
+                                            const rules = config.trading_rules || {};
+                                            const updateRule = (key, value) => {
+                                                const newConfig = {
+                                                    ...config,
+                                                    trading_rules: { ...rules, [key]: value }
+                                                };
+                                                updateField('config', newConfig);
+                                            };
+
+                                            return (
+                                                <div className="space-y-5">
+                                                    {/* Row 1: 杠杆 + 最大仓位 */}
+                                                    <div className="grid grid-cols-2 gap-6">
+                                                        <div>
+                                                            <div className="flex items-center justify-between mb-2 mx-1">
+                                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">默认杠杆</label>
+                                                                <span className="text-xs font-mono text-emerald-400 font-bold">{rules.default_leverage ?? 10}x</span>
+                                                            </div>
+                                                            <input
+                                                                type="range"
+                                                                min={1} max={20} step={1}
+                                                                value={rules.default_leverage ?? 10}
+                                                                onChange={e => updateRule('default_leverage', parseInt(e.target.value))}
+                                                                className="w-full accent-emerald-500 h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer"
+                                                            />
+                                                            <div className="flex justify-between text-[9px] text-slate-600 mt-1 mx-0.5">
+                                                                <span>1x 保守</span>
+                                                                <span>20x 激进</span>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="flex items-center justify-between mb-2 mx-1">
+                                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">最大仓位比例</label>
+                                                                <span className="text-xs font-mono text-emerald-400 font-bold">{rules.max_position_pct ?? 20}%</span>
+                                                            </div>
+                                                            <input
+                                                                type="range"
+                                                                min={5} max={40} step={5}
+                                                                value={rules.max_position_pct ?? 20}
+                                                                onChange={e => updateRule('max_position_pct', parseInt(e.target.value))}
+                                                                className="w-full accent-emerald-500 h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer"
+                                                            />
+                                                            <div className="flex justify-between text-[9px] text-slate-600 mt-1 mx-0.5">
+                                                                <span>5% 保守</span>
+                                                                <span>40% 激进</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Row 2: 信号阈值 + 止损缓冲 */}
+                                                    <div className="grid grid-cols-2 gap-6">
+                                                        <div>
+                                                            <div className="flex items-center justify-between mb-2 mx-1">
+                                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">强信号维度数</label>
+                                                                <span className="text-xs font-mono text-emerald-400 font-bold">{rules.signal_min_dimensions ?? 3}</span>
+                                                            </div>
+                                                            <input
+                                                                type="range"
+                                                                min={2} max={5} step={1}
+                                                                value={rules.signal_min_dimensions ?? 3}
+                                                                onChange={e => updateRule('signal_min_dimensions', parseInt(e.target.value))}
+                                                                className="w-full accent-emerald-500 h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer"
+                                                            />
+                                                            <div className="flex justify-between text-[9px] text-slate-600 mt-1 mx-0.5">
+                                                                <span>2 宽松</span>
+                                                                <span>5 严格</span>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="flex items-center justify-between mb-2 mx-1">
+                                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">止损缓冲</label>
+                                                                <span className="text-xs font-mono text-emerald-400 font-bold">{rules.sl_buffer_pct ?? 0.5}%</span>
+                                                            </div>
+                                                            <input
+                                                                type="range"
+                                                                min={0.1} max={2.0} step={0.1}
+                                                                value={rules.sl_buffer_pct ?? 0.5}
+                                                                onChange={e => updateRule('sl_buffer_pct', parseFloat(e.target.value))}
+                                                                className="w-full accent-emerald-500 h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer"
+                                                            />
+                                                            <div className="flex justify-between text-[9px] text-slate-600 mt-1 mx-0.5">
+                                                                <span>0.1% 紧</span>
+                                                                <span>2.0% 宽</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Row 3: 保本R + 追踪R */}
+                                                    <div className="grid grid-cols-2 gap-6">
+                                                        <div>
+                                                            <div className="flex items-center justify-between mb-2 mx-1">
+                                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">保本止损 (R)</label>
+                                                                <span className="text-xs font-mono text-emerald-400 font-bold">{rules.breakeven_at_r ?? 1.0}R</span>
+                                                            </div>
+                                                            <input
+                                                                type="range"
+                                                                min={0.3} max={3.0} step={0.1}
+                                                                value={rules.breakeven_at_r ?? 1.0}
+                                                                onChange={e => updateRule('breakeven_at_r', parseFloat(e.target.value))}
+                                                                className="w-full accent-emerald-500 h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer"
+                                                            />
+                                                            <div className="flex justify-between text-[9px] text-slate-600 mt-1 mx-0.5">
+                                                                <span>0.3R 早保本</span>
+                                                                <span>3.0R 宽容</span>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="flex items-center justify-between mb-2 mx-1">
+                                                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">追踪止损 (R)</label>
+                                                                <span className="text-xs font-mono text-emerald-400 font-bold">{rules.trail_at_r ?? 2.0}R</span>
+                                                            </div>
+                                                            <input
+                                                                type="range"
+                                                                min={1.0} max={5.0} step={0.5}
+                                                                value={rules.trail_at_r ?? 2.0}
+                                                                onChange={e => updateRule('trail_at_r', parseFloat(e.target.value))}
+                                                                className="w-full accent-emerald-500 h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer"
+                                                            />
+                                                            <div className="flex justify-between text-[9px] text-slate-600 mt-1 mx-0.5">
+                                                                <span>1.0R 保守</span>
+                                                                <span>5.0R 激进</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Row 4: 开关 */}
+                                                    <div className="grid grid-cols-2 gap-6">
+                                                        <label className="flex items-center justify-between bg-[#060809] border border-white/10 rounded-xl px-4 py-3 cursor-pointer group hover:border-white/20 transition-colors">
+                                                            <div>
+                                                                <div className="text-xs font-bold text-white mb-0.5">允许弱信号开仓</div>
+                                                                <div className="text-[10px] text-slate-600">弱信号时用50%仓位试探性建仓</div>
+                                                            </div>
+                                                            <div
+                                                                onClick={() => updateRule('allow_weak_signal', !(rules.allow_weak_signal ?? false))}
+                                                                className={`relative w-10 h-5 rounded-full transition-colors duration-200 cursor-pointer ${(rules.allow_weak_signal ?? false) ? 'bg-emerald-500' : 'bg-slate-700'}`}
+                                                            >
+                                                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${(rules.allow_weak_signal ?? false) ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                                            </div>
+                                                        </label>
+                                                        <label className="flex items-center justify-between bg-[#060809] border border-white/10 rounded-xl px-4 py-3 cursor-pointer group hover:border-white/20 transition-colors">
+                                                            <div>
+                                                                <div className="text-xs font-bold text-white mb-0.5">高波动减仓</div>
+                                                                <div className="text-[10px] text-slate-600">极端波动时自动将仓位减半</div>
+                                                            </div>
+                                                            <div
+                                                                onClick={() => updateRule('volatility_reduce', !(rules.volatility_reduce ?? true))}
+                                                                className={`relative w-10 h-5 rounded-full transition-colors duration-200 cursor-pointer ${(rules.volatility_reduce ?? true) ? 'bg-emerald-500' : 'bg-slate-700'}`}
+                                                            >
+                                                                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${(rules.volatility_reduce ?? true) ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                                            </div>
+                                                        </label>
+                                                    </div>
+
+                                                    {/* Row 5: 自定义入场/持仓规则文本 */}
+                                                    <div className="grid grid-cols-1 gap-4">
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-slate-500 mb-2 ml-1 uppercase tracking-widest">自定义入场标准 (选填)</label>
+                                                            <textarea
+                                                                rows={2}
+                                                                value={rules.entry_standards || ''}
+                                                                onChange={e => updateRule('entry_standards', e.target.value)}
+                                                                placeholder="例如: 需要RSI超卖+量能放大才可做多..."
+                                                                className="w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:border-amber-500/50 transition-all resize-none font-mono text-slate-300 leading-relaxed placeholder-slate-700"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-slate-500 mb-2 ml-1 uppercase tracking-widest">自定义持仓管理 (选填)</label>
+                                                            <textarea
+                                                                rows={2}
+                                                                value={rules.position_management || ''}
+                                                                onChange={e => updateRule('position_management', e.target.value)}
+                                                                placeholder="例如: 盈利超过2R时可以加仓50%..."
+                                                                className="w-full bg-[#060809] border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:border-amber-500/50 transition-all resize-none font-mono text-slate-300 leading-relaxed placeholder-slate-700"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+                                    </section>
+                                )}
+
                                 <section>
                                     <div className="flex items-center gap-2 mb-6">
                                         <div className="w-1.5 h-4 bg-teal-500 rounded-full" />
@@ -402,6 +956,33 @@ const StrategiesPage = ({ userId }) => {
                 message="确定要永久删除此策略吗？关联的运行实例可能会受到影响。此动作无法撤销。"
                 confirmText="删除"
                 type="danger"
+            />
+            <SymbolSelectModal
+                isOpen={isSymbolModalOpen}
+                onClose={() => setIsSymbolModalOpen(false)}
+                options={tradableSymbols.length > 0 ? tradableSymbols : []}
+                selected={(() => {
+                    const val = selectedProfile?.symbols;
+                    if (!val) return [];
+                    const list = Array.isArray(val) ? val : (typeof val === 'string' ? val.split(',') : []);
+                    return list.map(s => {
+                        let sym = s.trim().toUpperCase();
+                        if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
+                            return sym + 'USDT';
+                        }
+                        return sym;
+                    }).filter(Boolean);
+                })()}
+                onConfirm={(newSelected) => {
+                    const normalized = newSelected.map(s => {
+                        let sym = s.trim().toUpperCase();
+                        if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
+                            return sym + 'USDT';
+                        }
+                        return sym;
+                    }).filter(Boolean);
+                    updateField('symbols', normalized);
+                }}
             />
         </div>
     );

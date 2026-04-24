@@ -7,7 +7,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Cpu,
-  LineChart
+  LineChart,
+  BarChart3,
+  HelpCircle
 } from 'lucide-react';
 
 const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }) => (
@@ -35,6 +37,7 @@ const Sidebar = ({
   const menuItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: '控制台' },
     { id: 'strategies', icon: Layers, label: '策略库' },
+    { id: 'backtest', icon: BarChart3, label: '回测' },
     { id: 'market', icon: LineChart, label: '看盘' },
     { id: 'settings', icon: Settings, label: '系统设置' },
   ];
@@ -75,7 +78,16 @@ const Sidebar = ({
 
       </nav>
 
-
+      {/* Bottom Section: Help & Feedback */}
+      <div className={`p-3 border-t border-white/5 transition-all duration-300`}>
+        <SidebarItem
+          icon={HelpCircle}
+          label="帮助与反馈"
+          active={activeTab === 'help'}
+          onClick={() => onTabChange('help')}
+          collapsed={collapsed}
+        />
+      </div>
 
       {/* Collapse Toggle Bubble */}
       <button

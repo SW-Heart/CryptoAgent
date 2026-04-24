@@ -1,7 +1,7 @@
 """
 Workspace router for product shell objects.
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
 from pydantic import BaseModel, Field
 import oss2
 import os
@@ -29,6 +29,10 @@ from app.services.workspace_service import (
 )
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
+# 策略广场模板路由
+from app.routers.strategy_templates import router as templates_router
+router.include_router(templates_router)
 
 
 @router.get("/strategy-modules")
@@ -250,6 +254,53 @@ def post_trader_runtime_action(trader_id: int, user_id: str, request: TraderRunt
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/trader-instances/{trader_id}/trigger")
+def post_trader_trigger(trader_id: int, user_id: str, background_tasks: BackgroundTasks):
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    ti.id AS trader_instance_id,
+                    ti.user_id,
+                    ti.llm_config_id,
+                    ti.status,
+                    sp.id AS strategy_profile_id,
+                    sp.symbols,
+                    sp.timeframes,
+                    sp.trading_interval,
+                    sp.prompt_template,
+                    sp.last_analyzed_at
+                FROM trader_instances ti
+                INNER JOIN strategy_profiles sp ON sp.id = ti.strategy_profile_id
+                WHERE ti.id = %s AND ti.user_id = %s
+            """, (trader_id, user_id))
+            full_trader = cursor.fetchone()
+        finally:
+            conn.close()
+            
+        if not full_trader:
+            raise ValueError("Could not load full trader details")
+            
+        full_trader_dict = dict(full_trader)
+        if full_trader_dict.get("status") != "RUNNING":
+            raise ValueError("Trader must be in RUNNING state to trigger analysis manually")
+
+        from scheduler import _run_trader_instance
+        import time
+        round_id = time.strftime("%Y-%m-%d_%H:%M") + "_manual"
+        background_tasks.add_task(_run_trader_instance, full_trader_dict, round_id)
+        
+        return {"success": True, "message": "Manual trigger scheduled"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.delete("/exchange-accounts/{account_id}")
 def delete_exchange_account_route(account_id: int, user_id: str):
     if not user_id:
@@ -263,6 +314,68 @@ def delete_exchange_account_route(account_id: int, user_id: str):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class ExchangeTestRequest(BaseModel):
+    exchange: str = Field(default="okx")
+    api_key: str
+    api_secret: str
+    passphrase: str | None = None
+    environment: str = Field(default="demo")
+
+
+@router.post("/exchange-accounts/test")
+def test_exchange_connection(request: ExchangeTestRequest):
+    """
+    测试交易所 API 连通性（不保存）。
+    通过工厂方法创建对应交易所客户端，尝试获取 USDT 余额来验证凭证有效性。
+    兼容 Binance / OKX / Bybit / Bitget / Gate.io 全部五家交易所。
+    """
+    try:
+        from exchanges.factory import create_exchange_client
+
+        client = create_exchange_client(
+            provider=request.exchange,
+            api_key=request.api_key,
+            api_secret=request.api_secret,
+            passphrase=request.passphrase or "",
+            environment=request.environment,
+        )
+        balance_result = client.get_usdt_balance()
+
+        # get_usdt_balance 返回 dict，如果有 error 字段说明鉴权失败
+        if isinstance(balance_result, dict) and "error" in balance_result:
+            return {
+                "status": "error",
+                "message": f"凭证校验失败: {balance_result['error']}",
+            }
+
+        # 成功 —— 提取余额信息
+        balance_value = None
+        if isinstance(balance_result, dict):
+            balance_value = balance_result.get("available") or balance_result.get("balance")
+        elif isinstance(balance_result, (int, float)):
+            balance_value = balance_result
+
+        return {
+            "status": "success",
+            "message": "连接测试成功",
+            "balance": balance_value,
+        }
+
+    except ValueError as e:
+        # 工厂方法抛的 "不支持的交易所" 等
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        error_msg = str(e)
+        # 友好翻译常见错误
+        if any(kw in error_msg.lower() for kw in ("invalid", "authentication", "unauthorized", "api key", "signature")):
+            return {"status": "error", "message": "API Key 或 Secret 无效，请检查后重试"}
+        if any(kw in error_msg.lower() for kw in ("timeout", "connection")):
+            return {"status": "error", "message": "连接超时，请检查网络环境或 IP 白名单设置"}
+        if "ip" in error_msg.lower() or "whitelist" in error_msg.lower():
+            return {"status": "error", "message": "服务器 IP 未加入白名单，请在交易所后台添加"}
+        return {"status": "error", "message": f"连接失败: {error_msg}"}
+
 
 @router.post("/exchange-accounts")
 def post_exchange_account_route(user_id: str, request: ExchangeAccountCreateRequest):

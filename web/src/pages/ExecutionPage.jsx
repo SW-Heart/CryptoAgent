@@ -287,6 +287,21 @@ export default function ExecutionPage({ userId }) {
         }
     };
 
+    const handleManualTrigger = async () => {
+        if (!activeTrader || !isRunning || acting) return;
+        setActing(true);
+        try {
+            await postJson(`/api/workspace/trader-instances/${activeTrader.id}/trigger?user_id=${userId}`);
+            showFeedback("已触发独立策略分析，请稍候查看日志", "success");
+            // Optionally wait a bit then refresh to see the pending status if backend handles it asynchronously
+            setTimeout(() => refreshMarketRef.current(), 3000);
+        } catch (err) {
+            showFeedback(err.message || "触发失败请重试", "error");
+        } finally {
+            setActing(false);
+        }
+    };
+
     const handleClearConfig = () => {
         setShowClearConfirm(true);
     };
@@ -425,6 +440,9 @@ export default function ExecutionPage({ userId }) {
                     </div>
                 </div>
                 <div className="flex items-center gap-3 pl-6 border-l border-white/5">
+                    {isRunning && (
+                        <Button variant="outline" size="sm" icon={RefreshCw} onClick={handleManualTrigger} disabled={acting} className="h-9 px-6 font-black uppercase text-[10px] text-slate-300 border-white/10 hover:bg-white/5">立刻分析</Button>
+                    )}
                     {isRunning ? (
                         <Button variant="danger" size="sm" icon={Square} onClick={() => handleAction('STOP')} disabled={acting} className="h-9 px-6 font-black uppercase text-[10px]">停止运行</Button>
                     ) : (

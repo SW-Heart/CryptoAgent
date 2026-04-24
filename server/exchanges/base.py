@@ -502,7 +502,7 @@ class ExchangeClient(ABC):
     # ==========================================
 
     @abstractmethod
-    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None) -> List[dict]:
+    def get_trade_history(self, symbol: str, limit: int = 50, fromId: int = None, start_time: int = None, end_time: int = None) -> List[dict]:
         """
         获取成交历史。
         

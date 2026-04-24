@@ -4,6 +4,7 @@
 from tools.trading._client import _get_effective_user_id, _get_trading_client
 from tools.trading._config import *
 from binance_client import get_user_binance_client
+from tools.trading_tools import add_session_action
 
 def binance_update_stop_loss(
     symbol: str,
@@ -119,6 +120,8 @@ def binance_update_stop_loss(
         
         if "error" in sl_result:
             return {"error": f"Failed to place SL: {sl_result['error']}"}
+            
+        add_session_action(f"ADJUST_SL_{symbol}")
         
         return {
             "success": True,
@@ -244,6 +247,8 @@ def binance_update_take_profit(
         
         tp_order_id = tp_result.get("algoId") or tp_result.get("orderId")
         
+        add_session_action(f"ADJUST_TP_{symbol}")
+        
         return {
             "success": True,
             "symbol": symbol,
@@ -367,6 +372,8 @@ def binance_modify_order(
         
         if isinstance(result, dict) and "error" in result:
             return {"error": f"Failed to modify order: {result['error']}"}
+            
+        add_session_action(f"MODIFY_ORDER_{symbol}")
         
         return {
             "success": True,

@@ -94,7 +94,10 @@ def init_strategy_tables():
                 position_check TEXT,
                 strategy_decision TEXT,
                 actions_taken TEXT,
-                raw_response TEXT
+                raw_response TEXT,
+                user_id TEXT,
+                trader_instance_id TEXT,
+                llm_provider TEXT
             )
         """)
         
@@ -153,6 +156,7 @@ def migrate_tables():
             try:
                 cursor.execute("ALTER TABLE strategy_logs ADD COLUMN IF NOT EXISTS user_id TEXT")
                 cursor.execute("ALTER TABLE strategy_logs ADD COLUMN IF NOT EXISTS trader_instance_id TEXT")
+                cursor.execute("ALTER TABLE strategy_logs ADD COLUMN IF NOT EXISTS llm_provider TEXT")
             except Exception as e:
                 print(f"[Strategy] strategy_logs migration note: {e}")
                 

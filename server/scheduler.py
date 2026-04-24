@@ -104,6 +104,12 @@ def _run_scheduler_loop():
     # Schedule orphan order cleanup every 2 minutes (清理无仓位的孤儿止盈止损挂单)
     schedule.every(2).minutes.do(cleanup_orphan_orders)
     
+    # Schedule news agent every 60 minutes to fetch and analyze breaking news
+    schedule.every(60).minutes.do(run_news_agent)
+    
+    # Schedule price alert checking every 5 seconds (Agent 自主设置的关键价位监控)
+    schedule.every(5).seconds.do(check_price_alerts)
+    
     # Run position update immediately
     update_positions_prices()
     
@@ -120,6 +126,15 @@ def _run_scheduler_loop():
     
     print("[Scheduler] Scheduler loop exited")
 
+def run_news_agent():
+    """Execute NewsAgent to fetch and evaluate breaking news."""
+    try:
+        from agents.news_agent import NewsAgent
+        print("[Scheduler] Running NewsAgent...")
+        agent = NewsAgent()
+        agent.process_and_store_news()
+    except Exception as e:
+        print(f"[Scheduler] NewsAgent execution error: {e}")
 
 # ============= Binance Multi-User Position Sync =============
 
@@ -168,6 +183,107 @@ def sync_binance_users_positions():
         print(f"[Scheduler] Error in Binance sync: {e}")
 
 
+def _get_user_platform_start_time(user_id: str, conn=None) -> int:
+    """
+    获取用户绑定到平台的时间起点（毫秒级时间戳）。
+    
+    取以下两者中最早的时间：
+    1. exchange_accounts.created_at — 用户首次绑定交易所账号的时间
+    2. strategy_logs.timestamp     — 该用户第一条策略日志的时间
+    
+    这样只统计"属于平台"的交易，避免拉取用户在绑定前的陈年历史。
+    如果两者都查不到，返回 0（不做时间限制）。
+    
+    Args:
+        user_id: 用户 ID
+        conn: 可选，复用已有的数据库连接以避免连接池耗尽
+    """
+    from app.database import get_db_connection
+    own_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            own_conn = True
+        with conn.cursor() as cursor:
+            # 用 SQL LEAST() 直接在数据库内比较，避免 Python str vs datetime 类型问题
+            cursor.execute("""
+                SELECT LEAST(
+                    (SELECT MIN(created_at) FROM exchange_accounts WHERE user_id = %s),
+                    (SELECT MIN("timestamp"::timestamptz) FROM strategy_logs WHERE user_id = %s)
+                )
+            """, (user_id, user_id))
+            row = cursor.fetchone()
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, str):
+                    from datetime import datetime
+                    val = datetime.fromisoformat(val)
+                if own_conn:
+                    conn.close()
+                return int(val.timestamp() * 1000)
+        
+        if own_conn:
+            conn.close()
+        return 0
+    except Exception as e:
+        print(f"[Scheduler] Error getting platform start time for {user_id[:8]}: {e}")
+        if own_conn and conn:
+            try:
+                conn.close()
+            except:
+                pass
+        return 0
+
+
+def _fetch_all_trades_since_for_scheduler(client, symbol: str, start_time_ms: int) -> list:
+    """
+    首次同步时使用的分页拉取函数，突破 Binance 7 天窗口限制。
+    
+    策略：
+    1. 第一次用 startTime+endTime(7天窗口) 取到第一批数据和 fromId 锚点
+    2. 后续用 fromId 自动分页（无 7 天限制）直到取完
+    """
+    import time
+
+    is_binance = hasattr(client, 'get_exchange_name') and client.get_exchange_name() == 'Binance'
+
+    if not is_binance:
+        return client.get_trade_history(symbol=symbol, limit=1000, start_time=start_time_ms) or []
+
+    all_trades = []
+    now_ms = int(time.time() * 1000)
+    SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+
+    # Step 1: startTime + endTime 锚定第一批
+    end_time = min(start_time_ms + SEVEN_DAYS_MS, now_ms)
+    trades = client.get_trade_history(
+        symbol=symbol, limit=1000,
+        start_time=start_time_ms, end_time=end_time
+    )
+
+    if not isinstance(trades, list) or not trades:
+        return []
+
+    all_trades.extend(trades)
+
+    # Step 2: fromId 分页取后续（无 7 天限制）
+    max_iterations = 50  # 安全上限，防止无限循环
+    for _ in range(max_iterations):
+        last_id = int(trades[-1].get("id", 0))
+        if last_id <= 0:
+            break
+
+        trades = client.get_trade_history(symbol=symbol, limit=1000, fromId=last_id + 1)
+        if not isinstance(trades, list) or not trades:
+            break
+
+        all_trades.extend(trades)
+        if len(trades) < 1000:
+            break
+
+    return all_trades
+
+
 def sync_user_account_stats(user_id: str):
     """
     Incrementally sync user trade history to update PnL and Win Rate stats.
@@ -205,6 +321,8 @@ def sync_user_account_stats(user_id: str):
     
     conn = get_db_connection()
     try:
+        # 在循环前一次性查询平台起始时间，复用 conn，避免连接池耗尽
+        platform_start = _get_user_platform_start_time(user_id, conn=conn)
         with conn.cursor() as cursor:
             for symbol in SYMBOLS:
                 # 1. Get last synced ID
@@ -216,15 +334,16 @@ def sync_user_account_stats(user_id: str):
                 last_id = row[0] if row else 0
                 
                 # 2. Fetch new trades (use fromId if we have history, otherwise recent)
-                # Note: If last_id is 0, we might want to fetch recent history (e.g. last 1000 trades)
-                # But to avoid massive initial sync time for active accounts, let's limit to recent if 0.
                 try:
-                    # fromId + 1 to avoid re-processing the same trade
-                    params = {"limit": 500}
                     if last_id > 0:
-                        params["fromId"] = last_id + 1
-                    
-                    trades = client.get_trade_history(symbol=symbol, **params)
+                        # 增量同步：fromId + 1 避免重复
+                        trades = client.get_trade_history(symbol=symbol, limit=1000, fromId=last_id + 1)
+                    elif platform_start > 0:
+                        # 首次同步：使用分页突破 Binance 7天窗口限制
+                        trades = _fetch_all_trades_since_for_scheduler(client, symbol, platform_start)
+                    else:
+                        # 兜底：无绑定时间，走默认（最近 7 天）
+                        trades = client.get_trade_history(symbol=symbol, limit=1000)
                     
                     if not trades or not isinstance(trades, list):
                         continue
@@ -319,20 +438,39 @@ def log_strategy_round(round_id: str, symbols: str, response: dict, user_id: str
             parts = raw_response.split("### Strategy Decision")
             if len(parts) > 1:
                 strategy_decision = parts[1].strip()[:1000]
+                
+        # Parse actions taken dynamically from decision
+        if strategy_decision:
+            keywords = ["OPEN_LONG", "OPEN_SHORT", "CLOSE_LONG", "CLOSE_SHORT", 
+                        "ADJUST_SL", "ADJUST_TP", "SET_SL", "SET_TP", "ADD_POSITION", 
+                        "REDUCE_POSITION", "CANCEL_ORDER", "REVERSE"]
+            
+            extracted = []
+            for line in strategy_decision.split('\n'):
+                if '|' in line and not line.strip().startswith('|--'):
+                    line_upper = line.upper()
+                    for kw in keywords:
+                        if kw in line_upper:
+                            extracted.append(kw)
+                            
+            if extracted:
+                actions_taken = json.dumps(list(dict.fromkeys(extracted)))
         
         # Check if Agent already logged this round within last 3 minutes (to avoid duplicates)
         # Agent may log with a slightly different round_id (1-2 min later)
+        # 必须按 trader_instance_id 隔离去重，否则多个 Trader 监控相同 symbols 时会互相阻塞
         with conn.cursor() as cursor:
             cursor.execute("""
                 SELECT 1 FROM strategy_logs 
                 WHERE symbols = %s 
+                AND trader_instance_id = %s
                 AND timestamp::timestamptz > NOW() - INTERVAL '3 minutes'
-            """, (symbols,))
+            """, (symbols, trader_instance_id))
             existing = cursor.fetchone()
             
             if existing:
                 conn.close()
-                print(f"[Scheduler] Recent log for {symbols} exists, skipping duplicate")
+                print(f"[Scheduler] Recent log for {symbols} (trader #{trader_instance_id}) exists, skipping duplicate")
                 return
             
             cursor.execute("""
@@ -645,6 +783,10 @@ def _run_trader_instance(trader: dict, round_id: str):
         
         if response.status_code == 200:
             print(f"[Scheduler] Trader #{trader_instance_id} completed successfully")
+            # 注意: 策略日志由 Agent 自身通过 trading_tools.log_strategy 工具写入 strategy_logs，
+            # Scheduler 层不应重复调用 log_strategy_round，否则会因 3 分钟去重锁
+            # 导致 Agent 的精确日志（含 session_actions 跟踪）被拦截或产生竞争。
+            
             # Refresh last_analyzed_at to Agent completion time (more accurate for next interval)
             try:
                 conn = get_db()
@@ -668,6 +810,247 @@ def _run_trader_instance(trader: dict, round_id: str):
         # Always release the per-instance lock
         _running_trader_instances.discard(trader_instance_id)
 
+
+
+# ============= Price Alert Monitor =============
+
+# 价格缓存（减少 API 调用）
+_alert_price_cache: dict = {}  # {"binance:BTC": (price, timestamp), ...}
+_ALERT_PRICE_CACHE_TTL = 3  # 3 秒缓存
+
+
+def _get_alert_price(symbol: str, source: str = "binance") -> float:
+    """获取指定标的的当前价格（根据数据源选择 API）。
+    
+    带 TTL 缓存以避免高频 API 调用。
+    """
+    import time as _t
+    cache_key = f"{source}:{symbol}"
+    now = _t.time()
+    
+    # 检查缓存
+    if cache_key in _alert_price_cache:
+        cached_price, cached_time = _alert_price_cache[cache_key]
+        if now - cached_time < _ALERT_PRICE_CACHE_TTL:
+            return cached_price
+    
+    price = 0.0
+    usdt_symbol = f"{symbol}USDT" if not symbol.endswith("USDT") else symbol
+    
+    try:
+        if source == "okx":
+            # OKX 公共 mark-price API
+            inst_id = f"{symbol}-USDT-SWAP"
+            resp = requests.get(
+                f"https://www.okx.com/api/v5/public/mark-price?instId={inst_id}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "0" and data.get("data"):
+                    price = float(data["data"][0]["markPx"])
+        elif source == "bybit":
+            resp = requests.get(
+                f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={usdt_symbol}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result_list = data.get("result", {}).get("list", [])
+                if result_list:
+                    price = float(result_list[0].get("markPrice", 0))
+        elif source == "bitget":
+            resp = requests.get(
+                f"https://api.bitget.com/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol={usdt_symbol}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result_data = data.get("data", [])
+                if result_data:
+                    price = float(result_data[0].get("markPrice", 0))
+        elif source == "gate":
+            contract = f"{symbol}_USDT"
+            resp = requests.get(
+                f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{contract}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                price = float(data.get("mark_price", 0))
+        else:
+            # 默认 Binance
+            binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+            resp = requests.get(
+                f"{binance_base}/api/v3/ticker/price?symbol={usdt_symbol}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                price = float(resp.json().get("price", 0))
+    except Exception as e:
+        print(f"[PriceAlert] Error fetching price for {symbol} from {source}: {e}")
+    
+    # 更新缓存
+    if price > 0:
+        _alert_price_cache[cache_key] = (price, now)
+    
+    return price
+
+
+def check_price_alerts():
+    """检查所有活跃的价格警报，触发到价的警报。
+    
+    每 5 秒执行一次。
+    触发后：
+    1. 将警报状态更新为 TRIGGERED
+    2. 异步调用 Agent 执行一次完整分析
+    """
+    try:
+        from tools.alert_tools import get_active_alerts, mark_alert_triggered
+        
+        active_alerts = get_active_alerts()
+        if not active_alerts:
+            return
+        
+        # 按 price_source + symbol 分组获取价格（减少 API 调用）
+        price_cache = {}  # {"binance:BTC": price}
+        triggered_alerts = []
+        
+        for alert in active_alerts:
+            symbol = alert["symbol"]
+            source = alert.get("price_source", "binance")
+            cache_key = f"{source}:{symbol}"
+            
+            # 获取价格（复用缓存）
+            if cache_key not in price_cache:
+                price_cache[cache_key] = _get_alert_price(symbol, source)
+            
+            current_price = price_cache[cache_key]
+            if current_price <= 0:
+                continue
+            
+            # 检查是否触发
+            target = alert["target_price"]
+            direction = alert["direction"]
+            is_triggered = False
+            
+            if direction == "ABOVE" and current_price >= target:
+                is_triggered = True
+            elif direction == "BELOW" and current_price <= target:
+                is_triggered = True
+            
+            if is_triggered:
+                triggered_alerts.append({
+                    "alert": alert,
+                    "current_price": current_price,
+                })
+        
+        # 处理触发的警报
+        for item in triggered_alerts:
+            alert = item["alert"]
+            current_price = item["current_price"]
+            alert_id = alert["id"]
+            user_id = alert["user_id"]
+            symbol = alert["symbol"]
+            direction = alert["direction"]
+            reason = alert.get("reason", "")
+            trader_instance_id = alert.get("trader_instance_id")
+            
+            direction_label = "突破" if direction == "ABOVE" else "跌破"
+            
+            print(f"[PriceAlert] ⚠️ TRIGGERED: {symbol} {direction_label} ${alert['target_price']:,.2f} "
+                  f"(current: ${current_price:,.2f}, reason: {reason}) for user {user_id[:8]}")
+            
+            # 1. 标记为已触发
+            mark_alert_triggered(alert_id)
+            
+            # 2. 异步触发 Agent 分析（不阻塞轮询循环）
+            _trigger_alert_analysis(
+                user_id=user_id,
+                trader_instance_id=trader_instance_id,
+                symbol=symbol,
+                direction_label=direction_label,
+                target_price=alert["target_price"],
+                current_price=current_price,
+                reason=reason,
+            )
+            
+    except Exception as e:
+        print(f"[PriceAlert] Error in check_price_alerts: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _trigger_alert_analysis(
+    user_id: str,
+    trader_instance_id: int,
+    symbol: str,
+    direction_label: str,
+    target_price: float,
+    current_price: float,
+    reason: str,
+):
+    """触发警报后异步调用 Agent 执行一次完整分析。
+    
+    如果没有绑定 trader_instance_id，尝试找到该用户当前 RUNNING 的 trader 实例。
+    """
+    # 如果没有 trader_instance_id，查找用户活跃的 trader
+    if not trader_instance_id:
+        try:
+            conn = get_db()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT ti.id 
+                    FROM trader_instances ti
+                    INNER JOIN strategy_profiles sp ON sp.id = ti.strategy_profile_id
+                    WHERE ti.user_id = %s AND ti.status = 'RUNNING' AND ti.is_enabled = TRUE
+                    ORDER BY ti.id ASC LIMIT 1
+                """, (user_id,))
+                row = cursor.fetchone()
+                if row:
+                    trader_instance_id = row["id"]
+            conn.close()
+        except Exception as e:
+            print(f"[PriceAlert] Error finding trader instance: {e}")
+    
+    if not trader_instance_id:
+        print(f"[PriceAlert] No running trader instance for user {user_id[:8]}, skipping analysis trigger")
+        return
+    
+    # 构建分析消息
+    alert_message = (
+        f"⚠️ 价格警报触发：{symbol} {direction_label} ${target_price:,.2f}"
+        f"（当前价格: ${current_price:,.2f}）\n"
+        f"警报原因: {reason}\n\n"
+        f"请立即执行完整的策略分析流程，重点关注 {symbol} 的当前市场状况，并做出交易决策。"
+    )
+    
+    # 异步发送分析请求（不阻塞轮询线程）
+    def _do_trigger():
+        try:
+            round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
+            response = requests.post(
+                f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
+                data={
+                    "message": alert_message,
+                    "user_id": user_id,
+                    "trader_instance_id": str(trader_instance_id),
+                    "session_id": f"alert-t{trader_instance_id}-{round_id.replace(':', '-')}",
+                    "stream": "False"
+                },
+                timeout=120
+            )
+            if response.status_code == 200:
+                print(f"[PriceAlert] ✅ Alert analysis completed for {symbol} (user {user_id[:8]})")
+            else:
+                print(f"[PriceAlert] ❌ Alert analysis failed: {response.status_code} - {response.text[:200]}")
+        except Exception as e:
+            print(f"[PriceAlert] ❌ Alert analysis exception: {e}")
+    
+    # 在独立线程中执行，不阻塞 scheduler 主循环
+    alert_thread = threading.Thread(target=_do_trigger, daemon=True)
+    alert_thread.start()
+    print(f"[PriceAlert] Analysis triggered in background thread for {symbol} (trader #{trader_instance_id})")
 
 
 # ============= Orphan Order Cleanup =============

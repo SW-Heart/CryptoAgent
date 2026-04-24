@@ -9,6 +9,7 @@ import AuthModal from './components/modals/AuthModal';
 import UserMenu from './components/layout/UserMenu';
 import SettingsModal from './components/modals/SettingsModal';
 import ExecutionPage from './pages/ExecutionPage';
+import GlobalToastContainer from './components/common/GlobalToast';
 import { getJson } from './services/apiClient';
 import './i18n';
 
@@ -18,6 +19,8 @@ import LandingPage from './pages/LandingPage';
 import StrategiesPage from './pages/StrategiesPage';
 import SettingsPage from './pages/SettingsPage';
 import MarketPage from './pages/MarketPage';
+import BacktestPage from './pages/BacktestPage';
+import HelpPage from './pages/HelpPage';
 
 function AppContent() {
   const { user, signOut } = useAuth();
@@ -25,6 +28,12 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const activeTab = location.pathname.substring(1) || 'dashboard';
+
+  useEffect(() => {
+    if (user && activeTab === 'welcome') {
+      navigate('/', { replace: true });
+    }
+  }, [user, activeTab, navigate]);
 
   const [collapsed, setCollapsed] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -77,9 +86,21 @@ function AppContent() {
           </div>
         )}
 
+        {visitedTabs['backtest'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'backtest' ? 'block' : 'none' }}>
+            <BacktestPage userId={userId} />
+          </div>
+        )}
+
         {visitedTabs['settings'] && (
           <div className="absolute inset-0" style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
             <SettingsPage userId={userId} onConfigUpdated={refreshWorkspaceStatus} />
+          </div>
+        )}
+
+        {visitedTabs['help'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'help' ? 'block' : 'none' }}>
+            <HelpPage />
           </div>
         )}
       </div>
@@ -120,6 +141,7 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <GlobalToastContainer />
         <AppContent />
       </AuthProvider>
     </BrowserRouter>

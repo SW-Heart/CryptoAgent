@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
     Key, 
     Cpu, 
@@ -15,6 +16,7 @@ import ConnectExchangeModal from '../components/modals/ConnectExchangeModal';
 import ConnectLLMModal from '../components/modals/ConnectLLMModal';
 
 export default function OnboardingWizard({ userId, onStepComplete, status }) {
+    const navigate = useNavigate();
     const [activeStep, setActiveStep] = useState(1);
     const [isExchangeModalOpen, setIsExchangeModalOpen] = useState(false);
     const [isLLMModalOpen, setIsLLMModalOpen] = useState(false);
@@ -55,7 +57,7 @@ export default function OnboardingWizard({ userId, onStepComplete, status }) {
             icon: Target,
             completed: hasStrategy,
             actionLabel: "构建逻辑",
-            onAction: () => { window.location.hash = '/strategies'; }
+            onAction: () => navigate('/strategies')
         }
     ];
 

@@ -22,6 +22,7 @@ from tools.trading_tools import set_current_user
 from app.routers.strategy import init_strategy_tables
 from app.services.workspace_service import init_workspace_tables
 from binance_client import init_binance_tables
+from app.database import init_db
 
 
 @asynccontextmanager
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
     """Lifespan events: startup and shutdown"""
     print("[Main] Initializing database tables...")
     try:
+        init_db()
         init_strategy_tables()
         init_binance_tables()
         init_workspace_tables()
@@ -115,8 +117,12 @@ async def run_agent(
 
 from app.routers.strategy import router as strategy_router
 from app.routers.workspace import router as workspace_router
+from app.routers.notifiers import router as notifiers_router
+from app.routers.backtest_router import router as backtest_router
 app.include_router(strategy_router)
 app.include_router(workspace_router)
+app.include_router(notifiers_router)
+app.include_router(backtest_router)
 
 
 print("[Main] CryptoAgent Backend Streamlined - Focus: Pure Strategy Trading with Multi-LLM Support")

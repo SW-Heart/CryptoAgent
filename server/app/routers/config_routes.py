@@ -22,12 +22,12 @@ def get_strategy_logs(user_id: str = None, limit: int = 10, offset: int = 0, tra
         conn = get_db_connection()
         
         with conn.cursor() as cursor:
-            # 降级：仅按 user_id，不论 trader_instance_id
-            cursor.execute("SELECT COUNT(*) FROM strategy_logs WHERE user_id = %s OR user_id IS NULL", (user_id,))
+            # 仅按 user_id 进行严格数据隔离（不展示旧版的遗留数据）
+            cursor.execute("SELECT COUNT(*) FROM strategy_logs WHERE user_id = %s", (user_id,))
             total_count = cursor.fetchone()[0]
             
             cursor.execute(
-                "SELECT * FROM strategy_logs WHERE user_id = %s OR user_id IS NULL ORDER BY timestamp DESC LIMIT %s OFFSET %s",
+                "SELECT * FROM strategy_logs WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s OFFSET %s",
                 (user_id, limit, offset)
             )
             rows = cursor.fetchall()
@@ -424,6 +424,7 @@ async def reset_strategy(user_id: str = None):
         conn.close()
         
         # Re-initialize
+        from app.routers.strategy import init_strategy_tables
         init_strategy_tables()
         
         return {"success": True, "message": "Strategy tables reset successfully"}
