@@ -236,6 +236,9 @@ def build_strategy_context(
     # ============ 1.6 价格警报 (Agent 自主设置的关键价位监控) ============
     result["alerts"] = _fetch_price_alerts(user_id)
 
+    # ============ 1.7 上一次分析记忆 (跨心跳连续性) ============
+    result["previous_analysis"] = _fetch_previous_analysis(user_id)
+
     # ============ 2. 逐标的技术分析 ============
     result["symbols"] = {}
     for symbol in symbol_list:
@@ -1503,3 +1506,34 @@ def _fetch_critical_news() -> Dict:
     except Exception as e:
         print(f"[StrategyContext] _fetch_critical_news error: {e}")
     return result
+
+
+def _fetch_previous_analysis(user_id: str = None) -> Dict:
+    """获取该 trader 实例上一次的分析记忆，注入到策略上下文中。
+
+    让 Agent 每次被唤醒时都能看到上一次的核心结论、交易计划和观察，
+    避免重复分析和前后矛盾的决策。
+    """
+    result = {"available": False}
+    if not user_id:
+        return result
+
+    try:
+        from tools.trading_tools import get_current_trader_id
+        trader_id = get_current_trader_id()
+        if not trader_id:
+            return result
+
+        from agent.execution_memory import load_execution_memory
+        memory = load_execution_memory(user_id, trader_id)
+        if memory:
+            result["available"] = True
+            result["last_summary"] = memory.get("last_analysis_summary", {})
+            result["active_plan"] = memory.get("active_trade_plan", "")
+            result["recent_observations"] = memory.get("observations", [])
+            result["memory_age"] = memory.get("updated_at", "")
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_previous_analysis error: {e}")
+
+    return result
+

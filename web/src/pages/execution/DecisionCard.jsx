@@ -1,6 +1,55 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronDown, Target } from 'lucide-react';
+import { ChevronDown, ChevronRight, Target } from 'lucide-react';
 import { EXCHANGE_LOGOS, LLM_LOGOS } from './constants';
+
+/**
+ * 将 raw_response 按 Step / 步骤 分段解析
+ * 支持 "### Step N:" / "## Step N" / "**Step N**" 等常见格式
+ */
+function parseAnalysisSteps(rawResponse) {
+    if (!rawResponse || typeof rawResponse !== 'string') return [];
+    // Split by step-like headings
+    const stepRegex = /(?:^|\n)(?:#{1,4}\s*)?(?:\*{0,2})?\s*(?:Step\s*\d+[\.\:：]?|步骤\s*\d+[\.\:：]?)/gi;
+    const matches = [...rawResponse.matchAll(stepRegex)];
+    if (matches.length === 0) return [];
+
+    const steps = [];
+    for (let i = 0; i < matches.length; i++) {
+        const start = matches[i].index;
+        const end = i + 1 < matches.length ? matches[i + 1].index : rawResponse.length;
+        const chunk = rawResponse.slice(start, end).trim();
+        // Extract title (first line) and body (rest)
+        const firstNewline = chunk.indexOf('\n');
+        const title = firstNewline > 0 ? chunk.slice(0, firstNewline).replace(/^[#*\s]+/, '').trim() : chunk.replace(/^[#*\s]+/, '').trim();
+        const body = firstNewline > 0 ? chunk.slice(firstNewline + 1).trim() : '';
+        steps.push({ title, body });
+    }
+    return steps;
+}
+
+function StepItem({ step, index }) {
+    const [expanded, setExpanded] = useState(false);
+    return (
+        <div className="border border-white/5 rounded-lg overflow-hidden">
+            <button
+                onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.03] transition-colors"
+            >
+                {expanded
+                    ? <ChevronDown className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                    : <ChevronRight className="w-3 h-3 text-slate-500 flex-shrink-0" />
+                }
+                <span className="text-[10px] font-black text-emerald-400/80 flex-shrink-0 w-5">{index + 1}</span>
+                <span className="text-[10px] font-bold text-slate-300 truncate">{step.title}</span>
+            </button>
+            {expanded && step.body && (
+                <div className="px-3 pb-3 pt-1 border-t border-white/5">
+                    <pre className="text-[10px] text-slate-400 font-mono whitespace-pre-wrap leading-relaxed break-words">{step.body}</pre>
+                </div>
+            )}
+        </div>
+    );
+}
 
 export default function DecisionCard({ log, traderInstances, accounts, llmConfigs }) {
     const [open, setOpen] = useState(false);
@@ -158,6 +207,9 @@ export default function DecisionCard({ log, traderInstances, accounts, llmConfig
         displayActions.unshift('设置盈损');
     }
 
+    // 解析分析步骤
+    const analysisSteps = useMemo(() => parseAnalysisSteps(log.raw_response), [log.raw_response]);
+
     return (
         <div onClick={() => setOpen(!open)} className={`p-4 rounded-2xl border transition-all cursor-pointer flex-shrink-0 min-w-0 ${open ? 'bg-[#0a0d0f] border-emerald-500/30' : 'bg-[#0e1215]/40 border-white/5 hover:border-white/10'}`}>
             <div className="flex items-center justify-between mb-2">
@@ -195,6 +247,17 @@ export default function DecisionCard({ log, traderInstances, accounts, llmConfig
                         <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">市场分析 (Market Analysis)</div>
                         <p className="text-[10px] text-slate-400 leading-relaxed font-bold opacity-80">{log.market_analysis || '暂无分析数据'}</p>
                     </div>
+                    {/* 分析过程步骤展示 */}
+                    {analysisSteps.length > 0 && (
+                        <div>
+                            <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2">分析过程 (Analysis Steps)</div>
+                            <div className="space-y-1" onClick={(e) => e.stopPropagation()}>
+                                {analysisSteps.map((step, idx) => (
+                                    <StepItem key={idx} step={step} index={idx} />
+                                ))}
+                            </div>
+                        </div>
+                    )}
                     <div>
                         <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">执行决策 (Decision)</div>
                         <div className="p-2.5 bg-black/40 rounded-xl text-[10px] text-emerald-300 font-mono border border-white/5 whitespace-pre-wrap leading-relaxed shadow-inner">

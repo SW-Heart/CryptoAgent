@@ -171,6 +171,45 @@ def log_strategy_analysis(
         conn.commit()
     conn.close()
     
+    # === 同步写入执行记忆（跨心跳持久化） ===
+    if ctx_user_id and ctx_trader_id:
+        try:
+            from agent.execution_memory import save_execution_memory
+            
+            # 构建结构化摘要
+            summary = {
+                "symbols": symbols,
+                "actions": actual_actions,
+                "decision": (strategy_decision[:500] if strategy_decision else ""),
+                "round_id": round_id,
+            }
+            
+            # 从 strategy_decision 中提取交易计划（如果有的话）
+            plan = ""
+            if strategy_decision:
+                for line in strategy_decision.split("\n"):
+                    line_lower = line.lower()
+                    if any(kw in line_lower for kw in ["计划", "plan", "等待", "wait", "目标", "target"]):
+                        plan = line.strip()
+                        break
+            
+            # 将本次分析的关键动作作为 observation
+            obs = []
+            if actual_actions and actual_actions != ["HOLD"]:
+                obs.append(f"[{round_id}] 执行: {', '.join(actual_actions)}")
+            elif market_analysis:
+                obs.append(f"[{round_id}] HOLD - {market_analysis[:100]}")
+            
+            save_execution_memory(
+                user_id=ctx_user_id,
+                trader_instance_id=ctx_trader_id,
+                last_analysis_summary=summary,
+                active_trade_plan=plan,
+                observations=obs,
+            )
+        except Exception as e:
+            print(f"[TradingTools] Error saving execution memory: {e}")
+    
     return {
         "success": True,
         "round_id": round_id,

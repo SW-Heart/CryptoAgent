@@ -346,7 +346,18 @@ def get_trading_agent(user_id: str, trader_instance_id: int = None) -> Optional[
 build_strategy_context()
 ```
 返回的 JSON 中包含：account(余额)、positions(持仓)、open_orders(当前挂单)、
-exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) 以及各标的的技术指标数据。
+exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率)、
+previous_analysis(上一次分析记忆) 以及各标的的技术指标数据。
+
+### Step 1.5: 回顾上一次分析 [决策连贯性]
+检查 previous_analysis 段：
+- 如果 previous_analysis.available = true，说明你之前分析过这些标的
+- **last_summary**: 上一次的核心结论（趋势判断、动作、决策理由）
+- **active_plan**: 你之前制定的交易计划（如"等待回踩支撑再做多"）
+- **recent_observations**: 最近几次分析的关键动作历史
+- **重要**：如果上次你做了某个判断（如"BTC 4h 趋势看多，等待回踩 93000"），
+  而当前盘面没有发生结构性变化，你应该延续该计划而非重新从零分析
+- 如果盘面结构已经改变（趋势反转、关键位被突破），则忽略旧计划，基于最新数据判断
 
 ### Step 2: 确认账户状态 [关键反重复步骤]
 - 检查 account.available (可用余额)

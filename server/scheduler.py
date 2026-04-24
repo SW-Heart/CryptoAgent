@@ -12,6 +12,7 @@ from datetime import datetime
 import requests
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 # Configuration - use environment variable for API URL
 AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
@@ -699,9 +700,9 @@ def trigger_strategy():
         print(f"[Scheduler] Database error: {e}")
         return
 
-    print(f"[Scheduler] Found {len(active_traders)} running trader instance(s)")
-    
-    for idx, trader in enumerate(active_traders):
+    # 筛选出本轮需要触发的 trader 实例
+    traders_to_run = []
+    for trader in active_traders:
         user_id = trader["user_id"]
         interval_min = trader["trading_interval"] or 60
         last_analyzed = trader["last_analyzed_at"]
@@ -724,11 +725,28 @@ def trigger_strategy():
             print(f"[Scheduler] Trader #{tid} is already running analysis, skipping")
             continue
 
-        # Throttling to avoid API rate limits
-        if idx > 0:
-            time.sleep(2)
+        traders_to_run.append(trader)
+
+    if not traders_to_run:
+        print(f"[Scheduler] No trader instances due for analysis this round")
+        return
+
+    print(f"[Scheduler] Dispatching {len(traders_to_run)} trader instance(s) in parallel (max_workers=5)")
+
+    # 并行执行：最多 5 个 Agent 同时运行，避免串行阻塞
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="agent") as executor:
+        futures = {}
+        for trader in traders_to_run:
+            future = executor.submit(_run_trader_instance, trader, round_id)
+            futures[future] = trader["trader_instance_id"]
         
-        _run_trader_instance(trader, round_id)
+        # 等待全部完成（不阻塞 scheduler 主循环，因为 trigger_strategy 本身在 schedule 线程中）
+        for future in futures:
+            try:
+                future.result()  # 捕获异常，避免静默吞掉
+            except Exception as e:
+                tid = futures[future]
+                print(f"[Scheduler] Trader #{tid} thread exception: {e}")
 
 
 # Per-instance lock: prevent concurrent execution of the same trader instance

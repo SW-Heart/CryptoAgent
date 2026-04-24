@@ -257,5 +257,19 @@ def init_db():
         ON price_alerts(status, user_id)
     """)
     
+    # Create agent_execution_memory table (Agent 跨心跳分析记忆)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_execution_memory (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            trader_instance_id INTEGER NOT NULL,
+            last_analysis_summary JSONB DEFAULT '{}',
+            active_trade_plan TEXT,
+            observations JSONB DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, trader_instance_id)
+        )
+    """)
+    
     conn.commit()
     release_db_connection(conn)
