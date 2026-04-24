@@ -235,5 +235,27 @@ def init_db():
         )
     """)
     
+    # Create price_alerts table (Agent 自主设置的价格警报)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS price_alerts (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            trader_instance_id INTEGER,
+            symbol TEXT NOT NULL,
+            target_price DOUBLE PRECISION NOT NULL,
+            direction TEXT NOT NULL,
+            price_source TEXT DEFAULT 'binance',
+            reason TEXT,
+            status TEXT DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            triggered_at TIMESTAMP,
+            cooldown_until TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_price_alerts_active
+        ON price_alerts(status, user_id)
+    """)
+    
     conn.commit()
     release_db_connection(conn)

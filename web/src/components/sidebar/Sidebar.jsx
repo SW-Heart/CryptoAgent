@@ -8,7 +8,8 @@ import {
   ChevronRight,
   Cpu,
   LineChart,
-  BarChart3
+  BarChart3,
+  HelpCircle
 } from 'lucide-react';
 
 const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }) => (
@@ -77,7 +78,16 @@ const Sidebar = ({
 
       </nav>
 
-
+      {/* Bottom Section: Help & Feedback */}
+      <div className={`p-3 border-t border-white/5 transition-all duration-300`}>
+        <SidebarItem
+          icon={HelpCircle}
+          label="帮助与反馈"
+          active={activeTab === 'help'}
+          onClick={() => onTabChange('help')}
+          collapsed={collapsed}
+        />
+      </div>
 
       {/* Collapse Toggle Bubble */}
       <button

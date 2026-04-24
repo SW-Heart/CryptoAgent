@@ -20,6 +20,7 @@ import StrategiesPage from './pages/StrategiesPage';
 import SettingsPage from './pages/SettingsPage';
 import MarketPage from './pages/MarketPage';
 import BacktestPage from './pages/BacktestPage';
+import HelpPage from './pages/HelpPage';
 
 function AppContent() {
   const { user, signOut } = useAuth();
@@ -94,6 +95,12 @@ function AppContent() {
         {visitedTabs['settings'] && (
           <div className="absolute inset-0" style={{ display: activeTab === 'settings' ? 'block' : 'none' }}>
             <SettingsPage userId={userId} onConfigUpdated={refreshWorkspaceStatus} />
+          </div>
+        )}
+
+        {visitedTabs['help'] && (
+          <div className="absolute inset-0" style={{ display: activeTab === 'help' ? 'block' : 'none' }}>
+            <HelpPage />
           </div>
         )}
       </div>

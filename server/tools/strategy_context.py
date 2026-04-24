@@ -233,6 +233,9 @@ def build_strategy_context(
     # ============ 1.5 交易所合约限制 (OKX 等按张交易的交易所) ============
     result["exchange_constraints"] = _fetch_exchange_constraints(user_id, symbol_list)
 
+    # ============ 1.6 价格警报 (Agent 自主设置的关键价位监控) ============
+    result["alerts"] = _fetch_price_alerts(user_id)
+
     # ============ 2. 逐标的技术分析 ============
     result["symbols"] = {}
     for symbol in symbol_list:
@@ -577,6 +580,29 @@ def _fetch_exchange_constraints(user_id: str, symbols: List[str]) -> Dict:
     return result
 
 
+def _fetch_price_alerts(user_id: str = None) -> Dict:
+    """获取当前用户的活跃价格警报列表，注入到策略上下文中。
+    
+    让 Agent 每次分析时都能看到自己之前设置了哪些警报，
+    便于决定是否需要新增、调整或取消警报。
+    """
+    result = {"count": 0, "list": []}
+    if not user_id:
+        return result
+    
+    try:
+        from tools.alert_tools import list_price_alerts
+        alerts_data = list_price_alerts(user_id=user_id)
+        if isinstance(alerts_data, dict):
+            result["count"] = alerts_data.get("count", 0)
+            result["list"] = alerts_data.get("list", [])
+            result["max_allowed"] = alerts_data.get("max_allowed", 10)
+    except Exception as e:
+        print(f"[StrategyContext] _fetch_price_alerts error: {e}")
+    
+    return result
+
+
 # BUG-4 修复: 宏观数据全局缓存（5 分钟 TTL），避免 CoinGecko API 高频限流
 _macro_cache: Dict = {}
 _macro_cache_time: float = 0
@@ -650,7 +676,14 @@ def _fetch_funding(symbols: List[str], user_id: str = None) -> Dict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _fetch_trend(symbol: str, timeframes: List[str], price: float) -> Dict:
-    """多周期趋势结构分析（EMA + Vegas + MACD + RSI）。"""
+    """多周期趋势结构分析（EMA + Vegas + MACD + RSI）。
+
+    核心原则：顺大逆小
+    - EMA 排列 + Vegas 通道位置 = 首要参照（权重 2）
+    - MACD 动能 = 辅助确认（权重 1）
+    - 大周期 (1w/1d) 权重远高于小周期 (4h/1h/15m)
+    - major_trend 只看 1d+1w 的 EMA+Vegas，输出否决信号 veto
+    """
     result = {
         "direction": "neutral",
         "strength": "weak",
@@ -659,6 +692,9 @@ def _fetch_trend(symbol: str, timeframes: List[str], price: float) -> Dict:
         "macd_bull": 0, "macd_bear": 0,
         "rsi": {},  # 各周期 RSI 值
         "timeframes": {},
+        # ===== 顺大逆小：大周期趋势 + 否决权 =====
+        "major_trend": "neutral",   # 仅基于 1d+1w 的 EMA+Vegas 判定
+        "veto": None,               # "no_long" / "no_short" / None
     }
 
     for tf in timeframes:
@@ -768,31 +804,109 @@ def _fetch_trend(symbol: str, timeframes: List[str], price: float) -> Dict:
 
         result["timeframes"][tf] = tf_data
 
-    # 综合判断
-    total_bull = result["ema_bull"] + result["vegas_above"] + result["macd_bull"]
-    total_bear = result["ema_bear"] + result["vegas_below"] + result["macd_bear"]
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 综合判断：加权模型 + 大周期否决权
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    if total_bull + total_bear > 0:
-        if total_bull > total_bear * 2:
+    # 周期权重：大周期 >> 小周期
+    TF_WEIGHTS = {"1w": 4, "1d": 3, "4h": 2, "1h": 1, "15m": 0.5, "30m": 0.5}
+    # 指标类型权重：EMA/Vegas 是首要参照，MACD 是辅助
+    INDICATOR_WEIGHTS = {"ema": 2, "vegas": 2, "macd": 1}
+
+    weighted_bull = 0.0
+    weighted_bear = 0.0
+
+    # 大周期信号收集（仅 EMA + Vegas，不含 MACD）
+    MAJOR_TFS = {"1w", "1d"}
+    major_bull = 0.0
+    major_bear = 0.0
+
+    for tf, tf_data in result["timeframes"].items():
+        w = TF_WEIGHTS.get(tf, 1)
+        is_major = tf in MAJOR_TFS
+
+        # EMA 排列（首要参照）
+        if tf_data.get("ema") == "bullish":
+            weighted_bull += w * INDICATOR_WEIGHTS["ema"]
+            if is_major:
+                major_bull += w * INDICATOR_WEIGHTS["ema"]
+        elif tf_data.get("ema") == "bearish":
+            weighted_bear += w * INDICATOR_WEIGHTS["ema"]
+            if is_major:
+                major_bear += w * INDICATOR_WEIGHTS["ema"]
+
+        # Vegas 通道位置（首要参照）
+        if tf_data.get("vegas_status") == "above":
+            weighted_bull += w * INDICATOR_WEIGHTS["vegas"]
+            if is_major:
+                major_bull += w * INDICATOR_WEIGHTS["vegas"]
+        elif tf_data.get("vegas_status") == "below":
+            weighted_bear += w * INDICATOR_WEIGHTS["vegas"]
+            if is_major:
+                major_bear += w * INDICATOR_WEIGHTS["vegas"]
+
+        # MACD 动能（辅助确认）
+        if tf_data.get("macd") == "bullish":
+            weighted_bull += w * INDICATOR_WEIGHTS["macd"]
+        elif tf_data.get("macd") == "bearish":
+            weighted_bear += w * INDICATOR_WEIGHTS["macd"]
+
+    # 1) 综合趋势方向（加权）
+    total_score = weighted_bull + weighted_bear
+    if total_score > 0:
+        bull_ratio = weighted_bull / total_score
+        if bull_ratio >= 0.7:
             result["direction"] = "bullish"
             result["strength"] = "strong"
-        elif total_bull > total_bear:
+        elif bull_ratio >= 0.55:
             result["direction"] = "bullish"
             result["strength"] = "moderate"
-        elif total_bear > total_bull * 2:
+        elif bull_ratio <= 0.3:
             result["direction"] = "bearish"
             result["strength"] = "strong"
-        elif total_bear > total_bull:
+        elif bull_ratio <= 0.45:
             result["direction"] = "bearish"
             result["strength"] = "moderate"
+        # 0.45 < bull_ratio < 0.55 → neutral/weak (default)
+
+    # 2) 大周期趋势（仅 1d+1w 的 EMA+Vegas）
+    major_total = major_bull + major_bear
+    if major_total > 0:
+        major_ratio = major_bull / major_total
+        if major_ratio >= 0.6:
+            result["major_trend"] = "bullish"
+        elif major_ratio <= 0.4:
+            result["major_trend"] = "bearish"
+        # else: "neutral" (default)
+
+    # 3) 否决权：大周期明确方向时，禁止反向开仓
+    if result["major_trend"] == "bearish":
+        result["veto"] = "no_long"
+    elif result["major_trend"] == "bullish":
+        result["veto"] = "no_short"
 
     return result
 
 
 def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
-    """支撑阻力关键价位识别。"""
-    result = {"nearest_support": None, "nearest_resistance": None, "confluence_zones": []}
-    all_levels = []
+    """支撑阻力关键价位识别。
+
+    优先级原则：
+    - L1（首要）: EMA21/55/200 + Vegas 通道 → nearest_support / nearest_resistance
+    - L2（参考）: Fib 回撤位 → fib_support / fib_resistance
+    - 两类合并用于汇聚区检测 confluence_zones
+    """
+    result = {
+        "nearest_support": None,
+        "nearest_resistance": None,
+        "fib_support": None,        # Fib 级别支撑（仅参考）
+        "fib_resistance": None,     # Fib 级别阻力（仅参考）
+        "confluence_zones": [],
+    }
+    # L1: EMA/Vegas 关键位
+    ema_vegas_levels = []
+    # L2: Fib 回撤位
+    fib_levels = []
 
     df = _get_binance_klines(symbol, timeframe, limit=100)
     if df is None or len(df) < 30:
@@ -804,7 +918,7 @@ def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
             if len(df) >= length:
                 val = ta.ema(df["close"], length=length)
                 if val is not None:
-                    all_levels.append((val.iloc[-1], f"{label}_{timeframe}"))
+                    ema_vegas_levels.append((val.iloc[-1], f"{label}_{timeframe}"))
 
         # 多周期 EMA 关键位
         for tf in ["4h", "1d", "1w"]:
@@ -814,16 +928,16 @@ def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
             if df_tf is not None and len(df_tf) >= 55:
                 ema21_tf = ta.ema(df_tf["close"], length=21).iloc[-1]
                 ema55_tf = ta.ema(df_tf["close"], length=55).iloc[-1]
-                all_levels.append((ema21_tf, f"EMA21_{tf}"))
-                all_levels.append((ema55_tf, f"EMA55_{tf}"))
+                ema_vegas_levels.append((ema21_tf, f"EMA21_{tf}"))
+                ema_vegas_levels.append((ema55_tf, f"EMA55_{tf}"))
 
                 if len(df_tf) >= 170:
                     ema144 = ta.ema(df_tf["close"], length=144).iloc[-1]
                     ema169 = ta.ema(df_tf["close"], length=169).iloc[-1]
-                    all_levels.append((max(ema144, ema169), f"VegasTop_{tf}"))
-                    all_levels.append((min(ema144, ema169), f"VegasBot_{tf}"))
+                    ema_vegas_levels.append((max(ema144, ema169), f"VegasTop_{tf}"))
+                    ema_vegas_levels.append((min(ema144, ema169), f"VegasBot_{tf}"))
 
-        # Fibonacci 回撤
+        # Fibonacci 回撤（L2 参考）
         swing_high, swing_low = _find_swing_points(df, window=7)
         high_price = swing_high["price"]
         low_price = swing_low["price"]
@@ -831,33 +945,78 @@ def _fetch_levels(symbol: str, timeframe: str, price: float) -> Dict:
         is_uptrend = swing_high["index"] > swing_low["index"]
         for fib in [0.382, 0.5, 0.618]:
             level = (high_price - diff * fib) if is_uptrend else (low_price + diff * fib)
-            all_levels.append((level, f"Fib_{fib}"))
+            fib_levels.append((level, f"Fib_{fib}"))
     except Exception:
         pass
 
-    # 最近支撑/阻力
-    supports = [(l, n) for l, n in all_levels if l < price]
-    resistances = [(l, n) for l, n in all_levels if l > price]
+    # ===== nearest_support / nearest_resistance: 优先 EMA/Vegas =====
+    ema_supports = [(l, n) for l, n in ema_vegas_levels if l < price]
+    ema_resistances = [(l, n) for l, n in ema_vegas_levels if l > price]
 
-    if supports:
-        supports.sort(key=lambda x: x[0], reverse=True)
-        s = supports[0]
+    if ema_supports:
+        ema_supports.sort(key=lambda x: x[0], reverse=True)
+        s = ema_supports[0]
         result["nearest_support"] = {
             "price": round(s[0], 2),
             "dist_pct": round(((price - s[0]) / price) * 100, 1),
             "source": s[1],
         }
 
-    if resistances:
-        resistances.sort(key=lambda x: x[0])
-        r = resistances[0]
+    if ema_resistances:
+        ema_resistances.sort(key=lambda x: x[0])
+        r = ema_resistances[0]
         result["nearest_resistance"] = {
             "price": round(r[0], 2),
             "dist_pct": round(((r[0] - price) / price) * 100, 1),
             "source": r[1],
         }
 
-    # 汇聚区
+    # 如果 EMA/Vegas 没有支撑或阻力（罕见），回退到 Fib
+    if result["nearest_support"] is None:
+        fib_supports = [(l, n) for l, n in fib_levels if l < price]
+        if fib_supports:
+            fib_supports.sort(key=lambda x: x[0], reverse=True)
+            s = fib_supports[0]
+            result["nearest_support"] = {
+                "price": round(s[0], 2),
+                "dist_pct": round(((price - s[0]) / price) * 100, 1),
+                "source": s[1],
+            }
+
+    if result["nearest_resistance"] is None:
+        fib_resistances = [(l, n) for l, n in fib_levels if l > price]
+        if fib_resistances:
+            fib_resistances.sort(key=lambda x: x[0])
+            r = fib_resistances[0]
+            result["nearest_resistance"] = {
+                "price": round(r[0], 2),
+                "dist_pct": round(((r[0] - price) / price) * 100, 1),
+                "source": r[1],
+            }
+
+    # ===== Fib 参考位（独立输出，不影响 Agent 止损止盈计算）=====
+    fib_supports = [(l, n) for l, n in fib_levels if l < price]
+    fib_resistances = [(l, n) for l, n in fib_levels if l > price]
+
+    if fib_supports:
+        fib_supports.sort(key=lambda x: x[0], reverse=True)
+        s = fib_supports[0]
+        result["fib_support"] = {
+            "price": round(s[0], 2),
+            "dist_pct": round(((price - s[0]) / price) * 100, 1),
+            "source": s[1],
+        }
+    if fib_resistances:
+        fib_resistances.sort(key=lambda x: x[0])
+        r = fib_resistances[0]
+        result["fib_resistance"] = {
+            "price": round(r[0], 2),
+            "dist_pct": round(((r[0] - price) / price) * 100, 1),
+            "source": r[1],
+        }
+
+    # ===== 汇聚区：EMA/Vegas + Fib 合并检测 =====
+    all_levels = ema_vegas_levels + fib_levels
     all_levels.sort(key=lambda x: x[0])
     used = set()
     tolerance = 0.015

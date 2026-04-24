@@ -107,6 +107,9 @@ def _run_scheduler_loop():
     # Schedule news agent every 60 minutes to fetch and analyze breaking news
     schedule.every(60).minutes.do(run_news_agent)
     
+    # Schedule price alert checking every 5 seconds (Agent 自主设置的关键价位监控)
+    schedule.every(5).seconds.do(check_price_alerts)
+    
     # Run position update immediately
     update_positions_prices()
     
@@ -807,6 +810,247 @@ def _run_trader_instance(trader: dict, round_id: str):
         # Always release the per-instance lock
         _running_trader_instances.discard(trader_instance_id)
 
+
+
+# ============= Price Alert Monitor =============
+
+# 价格缓存（减少 API 调用）
+_alert_price_cache: dict = {}  # {"binance:BTC": (price, timestamp), ...}
+_ALERT_PRICE_CACHE_TTL = 3  # 3 秒缓存
+
+
+def _get_alert_price(symbol: str, source: str = "binance") -> float:
+    """获取指定标的的当前价格（根据数据源选择 API）。
+    
+    带 TTL 缓存以避免高频 API 调用。
+    """
+    import time as _t
+    cache_key = f"{source}:{symbol}"
+    now = _t.time()
+    
+    # 检查缓存
+    if cache_key in _alert_price_cache:
+        cached_price, cached_time = _alert_price_cache[cache_key]
+        if now - cached_time < _ALERT_PRICE_CACHE_TTL:
+            return cached_price
+    
+    price = 0.0
+    usdt_symbol = f"{symbol}USDT" if not symbol.endswith("USDT") else symbol
+    
+    try:
+        if source == "okx":
+            # OKX 公共 mark-price API
+            inst_id = f"{symbol}-USDT-SWAP"
+            resp = requests.get(
+                f"https://www.okx.com/api/v5/public/mark-price?instId={inst_id}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == "0" and data.get("data"):
+                    price = float(data["data"][0]["markPx"])
+        elif source == "bybit":
+            resp = requests.get(
+                f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={usdt_symbol}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result_list = data.get("result", {}).get("list", [])
+                if result_list:
+                    price = float(result_list[0].get("markPrice", 0))
+        elif source == "bitget":
+            resp = requests.get(
+                f"https://api.bitget.com/api/v2/mix/market/ticker?productType=USDT-FUTURES&symbol={usdt_symbol}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result_data = data.get("data", [])
+                if result_data:
+                    price = float(result_data[0].get("markPrice", 0))
+        elif source == "gate":
+            contract = f"{symbol}_USDT"
+            resp = requests.get(
+                f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{contract}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                price = float(data.get("mark_price", 0))
+        else:
+            # 默认 Binance
+            binance_base = os.getenv("BINANCE_API_BASE", "https://api.binance.com")
+            resp = requests.get(
+                f"{binance_base}/api/v3/ticker/price?symbol={usdt_symbol}",
+                timeout=5
+            )
+            if resp.status_code == 200:
+                price = float(resp.json().get("price", 0))
+    except Exception as e:
+        print(f"[PriceAlert] Error fetching price for {symbol} from {source}: {e}")
+    
+    # 更新缓存
+    if price > 0:
+        _alert_price_cache[cache_key] = (price, now)
+    
+    return price
+
+
+def check_price_alerts():
+    """检查所有活跃的价格警报，触发到价的警报。
+    
+    每 5 秒执行一次。
+    触发后：
+    1. 将警报状态更新为 TRIGGERED
+    2. 异步调用 Agent 执行一次完整分析
+    """
+    try:
+        from tools.alert_tools import get_active_alerts, mark_alert_triggered
+        
+        active_alerts = get_active_alerts()
+        if not active_alerts:
+            return
+        
+        # 按 price_source + symbol 分组获取价格（减少 API 调用）
+        price_cache = {}  # {"binance:BTC": price}
+        triggered_alerts = []
+        
+        for alert in active_alerts:
+            symbol = alert["symbol"]
+            source = alert.get("price_source", "binance")
+            cache_key = f"{source}:{symbol}"
+            
+            # 获取价格（复用缓存）
+            if cache_key not in price_cache:
+                price_cache[cache_key] = _get_alert_price(symbol, source)
+            
+            current_price = price_cache[cache_key]
+            if current_price <= 0:
+                continue
+            
+            # 检查是否触发
+            target = alert["target_price"]
+            direction = alert["direction"]
+            is_triggered = False
+            
+            if direction == "ABOVE" and current_price >= target:
+                is_triggered = True
+            elif direction == "BELOW" and current_price <= target:
+                is_triggered = True
+            
+            if is_triggered:
+                triggered_alerts.append({
+                    "alert": alert,
+                    "current_price": current_price,
+                })
+        
+        # 处理触发的警报
+        for item in triggered_alerts:
+            alert = item["alert"]
+            current_price = item["current_price"]
+            alert_id = alert["id"]
+            user_id = alert["user_id"]
+            symbol = alert["symbol"]
+            direction = alert["direction"]
+            reason = alert.get("reason", "")
+            trader_instance_id = alert.get("trader_instance_id")
+            
+            direction_label = "突破" if direction == "ABOVE" else "跌破"
+            
+            print(f"[PriceAlert] ⚠️ TRIGGERED: {symbol} {direction_label} ${alert['target_price']:,.2f} "
+                  f"(current: ${current_price:,.2f}, reason: {reason}) for user {user_id[:8]}")
+            
+            # 1. 标记为已触发
+            mark_alert_triggered(alert_id)
+            
+            # 2. 异步触发 Agent 分析（不阻塞轮询循环）
+            _trigger_alert_analysis(
+                user_id=user_id,
+                trader_instance_id=trader_instance_id,
+                symbol=symbol,
+                direction_label=direction_label,
+                target_price=alert["target_price"],
+                current_price=current_price,
+                reason=reason,
+            )
+            
+    except Exception as e:
+        print(f"[PriceAlert] Error in check_price_alerts: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _trigger_alert_analysis(
+    user_id: str,
+    trader_instance_id: int,
+    symbol: str,
+    direction_label: str,
+    target_price: float,
+    current_price: float,
+    reason: str,
+):
+    """触发警报后异步调用 Agent 执行一次完整分析。
+    
+    如果没有绑定 trader_instance_id，尝试找到该用户当前 RUNNING 的 trader 实例。
+    """
+    # 如果没有 trader_instance_id，查找用户活跃的 trader
+    if not trader_instance_id:
+        try:
+            conn = get_db()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT ti.id 
+                    FROM trader_instances ti
+                    INNER JOIN strategy_profiles sp ON sp.id = ti.strategy_profile_id
+                    WHERE ti.user_id = %s AND ti.status = 'RUNNING' AND ti.is_enabled = TRUE
+                    ORDER BY ti.id ASC LIMIT 1
+                """, (user_id,))
+                row = cursor.fetchone()
+                if row:
+                    trader_instance_id = row["id"]
+            conn.close()
+        except Exception as e:
+            print(f"[PriceAlert] Error finding trader instance: {e}")
+    
+    if not trader_instance_id:
+        print(f"[PriceAlert] No running trader instance for user {user_id[:8]}, skipping analysis trigger")
+        return
+    
+    # 构建分析消息
+    alert_message = (
+        f"⚠️ 价格警报触发：{symbol} {direction_label} ${target_price:,.2f}"
+        f"（当前价格: ${current_price:,.2f}）\n"
+        f"警报原因: {reason}\n\n"
+        f"请立即执行完整的策略分析流程，重点关注 {symbol} 的当前市场状况，并做出交易决策。"
+    )
+    
+    # 异步发送分析请求（不阻塞轮询线程）
+    def _do_trigger():
+        try:
+            round_id = datetime.now().strftime("%Y-%m-%d_%H:%M")
+            response = requests.post(
+                f"{AGENT_API_URL}/agents/trading-strategy-agent/runs",
+                data={
+                    "message": alert_message,
+                    "user_id": user_id,
+                    "trader_instance_id": str(trader_instance_id),
+                    "session_id": f"alert-t{trader_instance_id}-{round_id.replace(':', '-')}",
+                    "stream": "False"
+                },
+                timeout=120
+            )
+            if response.status_code == 200:
+                print(f"[PriceAlert] ✅ Alert analysis completed for {symbol} (user {user_id[:8]})")
+            else:
+                print(f"[PriceAlert] ❌ Alert analysis failed: {response.status_code} - {response.text[:200]}")
+        except Exception as e:
+            print(f"[PriceAlert] ❌ Alert analysis exception: {e}")
+    
+    # 在独立线程中执行，不阻塞 scheduler 主循环
+    alert_thread = threading.Thread(target=_do_trigger, daemon=True)
+    alert_thread.start()
+    print(f"[PriceAlert] Analysis triggered in background thread for {symbol} (trader #{trader_instance_id})")
 
 
 # ============= Orphan Order Cleanup =============

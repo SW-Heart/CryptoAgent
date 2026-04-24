@@ -35,6 +35,13 @@ from tools.trading_tools import (
     log_strategy_analysis,
 )
 
+# 价格警报工具
+from tools.alert_tools import (
+    set_price_alert,
+    cancel_price_alert,
+    list_price_alerts,
+)
+
 import time
 import functools
 import asyncio
@@ -357,28 +364,45 @@ exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) �
 
 ### Step 3: 多维度信号评估
 对每个标的，综合以下维度判断：
-- **趋势**: trend.direction + trend.strength (多周期EMA/Vegas/MACD)
-- **关键位**: levels.nearest_support / nearest_resistance (距离%)
-- **量能**: volume.ratio + volume.divergence + volume.flow
-- **形态**: pattern.name + pattern.bias (如有)
+- **趋势**: trend.direction + trend.strength + trend.major_trend (多周期加权)
+- **关键位**: levels.nearest_support / nearest_resistance (优先 EMA/Vegas)
+- **量能**: volume.ratio + volume.divergence + volume.flow (辅助)
+- **形态**: pattern.name + pattern.bias (辅助)
 - **波动**: volatility.status (决定仓位大小和止损宽度)
+
+### Step 3.5: 顺大逆小检查 [最高优先级 - 强制执行]
+
+**核心原则：大周期定方向，小周期找入场。**
+
+⛔ **否决权 (trend.veto)**:
+- 如果 trend.veto = "no_long" → 🚫 **绝对禁止做多**，只允许做空或 HOLD
+- 如果 trend.veto = "no_short" → 🚫 **绝对禁止做空**，只允许做多或 HOLD
+- 否决权来自 1d+1w 的 EMA 排列 + Vegas 通道位置（首要指标），不可被任何其他信号覆盖
+
+📐 **大周期趋势 (trend.major_trend)**:
+- major_trend = "bearish" → 大级别空头结构。小周期(4h/1h/15m)的看涨信号只是下跌中继反弹，不开多。
+- major_trend = "bullish" → 大级别多头结构。小周期的回调是入场机会，不做空。
+- major_trend = "neutral" → 无明确方向，可两方向操作但需更强信号。
 
 ### Step 4: 信号强度评估
 
 🟢 **强信号** (可按风险比例正常开仓):
 - trend.direction 一致且 strength="strong"
-- 价格接近关键支撑/阻力位 (dist_pct < 2%)
+- trend.veto 不冲突（顺大逆小通过）
+- 价格接近 **EMA/Vegas 关键位** (nearest_support/resistance 的 dist_pct < 2%)
 - volume.flow 配合方向 (做多时 inflow / 做空时 outflow)
 - {signal_min_dims}个以上维度方向一致
 
 🟡 **中等信号** (减半仓位):
 - {max(1, signal_min_dims - 1)}个维度方向一致
-- 价格接近但未到关键位
+- 价格接近但未到 EMA/Vegas 关键位
+- ⚠️ 如果 nearest_support/resistance 的 source 是 Fib 开头（如 Fib_0.618）表示支撑来自 Fibonacci 而非 EMA/Vegas，**需要更多确认条件才可开仓**（至少需要量能配合 volume.flow）
 
 🔴 **弱信号 / 无信号** ({weak_signal_text}):
 - 趋势 direction="neutral" 或各维度矛盾
 - 量能 divergence="bearish" 与趋势冲突
 - 价格远离所有关键位
+- ⚠️ trend.veto 冲突（想做多但 veto="no_long"）→ 直接 HOLD
 
 {f'''### 自定义入场标准
 {entry_standards}
@@ -389,6 +413,8 @@ exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) �
    - margin = account.available × {risk_pct}
    - 绝对不超过 available 的 {max_pos_pct}%
    - {vol_reduce_text}
+   - 📊 **量能调节**: 如果 volume.ratio < 0.5 (极低量能) → 仓位再减半
+   - 😱 **情绪调节**: 如果 macro.fng < 20 (极端恐惧) → 仓位再减半
    - ⚠️ **最低保证金校验**：如果 exchange_constraints 中该标的存在 min_margin_by_leverage,
      必须确保你计算的 margin >= min_margin_by_leverage[当前杠杆]。
      如果不够 → 直接 HOLD 该标的，不要尝试开仓，不要提高杠杆来凑。
@@ -436,6 +462,27 @@ exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) �
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+## 价格警报管理 [每次分析后执行]
+
+你有能力自主设置关键价格位的警报。当价格到达你设置的位置时，系统会自动触发一次分析。
+
+### 查看已有警报
+- 在 build_strategy_context() 返回的 alerts 段可以看到你设置的所有活跃警报
+- 每次分析时检查是否有已失效或不再需要的警报，及时用 cancel_price_alert() 清理
+
+### 设置新警报
+分析完成后，如果发现重要的关键价位，使用 set_price_alert() 设置监控：
+- 重要的支撑/阻力位（EMA/Vegas 关键位）
+- 突破/跌破确认位
+- 止损保护位、止盈目标位附近
+- 每用户最多 10 个活跃警报，请合理分配
+
+### 取消警报
+- 当持仓已变化或市场结构改变，之前的关键价位不再有效时，及时取消
+- 可按 alert_id 精确取消，或按 symbol 批量取消
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ## 日志记录 [每次执行必须]
 
 无论是否有操作，都必须调用 log_strategy_analysis() 记录：
@@ -450,6 +497,8 @@ exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) �
 - ❌ 禁止单笔 margin 超过可用余额的 {max_pos_pct}%
 - ❌ 禁止忽略已有持仓直接反向开仓（必须先平仓）
 - ❌ 禁止在 trend.direction="neutral" 且无明确信号时开仓
+- ❌ **禁止在 trend.veto="no_long" 时做多**（大周期空头否决，即使小周期看涨也不可以）
+- ❌ **禁止在 trend.veto="no_short" 时做空**（大周期多头否决，即使小周期看跌也不可以）
 - ❌ 禁止在 existing_sl_orders 非空时再新增全仓止损单（应使用 update_stop_loss 修改价格）
 - ❌ 禁止在 existing_tp_orders 非空时再新增全仓止盈单（应使用 update_take_profit 修改价格，阶段性分批止盈除外）
 """]
@@ -485,6 +534,19 @@ exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) �
         """更新指定标的的止盈价格（只替换现有 TP 订单，不影响 SL）。"""
         return update_take_profit(symbol=symbol, new_take_profit=new_take_profit, user_id=_uid)
 
+    # 价格警报工具闭包
+    def _set_price_alert(symbol: str, target_price: float, direction: str, reason: str = "") -> dict:
+        """设置价格警报。当价格到达目标位时自动触发一次策略分析。direction 为 'ABOVE'(上穿) 或 'BELOW'(下穿)。"""
+        return set_price_alert(symbol=symbol, target_price=target_price, direction=direction, reason=reason, user_id=_uid)
+
+    def _cancel_price_alert(alert_id: int = None, symbol: str = None) -> dict:
+        """取消价格警报。提供 alert_id 取消单个，或提供 symbol 取消该标的所有警报。"""
+        return cancel_price_alert(alert_id=alert_id, symbol=symbol, user_id=_uid)
+
+    def _list_price_alerts() -> dict:
+        """列出当前所有活跃的价格警报。"""
+        return list_price_alerts(user_id=_uid)
+
     # 6. Create Agent instance
     return Agent(
         name="TradingStrategy",
@@ -497,6 +559,9 @@ exchange_constraints(交易所合约限制)、macro(宏观)、funding(费率) �
             _update_stop_loss,        # 📤 调整止损 (user_id 已绑定)
             _update_take_profit,      # 📤 调整止盈 (user_id 已绑定)
             _place_trailing_stop,     # 📤 追踪止损 (user_id 已绑定)
+            _set_price_alert,         # 🔔 设置价格警报 (user_id 已绑定)
+            _cancel_price_alert,      # 🔕 取消价格警报 (user_id 已绑定)
+            _list_price_alerts,       # 📋 查看价格警报 (user_id 已绑定)
             log_strategy_analysis,    # 📝 日志记录
         ]],
         instructions=dynamic_instructions,
