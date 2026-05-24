@@ -65,7 +65,13 @@ def _get_binance_klines(symbol: str, interval: str, limit: int = None) -> Option
     if limit is None:
         limit = KLINE_LIMITS.get(interval, 200)
     
-    pair = f"{symbol.upper().strip()}USDT"
+    # 防御性处理：去除已有的稳定币后缀，防止重复拼接 (如 BTCUSDT → BTCUSDTUSDT)
+    clean_symbol = symbol.upper().strip()
+    for suffix in ['USDT', 'USDC', 'BUSD']:
+        if clean_symbol.endswith(suffix):
+            clean_symbol = clean_symbol[:-len(suffix)]
+            break
+    pair = f"{clean_symbol}USDT"
     
     try:
         url = f"{BINANCE_BASE_URL}/api/v3/klines?symbol={pair}&interval={interval}&limit={limit}"
@@ -101,7 +107,13 @@ def _get_binance_klines(symbol: str, interval: str, limit: int = None) -> Option
 
 def _get_current_price(symbol: str) -> Optional[float]:
     """获取当前价格"""
-    pair = f"{symbol.upper().strip()}USDT"
+    # 防御性处理：去除已有的稳定币后缀，防止重复拼接
+    clean_symbol = symbol.upper().strip()
+    for suffix in ['USDT', 'USDC', 'BUSD']:
+        if clean_symbol.endswith(suffix):
+            clean_symbol = clean_symbol[:-len(suffix)]
+            break
+    pair = f"{clean_symbol}USDT"
     try:
         url = f"{BINANCE_BASE_URL}/api/v3/ticker/price?symbol={pair}"
         resp = requests.get(url, timeout=5)

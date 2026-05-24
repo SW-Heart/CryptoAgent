@@ -184,8 +184,17 @@ def _slugify(value: str, fallback: str) -> str:
     return slug or fallback
 
 
+def _strip_symbol_suffix(sym: str) -> str:
+    """去除交易对的稳定币后缀，如 BTCUSDT → BTC，后端API会自动拼接"""
+    s = sym.upper().strip()
+    for suffix in ('USDT', 'USDC', 'BUSD'):
+        if s.endswith(suffix):
+            return s[:-len(suffix)]
+    return s
+
+
 def _serialize_list(values: list[str], fallback: str) -> str:
-    cleaned = [item.strip().upper() for item in values if item and item.strip()]
+    cleaned = [_strip_symbol_suffix(item) for item in values if item and item.strip()]
     return ",".join(cleaned) if cleaned else fallback
 
 

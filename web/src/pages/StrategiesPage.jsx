@@ -371,6 +371,18 @@ const StrategiesPage = ({ userId }) => {
             if (typeof data.symbols === 'string') data.symbols = data.symbols.split(',').map(s => s.trim().toUpperCase());
             if (typeof data.timeframes === 'string') data.timeframes = data.timeframes.split(',').map(s => s.trim().toLowerCase());
 
+            // 清洗 symbols：去除 USDT/USDC/BUSD 等后缀，后端会自动拼接
+            data.symbols = data.symbols.map(s => {
+                let sym = s.trim().toUpperCase();
+                for (const suffix of ['USDT', 'USDC', 'BUSD']) {
+                    if (sym.endsWith(suffix)) {
+                        sym = sym.slice(0, -suffix.length);
+                        break;
+                    }
+                }
+                return sym;
+            }).filter(Boolean);
+
             // 严格校验周期格式
             const validIntervals = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"];
             const invalidIntervals = data.timeframes.filter(t => t && !validIntervals.includes(t));
@@ -974,10 +986,14 @@ const StrategiesPage = ({ userId }) => {
                     }).filter(Boolean);
                 })()}
                 onConfirm={(newSelected) => {
+                    // 存储时去掉 USDT 后缀，后端会自动拼接
                     const normalized = newSelected.map(s => {
                         let sym = s.trim().toUpperCase();
-                        if (sym && !sym.endsWith('USDT') && !sym.endsWith('USD') && !sym.endsWith('PERP')) {
-                            return sym + 'USDT';
+                        for (const suffix of ['USDT', 'USDC', 'BUSD']) {
+                            if (sym.endsWith(suffix)) {
+                                sym = sym.slice(0, -suffix.length);
+                                break;
+                            }
                         }
                         return sym;
                     }).filter(Boolean);
