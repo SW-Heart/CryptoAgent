@@ -6,6 +6,7 @@ import {
 import { useAuth, AuthProvider } from './context/AuthContext';
 import { useTranslation } from 'react-i18next';
 import AuthModal from './components/modals/AuthModal';
+import NotificationModal from './components/modals/NotificationModal';
 import UserMenu from './components/layout/UserMenu';
 import SettingsModal from './components/modals/SettingsModal';
 import ExecutionPage from './pages/ExecutionPage';
@@ -37,9 +38,23 @@ function AppContent() {
 
   const [collapsed, setCollapsed] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [llmConfig, setLlmConfig] = useState(null);
   
   const userId = user?.id;
+
+  const fetchUnreadNotifications = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const res = await getJson(`/api/workspace/notifications?user_id=${userId}&unread_only=true&limit=100`);
+      if (res && res.notifications) {
+        setUnreadNotificationCount(res.notifications.length);
+      }
+    } catch (e) {
+      console.error('Failed to fetch unread notifications', e);
+    }
+  }, [userId]);
 
   const refreshWorkspaceStatus = useCallback(async () => {
     if (!userId) {
@@ -55,8 +70,15 @@ function AppContent() {
   }, [userId]);
 
   useEffect(() => {
-    if (userId) refreshWorkspaceStatus();
-  }, [refreshWorkspaceStatus, userId]);
+    if (userId) {
+        refreshWorkspaceStatus();
+        fetchUnreadNotifications();
+        
+        // Poll unread notifications every 30 seconds
+        const interval = setInterval(fetchUnreadNotifications, 30000);
+        return () => clearInterval(interval);
+    }
+  }, [refreshWorkspaceStatus, fetchUnreadNotifications, userId]);
 
   const [visitedTabs, setVisitedTabs] = useState({ [activeTab]: true });
 
@@ -123,6 +145,8 @@ function AppContent() {
           llmConfig={llmConfig}
           collapsed={collapsed}
           setCollapsed={setCollapsed}
+          unreadNotificationCount={unreadNotificationCount}
+          onOpenNotifications={() => setShowNotifications(true)}
         />
       )}
 
@@ -133,6 +157,12 @@ function AppContent() {
       </div>
 
       <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+      <NotificationModal 
+        isOpen={showNotifications} 
+        onClose={() => setShowNotifications(false)} 
+        userId={userId} 
+        onReadStatusChanged={fetchUnreadNotifications}
+      />
     </div>
   );
 }

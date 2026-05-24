@@ -130,6 +130,19 @@ def init_workspace_tables():
                 )
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS system_notifications (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    type TEXT DEFAULT 'info',
+                    is_read BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
             # Migration: ensure llm_config_id column exists in trader_instances
@@ -611,6 +624,75 @@ def list_trader_runtime_events(user_id: str, trader_id: int, limit: int = 20) ->
             }
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+def add_system_notification(user_id: str, title: str, content: str, type: str = 'info') -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO system_notifications (user_id, title, content, type)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (user_id, title, content, type),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            return {"success": True, "id": row["id"] if row else None}
+    finally:
+        conn.close()
+
+
+def list_system_notifications(user_id: str, unread_only: bool = False, limit: int = 50) -> list[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            query = "SELECT id, title, content, type, is_read, created_at FROM system_notifications WHERE user_id = %s"
+            params = [user_id]
+            if unread_only:
+                query += " AND is_read = FALSE"
+            query += " ORDER BY id DESC LIMIT %s"
+            params.append(min(limit, 100))
+            
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            
+        return [
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "content": row["content"],
+                "type": row["type"],
+                "is_read": bool(row["is_read"]),
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def mark_system_notification_read(user_id: str, notif_id: int = None) -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            if notif_id is not None:
+                cursor.execute(
+                    "UPDATE system_notifications SET is_read = TRUE WHERE id = %s AND user_id = %s",
+                    (notif_id, user_id),
+                )
+            else:
+                # Mark all as read
+                cursor.execute(
+                    "UPDATE system_notifications SET is_read = TRUE WHERE user_id = %s AND is_read = FALSE",
+                    (user_id,),
+                )
+            conn.commit()
+            return {"success": True}
     finally:
         conn.close()
 

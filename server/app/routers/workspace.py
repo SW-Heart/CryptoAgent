@@ -26,6 +26,8 @@ from app.services.workspace_service import (
     delete_strategy_profile,
     create_exchange_account,
     delete_exchange_account,
+    list_system_notifications,
+    mark_system_notification_read,
 )
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
@@ -251,6 +253,37 @@ def post_trader_runtime_action(trader_id: int, user_id: str, request: TraderRunt
         return set_trader_runtime_action(user_id, trader_id, request.action)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/notifications")
+def get_system_notifications(user_id: str, unread_only: bool = False, limit: int = 50):
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        notifications = list_system_notifications(user_id, unread_only, limit)
+        return {"notifications": notifications}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/notifications/read")
+def mark_all_notifications_read(user_id: str):
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        mark_system_notification_read(user_id)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/notifications/{notif_id}/read")
+def mark_notification_read(user_id: str, notif_id: int):
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        mark_system_notification_read(user_id, notif_id)
+        return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

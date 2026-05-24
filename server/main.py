@@ -109,8 +109,22 @@ async def run_agent(
             "metrics": run_response.metrics
         }
     except Exception as e:
-        print(f"[Main] Agent run error: {e}")
-        return Response(content=json.dumps({"error": str(e)}), status_code=500)
+        error_str = str(e)
+        print(f"[Main] Agent run error: {error_str}")
+        
+        # 提取典型的严重错误并写入系统通知
+        if any(kw in error_str.lower() for kw in ("authentication", "401", "invalid_request_error", "api key", "unauthorized")):
+            from app.services.workspace_service import add_system_notification
+            title = "AI 模型 API Key 认证失败"
+            content = f"执行策略时遇到大模型 API 认证错误，请检查系统设置中的 API Key 是否有效、是否欠费。\n\n错误详情: {error_str}"
+            add_system_notification(user_id, title, content, type="error")
+        elif "insufficient" in error_str.lower() or "balance" in error_str.lower():
+            from app.services.workspace_service import add_system_notification
+            title = "账户余额不足或无法满足保证金"
+            content = f"尝试开仓时遇到余额或保证金不足错误。\n\n错误详情: {error_str}"
+            add_system_notification(user_id, title, content, type="warning")
+            
+        return Response(content=json.dumps({"error": error_str}), status_code=500)
 
 
 # ============= Standard Routers =============

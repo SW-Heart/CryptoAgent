@@ -9,19 +9,35 @@ import {
   Cpu,
   LineChart,
   BarChart3,
-  HelpCircle
+  HelpCircle,
+  Bell
 } from 'lucide-react';
 
-const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed }) => (
+const SidebarItem = ({ icon: Icon, label, active, onClick, collapsed, badge }) => (
   <button
     onClick={onClick}
-    className={`w-full flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2.5 rounded-xl transition-all duration-200 group focus:outline-none ${active
+    className={`relative w-full flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2.5 rounded-xl transition-all duration-200 group focus:outline-none ${active
       ? 'bg-gradient-to-r from-white/10 to-white/5 text-white border border-white/10 shadow-lg shadow-black/20'
       : 'text-slate-400 hover:bg-white/5 hover:text-slate-200 border border-transparent'
       }`}
   >
-    <Icon className={`w-5 h-5 flex-shrink-0 ${active ? 'text-white' : 'group-hover:scale-110 duration-200'}`} />
-    {!collapsed && <span className="text-sm font-medium">{label}</span>}
+    <div className="relative flex-shrink-0">
+        <Icon className={`w-5 h-5 ${active ? 'text-white' : 'group-hover:scale-110 duration-200'}`} />
+        {badge > 0 && collapsed && (
+            <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3 items-center justify-center rounded-full bg-rose-500 text-[8px] font-bold text-white shadow-sm ring-1 ring-[#0a0d0f]">
+            </span>
+        )}
+    </div>
+    {!collapsed && (
+        <div className="flex flex-1 items-center justify-between min-w-0">
+            <span className="text-sm font-medium truncate">{label}</span>
+            {badge > 0 && (
+                <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-black text-white shadow-sm shadow-rose-500/20">
+                    {badge > 99 ? '99+' : badge}
+                </span>
+            )}
+        </div>
+    )}
   </button>
 );
 
@@ -32,7 +48,9 @@ const Sidebar = ({
   onSignOut,
   llmConfig,
   collapsed,
-  setCollapsed
+  setCollapsed,
+  unreadNotificationCount,
+  onOpenNotifications
 }) => {
   const menuItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: '控制台' },
@@ -78,8 +96,16 @@ const Sidebar = ({
 
       </nav>
 
-      {/* Bottom Section: Help & Feedback */}
-      <div className={`p-3 border-t border-white/5 transition-all duration-300`}>
+      {/* Bottom Section: Notifications & Help */}
+      <div className={`p-3 border-t border-white/5 transition-all duration-300 space-y-1`}>
+        <SidebarItem
+          icon={Bell}
+          label="消息通知"
+          active={false}
+          onClick={onOpenNotifications}
+          collapsed={collapsed}
+          badge={unreadNotificationCount}
+        />
         <SidebarItem
           icon={HelpCircle}
           label="帮助与反馈"
