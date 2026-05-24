@@ -20,17 +20,20 @@ def _get_active_client(user_id: str):
     primary = next((i for i in instances if i.get("status") == "RUNNING"), None)
     if not primary:
         primary = instances[0] if instances else None
+    exchange_account_id = None
     if primary and primary.get("exchange_account_id"):
+        exchange_account_id = primary["exchange_account_id"]
         set_current_trader_id(primary["id"])
-    return _get_trading_client(user_id, require_trading_enabled=False)
+    client, err = _get_trading_client(user_id, require_trading_enabled=False)
+    return client, err, exchange_account_id
 
 
-def _get_user_platform_start_time(user_id: str) -> int:
+def _get_user_platform_start_time(user_id: str, exchange_account_id: int = None) -> int:
     """
     获取用户绑定到平台的时间起点（毫秒级时间戳）。
     
     取以下两者中最早的时间：
-    1. exchange_accounts.created_at — 用户首次绑定交易所账号的时间
+    1. 当前 exchange_account 的 created_at
     2. strategy_logs.timestamp     — 该用户第一条策略日志的时间
     
     这样只统计"属于平台"的交易，避免拉取用户在绑定前的陈年历史。
@@ -40,17 +43,23 @@ def _get_user_platform_start_time(user_id: str) -> int:
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # 用 SQL LEAST() 直接在数据库内比较，避免 Python 类型问题
-            cursor.execute("""
-                SELECT LEAST(
-                    (SELECT MIN(created_at) FROM exchange_accounts WHERE user_id = %s),
-                    (SELECT MIN("timestamp"::timestamptz) FROM strategy_logs WHERE user_id = %s)
-                )
-            """, (user_id, user_id))
+            if exchange_account_id:
+                cursor.execute("""
+                    SELECT LEAST(
+                        (SELECT created_at FROM exchange_accounts WHERE id = %s),
+                        (SELECT MIN("timestamp"::timestamptz) FROM strategy_logs WHERE user_id = %s)
+                    )
+                """, (exchange_account_id, user_id))
+            else:
+                cursor.execute("""
+                    SELECT LEAST(
+                        (SELECT MIN(created_at) FROM exchange_accounts WHERE user_id = %s),
+                        (SELECT MIN("timestamp"::timestamptz) FROM strategy_logs WHERE user_id = %s)
+                    )
+                """, (user_id, user_id))
             row = cursor.fetchone()
             if row and row[0]:
                 val = row[0]
-                # 兼容返回 str 或 datetime
                 if isinstance(val, str):
                     from datetime import datetime
                     val = datetime.fromisoformat(val)
@@ -96,21 +105,34 @@ def _fetch_all_trades_since(client, symbol: str, start_time_ms: int, max_trades:
     now_ms = int(time.time() * 1000)
     SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 
-    # Step 1: 用 startTime + endTime 取第一批数据（锚定 fromId）
-    end_time = min(start_time_ms + SEVEN_DAYS_MS, now_ms)
-    trades = client.get_trade_history(
-        symbol=symbol, limit=1000,
-        start_time=start_time_ms, end_time=end_time
-    )
+    # Step 1: 用 startTime + endTime 滑动窗口找到第一批数据（锚定 fromId）
+    current_start = start_time_ms
+    first_trade_found = False
+    
+    # 限制最多往前滑动查找 15 个周期 (约100天)，避免死循环或过多 API 调用
+    for _ in range(15):
+        if current_start > now_ms:
+            break
+            
+        end_time = min(current_start + SEVEN_DAYS_MS, now_ms)
+        trades = client.get_trade_history(
+            symbol=symbol, limit=1000,
+            start_time=current_start, end_time=end_time
+        )
+        
+        if isinstance(trades, list) and len(trades) > 0:
+            all_trades.extend(trades)
+            first_trade_found = True
+            break
+            
+        current_start += SEVEN_DAYS_MS
 
-    if not isinstance(trades, list) or not trades:
+    if not first_trade_found:
         return []
-
-    all_trades.extend(trades)
 
     # Step 2: 用 fromId 分页取后续数据（突破 7 天限制）
     while len(all_trades) < max_trades:
-        last_id = int(trades[-1].get("id", 0))
+        last_id = int(all_trades[-1].get("id", 0))
         if last_id <= 0:
             break
 
@@ -146,7 +168,7 @@ def get_wallet(user_id: str = None):
         from tools.exchange_trading_tools import get_positions_summary
         from binance_client import BinanceFuturesClient, has_user_api_keys
         # 1. 尝试从 Workspace 查找当前的实盘账户绑定
-        client, err = _get_active_client(user_id)
+        client, err, exchange_account_id = _get_active_client(user_id)
         
         # 如果有关联的交易所账户，尝试获取真实余额
         if client:
@@ -352,7 +374,7 @@ def get_positions(status: str = "OPEN", user_id: str = None):
         try:
             from tools.exchange_trading_tools import get_positions_summary
             # 使用提取出的公用方法获取最新 active_client
-            client, err = _get_active_client(user_id)
+            client, err, exchange_account_id = _get_active_client(user_id)
             if client:
                 result = get_positions_summary(user_id)
                 if isinstance(result, dict) and "error" not in result:
@@ -477,7 +499,7 @@ def get_orders(user_id: str = None, limit: int = 20, status: str = "OPEN", symbo
     try:
         # 如果 user_id 提供，通过 _get_active_client 统一获取客户端
         if user_id:
-            client, err = _get_active_client(user_id)
+            client, err, exchange_account_id = _get_active_client(user_id)
             
             if client:
                 try:
@@ -707,7 +729,7 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
 
     # Fetch from Exchange
     try:
-        client, err = _get_active_client(user_id)
+        client, err, exchange_account_id = _get_active_client(user_id)
         
         if not client:
             return {"trades": [], "source": "exchange", "error": "No exchange account configured"}
@@ -721,7 +743,7 @@ def get_trade_history(user_id: str = None, symbols: str = "BTCUSDT,ETHUSDT,SOLUS
                 symbol += "USDT"
                 
             try:
-                start_ts = _get_user_platform_start_time(user_id)
+                start_ts = _get_user_platform_start_time(user_id, exchange_account_id)
                 trades = _fetch_all_trades_since(client, symbol, start_ts, max_trades=2000)
                 
                 if isinstance(trades, list):
@@ -778,7 +800,7 @@ def get_position_history(
     
     try:
         # 统一使用 _get_active_client 获取当前实盘实例上下文
-        client, err = _get_active_client(user_id)
+        client, err, exchange_account_id = _get_active_client(user_id)
         if err or not client:
             return {"positions": [], "error": err or "No active exchange account configured"}
         
@@ -807,7 +829,7 @@ def get_position_history(
             try:
                 from position_builder import build_position_history
                 
-                start_ts = _get_user_platform_start_time(user_id)
+                start_ts = _get_user_platform_start_time(user_id, exchange_account_id)
                 trades = _fetch_all_trades_since(client, sym, start_ts, max_trades=5000)
                 if isinstance(trades, list):
                     closed_positions = build_position_history(
@@ -849,7 +871,7 @@ def get_income_history(
         raise HTTPException(status_code=400, detail="user_id is required")
     
     try:
-        client, err = _get_active_client(user_id)
+        client, err, exchange_account_id = _get_active_client(user_id)
         if err or not client:
             return {"records": [], "error": err or "No active exchange account"}
         

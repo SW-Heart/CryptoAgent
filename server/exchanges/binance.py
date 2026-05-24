@@ -1613,18 +1613,57 @@ class BinanceFuturesClient(ExchangeClient):
             # 获取 BTC 的已实现盈亏
             client.get_income_history(symbol="BTCUSDT", income_type="REALIZED_PNL")
         """
-        params = {"limit": min(limit, 1000)}
-        
-        if symbol:
-            params["symbol"] = symbol
-        if income_type:
-            params["incomeType"] = income_type
-        if start_time:
-            params["startTime"] = start_time
-        if end_time:
-            params["endTime"] = end_time
-        
-        res = self._request("GET", "/fapi/v1/income", params)
+        if not start_time and not end_time:
+            import time
+            now_ms = int(time.time() * 1000)
+            SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+            
+            all_records = []
+            current_end = now_ms
+            
+            # 最多往前翻 15 个周期 (约 105 天)，寻找足够的流水记录
+            for _ in range(15):
+                current_start = current_end - SEVEN_DAYS_MS
+                params = {"limit": min(limit - len(all_records), 1000)}
+                
+                if symbol:
+                    params["symbol"] = symbol
+                if income_type:
+                    params["incomeType"] = income_type
+                params["startTime"] = current_start
+                params["endTime"] = current_end
+                
+                res = self._request("GET", "/fapi/v1/income", params)
+                
+                if isinstance(res, list):
+                    # Binance 按时间升序返回，老数据在前。
+                    # 我们从后往前查，所以把新查到的老数据插到前面
+                    all_records = res + all_records
+                    if len(all_records) >= limit:
+                        all_records = all_records[-limit:]
+                        break
+                else:
+                    if all_records:
+                        res = all_records  # 如果已经查到了一些数据，遇到错误就先返回已有的数据
+                    # 如果什么都没查到，保留 res 为原始错误对象，直接跳出
+                    break
+                
+                current_end = current_start
+                
+            if isinstance(res, list):
+                res = all_records
+        else:
+            params = {"limit": min(limit, 1000)}
+            if symbol:
+                params["symbol"] = symbol
+            if income_type:
+                params["incomeType"] = income_type
+            if start_time:
+                params["startTime"] = start_time
+            if end_time:
+                params["endTime"] = end_time
+            
+            res = self._request("GET", "/fapi/v1/income", params)
         
         if isinstance(res, list):
             formatted = []
